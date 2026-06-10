@@ -1,0 +1,236 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ───────────────────────────────────────────────
+// AUTH
+// ───────────────────────────────────────────────
+
+model User {
+  id            Int      @id @default(autoincrement())
+  email         String?   @unique // Di DBML: not null, unique
+  password_hash String
+  phone_number  String? @unique // Di DBML: boleh null, unique
+  role          String // admin | staff | customer
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  sessions          Session[]
+  customer          Customer?  @relation("UserToCustomer")
+  created_customers Customer[] @relation("CreatedBy")
+  updated_customers Customer[] @relation("LastUpdatedBy")
+}
+
+model Session {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  token      String   @unique
+  expires_at DateTime
+  created_at DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id])
+}
+
+// ───────────────────────────────────────────────
+// CUSTOMERS
+// ───────────────────────────────────────────────
+
+model Customer {
+  id                        Int       @id @default(autoincrement())
+  user_id                   Int       @unique
+  runchise_id               Int?
+  name                      String
+  phone_number              String?
+  phone_number_country_code Int       @default(62)
+  address                   String?   @db.Text
+  province                  String?
+  city                      String?
+  country                   String?
+  postal_code               String?
+  dob                       DateTime? @db.Date
+  gender                    String? // male | female | unknown
+  status                    String? // active | inactive
+  balance                   Decimal   @default(0.0) @db.Decimal(12, 2) // Menggunakan Decimal untuk financial safety
+  member_since              DateTime? @db.Date
+  brand_id                  Int
+  owner_location_id         Int?
+  created_by_id             Int?
+  last_updated_by_id        Int?
+  created_at                DateTime  @default(now())
+  updated_at                DateTime  @updatedAt
+
+  // Relations
+  user            User      @relation("UserToCustomer", fields: [user_id], references: [id])
+  brand           Brand     @relation(fields: [brand_id], references: [id])
+  owner_location  Location? @relation("OwnerLocation", fields: [owner_location_id], references: [id])
+  created_by      User?     @relation("CreatedBy", fields: [created_by_id], references: [id])
+  last_updated_by User?     @relation("LastUpdatedBy", fields: [last_updated_by_id], references: [id])
+
+  customer_locations CustomerLocation[]
+  customer_point     CustomerPoint?
+  point_histories    PointHistory[]
+  redemptions        RewardRedemption[]
+}
+
+// ───────────────────────────────────────────────
+// BRAND & LOCATIONS
+// ───────────────────────────────────────────────
+
+model Brand {
+  id          Int      @id @default(autoincrement())
+  runchise_id Int?
+  name        String
+  tagline     String?
+  logo_url    String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  customers       Customer[]
+  locations       Location[]
+  menu_categories MenuCategory[]
+  menu_items      MenuItem[]
+  rewards_catalog RewardsCatalog[]
+  sub_brands      SubBrand[]
+}
+
+model SubBrand {
+  id                     Int      @id @default(autoincrement())
+  runchise_id            Int      @unique
+  brand_id               Int
+  name                   String
+  image_url              String?
+  location_type          String?
+  is_select_all_location Boolean  @default(false)
+  enable_online_order    Boolean  @default(true)
+  created_at             DateTime @default(now())
+  updated_at             DateTime @updatedAt
+
+  brand Brand @relation(fields: [brand_id], references: [id])
+}
+
+model Location {
+  id          Int      @id @default(autoincrement())
+  brand_id    Int
+  runchise_id Int? // null = outlet pusat milik brand
+  name        String
+  address     String?  @db.Text
+  city        String?
+  province    String?
+  latitude    Decimal? @db.Decimal(10, 8)
+  longitude   Decimal? @db.Decimal(11, 8)
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  brand              Brand              @relation(fields: [brand_id], references: [id])
+  customer_locations CustomerLocation[]
+  owned_customers    Customer[]         @relation("OwnerLocation")
+}
+
+model CustomerLocation {
+  id          Int @id @default(autoincrement())
+  customer_id Int
+  location_id Int
+
+  customer Customer @relation(fields: [customer_id], references: [id])
+  location Location @relation(fields: [location_id], references: [id])
+}
+
+// ───────────────────────────────────────────────
+// MENU
+// ───────────────────────────────────────────────
+
+model MenuCategory {
+  id         Int     @id @default(autoincrement())
+  brand_id   Int
+  name       String // Semua | Katsu | Paket | Minuman
+  sort_order Int     @default(0)
+  is_active  Boolean @default(true)
+
+  brand Brand      @relation(fields: [brand_id], references: [id])
+  items MenuItem[]
+}
+
+model MenuItem {
+  id          Int      @id @default(autoincrement())
+  brand_id    Int
+  runchise_id Int?     @unique
+  category_id Int
+  name        String
+  description String?  @db.Text
+  price       Decimal  @db.Decimal(10, 2)
+  image_url   String?
+  badge       String? // Best Seller | Pedas | Baru etc.
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  brand    Brand        @relation(fields: [brand_id], references: [id])
+  category MenuCategory @relation(fields: [category_id], references: [id])
+}
+
+// ───────────────────────────────────────────────
+// POINTS & REWARDS
+// ───────────────────────────────────────────────
+
+model CustomerPoint {
+  id                    Int      @id @default(autoincrement())
+  customer_id           Int      @unique
+  total_point           Int      @default(0)
+  available_point       Int      @default(0)
+  next_reward_threshold Int      @default(2000)
+  updated_at            DateTime @updatedAt
+
+  customer Customer @relation(fields: [customer_id], references: [id])
+}
+
+model PointHistory {
+  id                   Int      @id @default(autoincrement())
+  customer_id          Int
+  reward_redemption_id Int?
+  points_change        Int // positif = earn, negatif = redeem
+  type                 String // earn | redeem | bonus
+  description          String?
+  created_at           DateTime @default(now())
+
+  customer          Customer          @relation(fields: [customer_id], references: [id])
+  reward_redemption RewardRedemption? @relation(fields: [reward_redemption_id], references: [id])
+}
+
+model RewardsCatalog {
+  id              Int      @id @default(autoincrement())
+  brand_id        Int
+  name            String
+  description     String?  @db.Text
+  points_required Int
+  image_url       String?
+  is_active       Boolean  @default(true)
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  brand       Brand              @relation(fields: [brand_id], references: [id])
+  redemptions RewardRedemption[]
+}
+
+model RewardRedemption {
+  id              Int       @id @default(autoincrement())
+  customer_id     Int
+  reward_id       Int
+  points_spent    Int
+  status          String // pending | claimed | expired
+  redemption_code String?   @unique
+  redeemed_at     DateTime?
+
+  customer        Customer       @relation(fields: [customer_id], references: [id])
+  reward          RewardsCatalog @relation(fields: [reward_id], references: [id])
+  point_histories PointHistory[]
+}
