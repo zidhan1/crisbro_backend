@@ -28,6 +28,13 @@ async function register(req, res) {
             status: 'active',
             brand_id: 1, // Default ke brand id 1 (Crisbar) sesuai record DBML
             balance: 0,
+            customer_point: {
+              create: {
+                total_point: 0,
+                available_point: 0,
+                next_reward_threshold: 2000,
+              },
+            },
           },
         },
       },
@@ -58,7 +65,12 @@ async function login(req, res) {
     const user = await prisma.user.findUnique({
       where: { phone_number },
       include: {
-        customer: true, // Ambil data profil dari tabel Customer sekalian!
+        // ← include harus di sini
+        customer: {
+          include: {
+            customer_point: true,
+          },
+        },
       },
     });
 
@@ -93,9 +105,13 @@ async function profile(req, res) {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      // Kerennya Prisma: Kita bisa sekalian narik data customer-nya jika ada!
       include: {
-        customer: true,
+        // ← include harus di sini
+        customer: {
+          include: {
+            customer_point: true,
+          },
+        },
       },
     });
 

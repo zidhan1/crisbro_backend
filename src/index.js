@@ -6,6 +6,7 @@ const auth = require('./middleware/auth');
 const authRoutes = require('./routes/authRoutes');
 const { syncCustomers, syncProducts, syncCustomerPoints, syncBrands, syncLocations } = require('./services/syncService');
 const rewardsCatalogRoutes = require('./routes/rewardsCatalogRoutes');
+const redemptionRoutes = require('./routes/redemptionRoutes');
 
 // ===================== APP =====================
 const app = express();
@@ -13,6 +14,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/api', authRoutes);
 app.use('/api/rewards-catalog', rewardsCatalogRoutes);
+app.use('/api/redeem', redemptionRoutes);
 
 // ===================== TEST =====================
 app.get('/', (req, res) => {
@@ -27,6 +29,20 @@ app.get('/rewards', async (req, res) => {
       where: { is_active: true } // Hanya tampilkan katalog yang aktif
     });
     res.json(rewards);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/my-points — ambil poin customer yang login
+app.get('/api/my-points', auth, async (req, res) => {
+  try {
+    const customer = await prisma.customer.findUnique({
+      where: { user_id: req.user.id },
+      include: { customer_point: true },
+    });
+    if (!customer) return res.status(404).json({ message: 'Customer tidak ditemukan' });
+    res.json(customer.customer_point ?? { available_point: 0, total_point: 0 });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
