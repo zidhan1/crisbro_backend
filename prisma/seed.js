@@ -10,4 +10,15 @@ await prisma.brand.upsert({
   },
 });
 
+await prisma.location.upsert({
+  where: { id: 1 },
+  update: {},
+  create: {
+    id: 1,
+    brand_id: 1,
+    name: 'Antapani',
+    is_active: true,
+  },
+});
+
 main().catch(console.error).finally(() => prisma.$disconnect());

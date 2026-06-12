@@ -4,7 +4,7 @@ const runchiseClient = axios.create({
   baseURL: 'https://api.runchise.com/api/public',
   headers: {
     Accept: 'application/json',
-    'Authorization': process.env.RUNCHISE_API_KEY,
+    Authorization: process.env.RUNCHISE_API_KEY,
     'Content-Type': 'application/json',
   },
 });
@@ -16,9 +16,12 @@ async function fetchAllCustomers(locationId) {
   let hasMore = true;
 
   while (hasMore) {
-    const { data } = await runchiseClient.get(`/locations/${locationId}/customers`, {
-      params: { page, item_per_page: 100 },
-    });
+    const { data } = await runchiseClient.get(
+      `/locations/${locationId}/customers`,
+      {
+        params: { page, item_per_page: 100 },
+      },
+    );
 
     allCustomers = allCustomers.concat(data.customers);
     hasMore = data.paging.next_page !== null;
@@ -55,15 +58,15 @@ async function fetchAllSubBrands() {
 
   while (hasMore) {
     const { data } = await runchiseClient.get('/sub_brands', {
-      params: { 
-        page, 
-        item_per_page: 100 
+      params: {
+        page,
+        item_per_page: 100,
       },
     });
 
     // Menggabungkan data sub_brands yang didapat ke dalam array utama
     allSubBrands = allSubBrands.concat(data.sub_brands);
-    
+
     // Cek apakah masih ada halaman berikutnya
     hasMore = data.paging.next_page !== null;
     page++;
@@ -111,4 +114,44 @@ async function fetchAllPromos() {
   return allPromos;
 }
 
-module.exports = { fetchAllCustomers, fetchAllProducts, fetchAllSubBrands, fetchAllLocations, fetchAllPromos, runchiseClient};
+async function createCustomer(locationId, customerData) {
+  try {
+    // Sesuai dokumentasi/kebutuhan API Runchise kamu biasanya dikirim ke endpoint lokasinya
+    const { data } = await runchiseClient.post(
+      `/locations/${locationId}/customers`,
+      {
+        name: customerData.name,
+        phone_number: customerData.phone_number,
+        email: customerData.email || null,
+        status: 'active',
+        phone_number_country_code: 62,
+        // tambahkan fields lain jika diwajibkan oleh Runchise
+      },
+    );
+    return data; // Mengembalikan data customer yang sukses dibuat di Runchise
+  } catch (error) {
+    // Mengambil pesan error dari server Runchise dengan aman
+    const errorData = error.response?.data;
+    console.error(
+      'Gagal membuat customer di Runchise:',
+      errorData || error.message,
+    );
+
+    // Jika Runchise mengirimkan pesan error spesifik (seperti nomor sudah terdaftar)
+    if (errorData && errorData.errors) {
+      throw new Error(JSON.stringify(errorData.errors));
+    }
+
+    throw new Error(errorData?.message || error.message);
+  }
+}
+
+module.exports = {
+  fetchAllCustomers,
+  fetchAllProducts,
+  fetchAllSubBrands,
+  fetchAllLocations,
+  fetchAllPromos,
+  createCustomer,
+  runchiseClient,
+};
