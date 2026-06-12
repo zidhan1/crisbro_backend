@@ -3,18 +3,26 @@ const express = require('express');
 const cors = require('cors');
 const prisma = require('./lib/prisma');
 const auth = require('./middleware/auth');
+const customerRoutes = require('./routes/customerRoutes');
 const authRoutes = require('./routes/authRoutes');
-const { syncCustomers, syncProducts, syncCustomerPoints, syncBrands, syncLocations } = require('./services/syncService');
 const rewardsCatalogRoutes = require('./routes/rewardsCatalogRoutes');
 const redemptionRoutes = require('./routes/redemptionRoutes');
+const locationRoutes = require('./routes/locationRoutes');
+const productCatalogRoutes = require('./routes/productCatalogRoutes');
+const promoRoutes = require('./routes/promoRoutes');
+const { syncCustomers, syncProducts, syncCustomerPoints, syncBrands, syncLocations } = require('./services/syncService');
 
 // ===================== APP =====================
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use('/api', customerRoutes);
 app.use('/api', authRoutes);
 app.use('/api/rewards-catalog', rewardsCatalogRoutes);
 app.use('/api/redeem', redemptionRoutes);
+app.use('/api/locations', locationRoutes);
+app.use('/api/catalog/products', productCatalogRoutes);
+app.use('/api/promos', promoRoutes);
 
 // ===================== TEST =====================
 app.get('/', (req, res) => {
@@ -108,7 +116,7 @@ app.post('/admin/sync/brands', auth, async (req, res) => {
   }
 });
 
-app.post('/admin/sync/locations', auth, async (req, res) => {
+app.post('/admin/sync/locations', async (req, res) => {
   try {
     const result = await syncLocations();
     res.json({ message: 'Sync locations selesai', ...result });

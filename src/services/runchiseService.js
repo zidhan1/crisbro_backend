@@ -93,4 +93,22 @@ async function fetchAllLocations() {
   return allLocations;
 }
 
-module.exports = { fetchAllCustomers, fetchAllProducts, fetchAllSubBrands, fetchAllLocations };
+async function fetchAllPromos() {
+  let allPromos = [];
+  let page = 1;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { data } = await runchiseClient.get('/promos', {
+      params: { page, item_per_page: 100 },
+    });
+
+    allPromos = allPromos.concat(data.promos);
+    hasMore = data.paging.next_page !== null;
+    page++;
+  }
+
+  return allPromos;
+}
+
+module.exports = { fetchAllCustomers, fetchAllProducts, fetchAllSubBrands, fetchAllLocations, fetchAllPromos, runchiseClient};

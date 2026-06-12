@@ -125,6 +125,7 @@ model Location {
   address     String?  @db.Text
   city        String?
   province    String?
+  phone       String?
   latitude    Decimal? @db.Decimal(10, 8)
   longitude   Decimal? @db.Decimal(11, 8)
   is_active   Boolean  @default(true)

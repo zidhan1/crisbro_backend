@@ -247,6 +247,7 @@ async function syncBrands() {
 
 async function syncLocations(brandId = 1) {
   const locations = await fetchAllLocations();
+
   let synced = 0;
 
   for (const loc of locations) {
@@ -258,12 +259,13 @@ async function syncLocations(brandId = 1) {
     });
 
     await prisma.location.upsert({
-      where:  { id: loc.id },
+      where:  { id: Number(loc.id) },
       update: {
         name:       loc.name,
         address:    loc.shipping_address ?? null,
         city:       loc.city ?? null,
         province:   loc.province ?? null,
+        phone:      loc.contact_number ? `+62${loc.contact_number.replace(/^0/, '')}` : null,
         latitude:   loc.latitude ? parseFloat(loc.latitude) : null,
         longitude:  loc.longitude ? parseFloat(loc.longitude) : null,
         is_active:  loc.status === 'activated',
@@ -271,13 +273,14 @@ async function syncLocations(brandId = 1) {
         runchise_id: loc.is_franchise ? loc.id : null,
       },
       create: {
-        id:          loc.id,
+        id:          Number(loc.id),
         brand_id:    brandId,
-        runchise_id: loc.is_franchise ? loc.id : null,
+        runchise_id: loc.is_franchise ? Number(loc.id) : null,
         name:        loc.name,
         address:     loc.shipping_address ?? null,
         city:        loc.city ?? null,
         province:    loc.province ?? null,
+        phone:       loc.contact_number ? `+62${loc.contact_number.replace(/^0/, '')}` : null,
         latitude:    loc.latitude ? parseFloat(loc.latitude) : null,
         longitude:   loc.longitude ? parseFloat(loc.longitude) : null,
         is_active:   loc.status === 'activated',
