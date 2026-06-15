@@ -129,6 +129,7 @@ model Location {
   latitude    Decimal? @db.Decimal(10, 8)
   longitude   Decimal? @db.Decimal(11, 8)
   is_active   Boolean  @default(true)
+  is_outlet   Boolean  @default(true)
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
 

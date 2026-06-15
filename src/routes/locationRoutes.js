@@ -5,7 +5,7 @@ const prisma = require('../lib/prisma');
 router.get('/', async (req, res) => {
   try {
     const locations = await prisma.location.findMany({
-      where: { is_active: true },
+      where: { is_active: true, is_outlet: true },
       orderBy: [{ city: 'asc' }, { name: 'asc' }],
     });
 
@@ -15,7 +15,7 @@ router.get('/', async (req, res) => {
       address: loc.address,
       city: loc.city,
       phone: loc.phone ?? null,
-      hours: "10.00 – 22.00",
+      hours: '10.00 – 22.00',
     }));
 
     res.json(result);

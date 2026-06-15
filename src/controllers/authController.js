@@ -3,42 +3,53 @@ const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
 const { createCustomer } = require('../services/runchiseService');
 
+function normalizePhone(raw) {
+  if (!raw) return raw;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.startsWith('62')) return digits.slice(2);
+  if (digits.startsWith('0')) return digits.slice(1);
+  return digits;
+}
+
 // ===================== REGISTER =====================
 async function register(req, res) {
   try {
-    const { email, phone_number, password, name } = req.body;
+    const { email, password, name } = req.body;
+    const phone_number = normalizePhone(req.body.phone_number);
 
-    if (!phone_number || !password || !name) {
+    if (!phone_number || !phone_number.startsWith('8') || !password || !name) {
       return res.status(400).json({
-        message: 'Nama, nomor telepon, dan password wajib diisi',
+        message: 'Nama, nomor telepon (diawali 8), dan password wajib diisi',
       });
     }
 
     // 1. Cek dulu apakah nomor telepon sudah terdaftar di DB lokal
-    const existingUser = await prisma.user.findUnique({ where: { phone_number } });
+    const existingUser = await prisma.user.findUnique({
+      where: { phone_number },
+    });
     if (existingUser) {
       return res.status(400).json({ message: 'Nomor telepon sudah terdaftar' });
     }
 
     // 2. DAFTARKAN KE RUNCHISE TERLEBIH DAHULU
     // Catatan: Tentukan locationId default untuk registrasi, misalnya 4453 (Antapani) seperti di contohmu
-    const defaultLocationId = 4453; 
+    const defaultLocationId = 4453;
     let runchiseId = null;
 
     try {
       const runchiseResponse = await createCustomer(defaultLocationId, {
         name,
         phone_number,
-        email
+        email,
       });
-      
+
       // Ambil ID dari response Runchise (sesuaikan strukturnya dengan payload asli dari Runchise)
       // Biasanya berbentuk runchiseResponse.id atau runchiseResponse.customer.id
       runchiseId = runchiseResponse?.id || runchiseResponse?.customer?.id;
     } catch (apiError) {
-      return res.status(424).json({ 
-        message: 'Gagal sinkronisasi pendaftaran dengan sistem Runchise', 
-        error: apiError.message 
+      return res.status(424).json({
+        message: 'Gagal sinkronisasi pendaftaran dengan sistem Runchise',
+        error: apiError.message,
       });
     }
 
@@ -85,7 +96,8 @@ async function register(req, res) {
 // ===================== LOGIN =====================
 async function login(req, res) {
   try {
-    const { phone_number, password } = req.body;
+    const { password } = req.body;
+    const phone_number = normalizePhone(req.body.phone_number);
 
     // 1. Cari user di database lokal
     let user = await prisma.user.findUnique({
@@ -101,10 +113,11 @@ async function login(req, res) {
     if (!user) {
       // Kamu bisa manfaatkan fungsi fetchAllCustomers dengan filter nomor HP (jika API Runchise mendukung)
       // Atau buat fungsi khusus search di runchiseService.
-      // Jika ternyata user ada di Runchise namun belum ada password di lokal, 
+      // Jika ternyata user ada di Runchise namun belum ada password di lokal,
       // arahkan user untuk melakukan registrasi/set password terlebih dahulu.
-      return res.status(444).json({ 
-        message: 'Nomor terdaftar di pusat, silahkan lakukan Registrasi untuk membuat password akun aplikasi ini.' 
+      return res.status(444).json({
+        message:
+          'Nomor terdaftar di pusat, silahkan lakukan Registrasi untuk membuat password akun aplikasi ini.',
       });
     }
 

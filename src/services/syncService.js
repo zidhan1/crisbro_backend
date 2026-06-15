@@ -1,5 +1,10 @@
 const prisma = require('../lib/prisma');
-const { fetchAllCustomers, fetchAllProducts, fetchAllSubBrands, fetchAllLocations } = require('./runchiseService');
+const {
+  fetchAllCustomers,
+  fetchAllProducts,
+  fetchAllSubBrands,
+  fetchAllLocations,
+} = require('./runchiseService');
 
 // ── Sync Customers dari Runchise ke DB lokal ──
 async function syncCustomers(locationId = 1) {
@@ -9,7 +14,7 @@ async function syncCustomers(locationId = 1) {
   for (const c of customers) {
     // ── Pastikan Brand ada dulu ──
     await prisma.brand.upsert({
-      where:  { id: c.brand_id },
+      where: { id: c.brand_id },
       update: {},
       create: { id: c.brand_id, name: `Brand ${c.brand_id}` },
     });
@@ -19,34 +24,34 @@ async function syncCustomers(locationId = 1) {
     });
 
     const payload = {
-      runchise_id:               c.id,
-      name:                      c.name,
-      phone_number:              c.phone_number,
+      runchise_id: c.id,
+      name: c.name,
+      phone_number: c.phone_number,
       phone_number_country_code: c.phone_number_country_code ?? 62,
-      address:                   c.address ?? null,
-      province:                  c.province ?? null,
-      city:                      c.city ?? null,
-      country:                   c.country ?? null,
-      postal_code:               c.postal_code ?? null,
-      dob:                       c.dob && !isNaN(new Date(c.dob)) ? new Date(c.dob) : null,
-      gender:                    c.gender ?? 'unknown',
-      status:                    c.status ?? 'active',
-      balance:                   parseFloat(c.balance ?? 0),
-      brand_id:                  c.brand_id,
-      owner_location_id:         null, // skip dulu karena Location juga belum tentu ada
+      address: c.address ?? null,
+      province: c.province ?? null,
+      city: c.city ?? null,
+      country: c.country ?? null,
+      postal_code: c.postal_code ?? null,
+      dob: c.dob && !isNaN(new Date(c.dob)) ? new Date(c.dob) : null,
+      gender: c.gender ?? 'unknown',
+      status: c.status ?? 'active',
+      balance: parseFloat(c.balance ?? 0),
+      brand_id: c.brand_id,
+      owner_location_id: null, // skip dulu karena Location juga belum tentu ada
     };
 
     if (existing) {
       await prisma.customer.update({
         where: { id: existing.id },
-        data:  payload,
+        data: payload,
       });
     } else {
       await prisma.user.create({
         data: {
-          phone_number:  c.phone_number,
+          phone_number: c.phone_number,
           password_hash: '',
-          role:          'customer',
+          role: 'customer',
           customer: { create: payload },
         },
       });
@@ -69,7 +74,7 @@ async function syncCustomerPoints(locationId = 1) {
 
   // Buat map runchise_id → local id (lookup di memory, bukan query DB)
   const runchiseToLocal = new Map(
-    localCustomers.map(c => [c.runchise_id, c.id])
+    localCustomers.map((c) => [c.runchise_id, c.id]),
   );
 
   const ops = [];
@@ -80,18 +85,18 @@ async function syncCustomerPoints(locationId = 1) {
 
     ops.push(
       prisma.customerPoint.upsert({
-        where:  { customer_id: localId },
+        where: { customer_id: localId },
         update: {
-          total_point:     c.total_point,
+          total_point: c.total_point,
           available_point: c.available_point,
         },
         create: {
-          customer_id:           localId,
-          total_point:           c.total_point,
-          available_point:       c.available_point,
+          customer_id: localId,
+          total_point: c.total_point,
+          available_point: c.available_point,
           next_reward_threshold: 2000,
         },
-      })
+      }),
     );
   }
 
@@ -110,42 +115,42 @@ async function syncProducts(brandId = 1) {
     let category;
     if (p.product_category?.id) {
       category = await prisma.menuCategory.upsert({
-        where:  { id: p.product_category.id },
+        where: { id: p.product_category.id },
         update: { name: p.product_category.name },
         create: {
-          id:       p.product_category.id,
+          id: p.product_category.id,
           brand_id: brandId,
-          name:     p.product_category.name,
+          name: p.product_category.name,
         },
       });
     } else {
       // Produk tanpa kategori → masuk ke "Uncategorized"
       category = await prisma.menuCategory.upsert({
-        where:  { id: 9999 },
+        where: { id: 9999 },
         update: {},
         create: { id: 9999, brand_id: brandId, name: 'Uncategorized' },
       });
     }
 
     await prisma.menuItem.upsert({
-      where:  { runchise_id: p.id },
+      where: { runchise_id: p.id },
       update: {
-        name:        p.name,
+        name: p.name,
         description: p.description ?? null,
-        price:       parseFloat(p.sell_price),
-        image_url:   p.image_url || null,
-        is_active:   p.status === 'activated',
+        price: parseFloat(p.sell_price),
+        image_url: p.image_url || null,
+        is_active: p.status === 'activated',
         category_id: category.id,
       },
       create: {
         runchise_id: p.id,
-        brand_id:    brandId,
+        brand_id: brandId,
         category_id: category.id,
-        name:        p.name,
+        name: p.name,
         description: p.description ?? null,
-        price:       parseFloat(p.sell_price),
-        image_url:   p.image_url || null,
-        is_active:   p.status === 'activated',
+        price: parseFloat(p.sell_price),
+        image_url: p.image_url || null,
+        is_active: p.status === 'activated',
       },
     });
     synced++;
@@ -163,7 +168,10 @@ async function syncBrands() {
     return { synced: 0, total: 0 };
   }
 
-  console.log('Sample sub_brand dari API:', JSON.stringify(subBrandsArray[0], null, 2));
+  console.log(
+    'Sample sub_brand dari API:',
+    JSON.stringify(subBrandsArray[0], null, 2),
+  );
 
   let synced = 0;
   const seenParentBrandIds = new Set();
@@ -195,10 +203,15 @@ async function syncBrands() {
               name: parentBrandName || `Brand ${parentBrandId}`,
             },
           });
-          console.log(`Parent brand dibuat: runchise_id=${parentBrandId}, name=${parentBrandName}`);
+          console.log(
+            `Parent brand dibuat: runchise_id=${parentBrandId}, name=${parentBrandName}`,
+          );
         }
       } catch (error) {
-        console.error(`Gagal menyimpan parent brand runchise_id=${parentBrandId}:`, error.message);
+        console.error(
+          `Gagal menyimpan parent brand runchise_id=${parentBrandId}:`,
+          error.message,
+        );
         continue;
       }
     }
@@ -209,7 +222,9 @@ async function syncBrands() {
     });
 
     if (!localBrand) {
-      console.warn(`Local brand untuk runchise_id=${parentBrandId} tidak ditemukan, skip sub_brand id=${sb.id}`);
+      console.warn(
+        `Local brand untuk runchise_id=${parentBrandId} tidak ditemukan, skip sub_brand id=${sb.id}`,
+      );
       continue;
     }
 
@@ -253,37 +268,42 @@ async function syncLocations(brandId = 1) {
   for (const loc of locations) {
     // Pastikan brand ada dulu
     await prisma.brand.upsert({
-      where:  { id: brandId },
+      where: { id: brandId },
       update: {},
       create: { id: brandId, name: `Brand ${brandId}` },
     });
 
     await prisma.location.upsert({
-      where:  { id: Number(loc.id) },
+      where: { id: Number(loc.id) },
       update: {
-        name:       loc.name,
-        address:    loc.shipping_address ?? null,
-        city:       loc.city ?? null,
-        province:   loc.province ?? null,
-        phone:      loc.contact_number ? `+62${loc.contact_number.replace(/^0/, '')}` : null,
-        latitude:   loc.latitude ? parseFloat(loc.latitude) : null,
-        longitude:  loc.longitude ? parseFloat(loc.longitude) : null,
-        is_active:  loc.status === 'activated',
-        brand_id:   brandId,
+        name: loc.name,
+        address: loc.shipping_address ?? null,
+        city: loc.city ?? null,
+        province: loc.province ?? null,
+        phone: loc.contact_number
+          ? `+62${loc.contact_number.replace(/^0/, '')}`
+          : null,
+        latitude: loc.latitude ? parseFloat(loc.latitude) : null,
+        longitude: loc.longitude ? parseFloat(loc.longitude) : null,
+        is_active: loc.status === 'activated',
+        brand_id: brandId,
         runchise_id: loc.is_franchise ? loc.id : null,
       },
       create: {
-        id:          Number(loc.id),
-        brand_id:    brandId,
+        id: Number(loc.id),
+        brand_id: brandId,
         runchise_id: loc.is_franchise ? Number(loc.id) : null,
-        name:        loc.name,
-        address:     loc.shipping_address ?? null,
-        city:        loc.city ?? null,
-        province:    loc.province ?? null,
-        phone:       loc.contact_number ? `+62${loc.contact_number.replace(/^0/, '')}` : null,
-        latitude:    loc.latitude ? parseFloat(loc.latitude) : null,
-        longitude:   loc.longitude ? parseFloat(loc.longitude) : null,
-        is_active:   loc.status === 'activated',
+        name: loc.name,
+        address: loc.shipping_address ?? null,
+        city: loc.city ?? null,
+        province: loc.province ?? null,
+        phone: loc.contact_number
+          ? `+62${loc.contact_number.replace(/^0/, '')}`
+          : null,
+        latitude: loc.latitude ? parseFloat(loc.latitude) : null,
+        longitude: loc.longitude ? parseFloat(loc.longitude) : null,
+        is_active: loc.status === 'activated',
+        is_outlet: true,
       },
     });
 
@@ -293,4 +313,10 @@ async function syncLocations(brandId = 1) {
   return { synced, total: locations.length };
 }
 
-module.exports = { syncCustomers, syncProducts, syncCustomerPoints, syncBrands, syncLocations };
+module.exports = {
+  syncCustomers,
+  syncProducts,
+  syncCustomerPoints,
+  syncBrands,
+  syncLocations,
+};
