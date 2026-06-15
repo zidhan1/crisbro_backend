@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { fetchAllProducts } = require('../services/runchiseService');
-const { CATEGORY_MAPPING } = require('../constants/categoryMapping');
+const { ALLOWED_CATEGORIES } = require('../constants/categoryMapping');
 
 // GET /api/catalog/products
 router.get('/', async (req, res) => {
@@ -10,7 +10,11 @@ router.get('/', async (req, res) => {
 
     const products = await fetchAllProducts();
 
-    let filtered = products.filter((p) => p.status === 'activated');
+    let filtered = products.filter((p) => {
+      if (p.status !== 'activated') return false;
+      const catName = p.product_category?.name;
+      return catName && ALLOWED_CATEGORIES.has(catName);
+    });
 
     if (category_id) {
       filtered = filtered.filter(
@@ -30,12 +34,11 @@ router.get('/', async (req, res) => {
 
     res.json(result);
   } catch (error) {
-    res.status(500).json({
-      error: error.message,
-    });
+    res.status(500).json({ error: error.message });
   }
 });
 
+// GET /api/catalog/products/categories
 router.get('/categories', async (req, res) => {
   try {
     const products = await fetchAllProducts();
@@ -44,8 +47,8 @@ router.get('/categories', async (req, res) => {
 
     products.forEach((p) => {
       const category = p.product_category;
-
       if (!category) return;
+      if (!ALLOWED_CATEGORIES.has(category.name)) return;
 
       if (!categoryMap.has(category.id)) {
         categoryMap.set(category.id, {
@@ -64,9 +67,8 @@ router.get('/categories', async (req, res) => {
 
     res.json(categories);
   } catch (error) {
-    res.status(500).json({
-      error: error.message,
-    });
+    res.status(500).json({ error: error.message });
   }
 });
+
 module.exports = router;
