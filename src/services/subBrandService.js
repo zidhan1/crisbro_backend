@@ -1,6 +1,5 @@
 const { runchiseClient } = require('./runchiseService');
 
-// ── Ambil semua sub_brands dengan pagination otomatis ──
 async function fetchAllSubBrandsRaw() {
   let allSubBrands = [];
   let page = 1;
@@ -26,6 +25,10 @@ let cache = {
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
+function normalizeName(name) {
+  return String(name ?? '').trim().toLowerCase();
+}
+
 async function getSubBrandMapping() {
   const now = Date.now();
 
@@ -36,18 +39,29 @@ async function getSubBrandMapping() {
   const subBrands = await fetchAllSubBrandsRaw();
 
   const categoryIdToSubBrand = new Map();
+  const categoryIdsBySubBrand = new Map();
   const subBrandNames = [];
 
   for (const sb of subBrands) {
     subBrandNames.push(sb.name);
+    const key = normalizeName(sb.name);
+
+    if (!categoryIdsBySubBrand.has(key)) {
+      categoryIdsBySubBrand.set(key, new Set());
+    }
+    const idSet = categoryIdsBySubBrand.get(key);
+
     for (const cat of sb.product_categories ?? []) {
+      idSet.add(cat.id);
+
+      // categoryIdToSubBrand tetap "first sub-brand wins" seperti perilaku asli
       if (!categoryIdToSubBrand.has(cat.id)) {
         categoryIdToSubBrand.set(cat.id, sb.name);
       }
     }
   }
 
-  const result = { categoryIdToSubBrand, subBrandNames };
+  const result = { categoryIdToSubBrand, categoryIdsBySubBrand, subBrandNames };
 
   cache = {
     data: result,
@@ -57,4 +71,13 @@ async function getSubBrandMapping() {
   return result;
 }
 
-module.exports = { getSubBrandMapping, fetchAllSubBrandsRaw };
+async function getCategoryIdsForSubBrand(subBrandName) {
+  const { categoryIdsBySubBrand } = await getSubBrandMapping();
+  return categoryIdsBySubBrand.get(normalizeName(subBrandName)) ?? new Set();
+}
+
+module.exports = {
+  getSubBrandMapping,
+  getCategoryIdsForSubBrand,
+  fetchAllSubBrandsRaw,
+};

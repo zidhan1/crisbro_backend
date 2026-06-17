@@ -1,33 +1,21 @@
-const ALLOWED_CATEGORIES = new Set([
-  "Snack & Sides",
-  "Menu Crisbro",
-  "Crisbar Korean Chicken",
-  "CMP",
-  "My Kisah Katsu <3",
-  "Crisbarbar Whole Chicken",
-  "Cocolove Stories 🫶🏻",
-  "Mood Booster Drinks",
-  "Topping",
-  "Best Seller Bundling",
-  "Landing Page Kampus",
-  "Little Hero Crisbar",
-  "Cita Rasa Nusantara",
-  "Paket Ayam Crisbar",
-  "Keju Salju Sensasi Baru",
-  "#TeamCool",
-  "Paket Ayam Crisbee",
-  "#TeamHot",
-  "Paket Ayam Spicy",
-  "Keju Mozzarella Naikin Mood",
-  "It's DJ Time!!",
-  "Bundling Tea Series",
-  "Raos Pisan",
-  "Skin Lovers Squad",
-  "Teman Gawe",
-  "Nasi Kulit",
-  "Crisbar Coffe",
-  "Survival Kit",
-  "Smart Deal",
+const CRISBAR_SUB_BRAND_NAME = 'Crisbar';
+
+// Tambahkan ke sini hanya kategori yang sifatnya operasional/internal
+// (option set, bahan baku, promo internal, dsb), bukan kategori display produk.
+const EXCLUDED_CRISBAR_CATEGORY_NAMES = new Set([
+  'Bahan Baku',
+  'Option Set',
+  'QPON',
+  'BIG ORDER',
+  'TikTok GO Tokopedia',
+  'Bounceback and WA Delivery',
+  'Exclusive on GoFood',
+  'Tebus Murah',
+  "Bookki's Recommendation",
+  'Exclusive On ShopeeFood',
+  'Komplimen Customer',
+  'Option',
+  'MERCHANDISE',
 ]);
 
-module.exports = { ALLOWED_CATEGORIES };
+module.exports = { CRISBAR_SUB_BRAND_NAME, EXCLUDED_CRISBAR_CATEGORY_NAMES };

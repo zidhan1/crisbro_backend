@@ -1,20 +1,44 @@
 const express = require('express');
 const router = express.Router();
 const { fetchAllProducts } = require('../services/runchiseService');
-const { ALLOWED_CATEGORIES } = require('../constants/categoryMapping');
+const { getCategoryIdsForSubBrand } = require('../services/subBrandService');
+const {
+  CRISBAR_SUB_BRAND_NAME,
+  EXCLUDED_CRISBAR_CATEGORY_NAMES,
+} = require('../constants/categoryMapping');
+
+async function getVisibleCrisbarProducts() {
+  const [products, crisbarCategoryIds] = await Promise.all([
+    fetchAllProducts(),
+    getCategoryIdsForSubBrand(CRISBAR_SUB_BRAND_NAME),
+  ]);
+
+  if (crisbarCategoryIds.size === 0) {
+    console.warn(
+      `Tidak menemukan kategori untuk sub-brand "${CRISBAR_SUB_BRAND_NAME}" dari Runchise. ` +
+        'Cek nama sub-brand di API atau ketersediaan endpoint /sub_brands.',
+    );
+  }
+
+  return products.filter((p) => {
+    if (p.status !== 'activated') return false;
+
+    const category = p.product_category;
+    if (!category || category.id == null) return false;
+
+    if (!crisbarCategoryIds.has(category.id)) return false;
+    if (EXCLUDED_CRISBAR_CATEGORY_NAMES.has(category.name)) return false;
+
+    return true;
+  });
+}
 
 // GET /api/catalog/products
 router.get('/', async (req, res) => {
   try {
     const { category_id } = req.query;
 
-    const products = await fetchAllProducts();
-
-    let filtered = products.filter((p) => {
-      if (p.status !== 'activated') return false;
-      const catName = p.product_category?.name;
-      return catName && ALLOWED_CATEGORIES.has(catName);
-    });
+    let filtered = await getVisibleCrisbarProducts();
 
     if (category_id) {
       filtered = filtered.filter(
@@ -42,14 +66,13 @@ router.get('/', async (req, res) => {
 // GET /api/catalog/products/categories
 router.get('/categories', async (req, res) => {
   try {
-    const products = await fetchAllProducts();
+    const filtered = await getVisibleCrisbarProducts();
 
     const categoryMap = new Map();
 
-    products.forEach((p) => {
+    filtered.forEach((p) => {
       const category = p.product_category;
       if (!category) return;
-      if (!ALLOWED_CATEGORIES.has(category.name)) return;
 
       if (!categoryMap.has(category.id)) {
         categoryMap.set(category.id, {
