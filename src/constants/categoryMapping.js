@@ -1,4 +1,3 @@
-// Kategori yang boleh ditampilkan di katalog publik
 const ALLOWED_CATEGORIES = new Set([
   "Snack & Sides",
   "Menu Crisbro",
@@ -6,7 +5,7 @@ const ALLOWED_CATEGORIES = new Set([
   "CMP",
   "My Kisah Katsu <3",
   "Crisbarbar Whole Chicken",
-  "Cocolove Stories 🫶",
+  "Cocolove Stories 🫶🏻",
   "Mood Booster Drinks",
   "Topping",
   "Best Seller Bundling",

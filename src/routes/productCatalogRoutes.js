@@ -30,6 +30,7 @@ router.get('/', async (req, res) => {
       image_url: p.image_url,
       category: p.product_category?.name,
       category_id: p.product_category?.id,
+      sku: p.sku ?? null,
     }));
 
     res.json(result);
