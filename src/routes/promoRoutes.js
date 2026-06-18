@@ -7,6 +7,22 @@ const VISIBLE_SUB_BRANDS = new Set(['Crisbar']);
 
 const DEFAULT_PROMO_LIFESPAN_DAYS = 90;
 
+const POS_CHANNEL = 'pos';
+
+function normalizeChannel(rawChannel) {
+  return String(rawChannel ?? '').trim().toLowerCase();
+}
+
+function isPosChannel(channel) {
+  return normalizeChannel(channel) === POS_CHANNEL;
+}
+
+function isOnlineChannel(channel) {
+  const normalized = normalizeChannel(channel);
+  if (!normalized) return false;
+  return normalized !== POS_CHANNEL;
+}
+
 function parseRunchiseDate(value, endOfDay = false) {
   if (!value) return null;
 
@@ -94,6 +110,7 @@ router.get('/', async (req, res) => {
         start_date: p.start_date,
         end_date: p.end_date ?? null,
         channel: p.channel ?? null,
+        is_online_only: isOnlineChannel(p.channel),
         is_all_outlets: isAllOutlets,
         locations: isAllOutlets
           ? []
@@ -108,15 +125,17 @@ router.get('/', async (req, res) => {
         template: p.promo_reward?.template ?? null,
         _sub_brand: subBrand,
         _start: parseRunchiseDate(p.start_date, false),
+        _is_pos_channel: isPosChannel(p.channel),
       };
     });
 
     result = result.filter((p) => p.status !== 'completed' && p.status !== 'inactive');
     result = result.filter((p) => VISIBLE_SUB_BRANDS.has(p._sub_brand));
+    result = result.filter((p) => !p._is_pos_channel);
 
     result = result
       .sort((a, b) => (b._start?.getTime() ?? 0) - (a._start?.getTime() ?? 0))
-      .map(({ _start, _sub_brand, ...rest }) => rest);
+      .map(({ _start, _sub_brand, _is_pos_channel, ...rest }) => rest);
 
     res.json(result);
   } catch (error) {
