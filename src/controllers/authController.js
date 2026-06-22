@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
+const getJwtSecret = require('../lib/jwtSecret');
 const { createCustomer } = require('../services/runchiseService');
 
 function normalizePhone(raw) {
@@ -129,7 +130,7 @@ async function login(req, res) {
 
     const token = jwt.sign(
       { id: user.id, role: user.role },
-      process.env.JWT_SECRET || 'SECRET_KEY',
+      getJwtSecret(),
     );
 
     const { password_hash, ...safeUser } = user;
@@ -139,6 +140,12 @@ async function login(req, res) {
       user: safeUser,
     });
   } catch (error) {
+    if (error.code === 'JWT_SECRET_MISSING') {
+      return res.status(500).json({
+        message: 'Authentication configuration error',
+      });
+    }
+
     res.status(500).json({ error: error.message });
   }
 }
