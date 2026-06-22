@@ -11,6 +11,7 @@ const rewardsCatalogRoutes = require('./routes/rewardsCatalogRoutes');
 const redemptionRoutes = require('./routes/redemptionRoutes');
 const locationRoutes = require('./routes/locationRoutes');
 const productCatalogRoutes = require('./routes/productCatalogRoutes');
+const redeemMenuRoutes = require('./routes/redeemMenuRoutes');
 const promoRoutes = require('./routes/promoRoutes');
 const { syncCustomers, syncProducts, syncCustomerPoints, syncBrands, syncLocations } = require('./services/syncService');
 
@@ -23,6 +24,7 @@ app.use('/api', authRoutes);
 app.use('/api/rewards-catalog', rewardsCatalogRoutes);
 app.use('/api/redeem', redemptionRoutes);
 app.use('/api/locations', locationRoutes);
+app.use('/api/catalog/redeem-menu', redeemMenuRoutes);
 app.use('/api/catalog/products', productCatalogRoutes);
 app.use('/api/promos', promoRoutes);
 
