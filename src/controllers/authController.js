@@ -4,6 +4,10 @@ const prisma = require('../lib/prisma');
 const getJwtSecret = require('../lib/jwtSecret');
 const { createCustomer } = require('../services/runchiseService');
 
+function isSyncedPlaceholderUser(user) {
+  return user && user.password_hash === '';
+}
+
 function normalizePhone(raw) {
   if (!raw) return raw;
   const digits = raw.replace(/\D/g, '');
@@ -27,9 +31,71 @@ async function register(req, res) {
     // 1. Cek dulu apakah nomor telepon sudah terdaftar di DB lokal
     const existingUser = await prisma.user.findUnique({
       where: { phone_number },
+      include: {
+        customer: {
+          include: { customer_point: true },
+        },
+      },
     });
-    if (existingUser) {
+    if (existingUser && !isSyncedPlaceholderUser(existingUser)) {
       return res.status(400).json({ message: 'Nomor telepon sudah terdaftar' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    if (isSyncedPlaceholderUser(existingUser)) {
+      if (!existingUser.customer) {
+        return res.status(409).json({
+          message: 'Data akun belum lengkap, silahkan hubungi admin',
+        });
+      }
+
+      const user = await prisma.$transaction(async (tx) => {
+        const updatedUser = await tx.user.update({
+          where: { id: existingUser.id },
+          data: {
+            email,
+            password_hash: hashedPassword,
+            customer: {
+              update: {
+                name,
+                phone_number,
+                status: 'active',
+              },
+            },
+          },
+          include: {
+            customer: {
+              include: { customer_point: true },
+            },
+          },
+        });
+
+        if (!updatedUser.customer.customer_point) {
+          await tx.customerPoint.create({
+            data: {
+              customer_id: updatedUser.customer.id,
+              total_point: 0,
+              available_point: 0,
+              next_reward_threshold: 2000,
+            },
+          });
+
+          return tx.user.findUnique({
+            where: { id: updatedUser.id },
+            include: {
+              customer: {
+                include: { customer_point: true },
+              },
+            },
+          });
+        }
+
+        return updatedUser;
+      });
+
+      const { password_hash, ...safeUser } = user;
+      return res.status(200).json(safeUser);
     }
 
     // 2. DAFTARKAN KE RUNCHISE TERLEBIH DAHULU
@@ -55,8 +121,6 @@ async function register(req, res) {
     }
 
     // 3. JIKA SUKSES DI RUNCHISE, SIMPAN KE DATABASE POSTGRESQL LOKAL
-    const hashedPassword = await bcrypt.hash(password, 10);
-
     const user = await prisma.user.create({
       data: {
         email,
@@ -119,6 +183,13 @@ async function login(req, res) {
       return res.status(444).json({
         message:
           'Nomor terdaftar di pusat, silahkan lakukan Registrasi untuk membuat password akun aplikasi ini.',
+      });
+    }
+
+    if (isSyncedPlaceholderUser(user)) {
+      return res.status(409).json({
+        message:
+          'Akun sudah terdaftar dari pusat, silahkan lakukan Registrasi untuk membuat password',
       });
     }
 
