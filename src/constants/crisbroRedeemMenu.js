@@ -1,6 +1,9 @@
+const CRISBRO_REDEEM_ALL_LABEL = 'Semua';
+const CRISBRO_REDEEM_MENU_CATEGORY_NAME = 'Menu Crisbro';
+
 const CRISBRO_REDEEM_MENU_CATEGORIES = [
   {
-    name: 'Menu Crisbro',
+    name: CRISBRO_REDEEM_MENU_CATEGORY_NAME,
     items: [],
   },
   {
@@ -74,6 +77,8 @@ function buildCrisbroRedeemMenuLookup() {
 }
 
 module.exports = {
+  CRISBRO_REDEEM_ALL_LABEL,
+  CRISBRO_REDEEM_MENU_CATEGORY_NAME,
   CRISBRO_REDEEM_MENU_CATEGORIES,
   CRISBRO_REDEEM_CATEGORY_NAMES,
   CRISBRO_REDEEM_ITEM_CATEGORIES,

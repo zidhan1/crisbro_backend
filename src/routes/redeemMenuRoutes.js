@@ -1,6 +1,7 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
 const {
+  CRISBRO_REDEEM_MENU_CATEGORY_NAME,
   buildCrisbroRedeemMenuLookup,
   normalizeMenuName,
 } = require('../constants/crisbroRedeemMenu');
@@ -12,31 +13,56 @@ const CRISBRO_BRAND_ID = 1;
 router.get('/', async (req, res) => {
   try {
     const allowedMenuLookup = buildCrisbroRedeemMenuLookup();
-    const allowedMenuNames = Array.from(allowedMenuLookup.keys());
 
     const items = await prisma.menuItem.findMany({
       where: {
         brand_id: CRISBRO_BRAND_ID,
         is_active: true,
       },
-      orderBy: { name: 'asc' },
+      include: {
+        category: {
+          select: { id: true, name: true, sort_order: true },
+        },
+      },
+      orderBy: [{ category: { sort_order: 'asc' } }, { name: 'asc' }],
     });
 
     const result = items
       .map((item) => ({
         item,
-        menuName: normalizeMenuName(item.name),
         menuConfig: allowedMenuLookup.get(normalizeMenuName(item.name)),
       }))
-      .filter(({ menuName, menuConfig }) => {
-        return menuConfig && allowedMenuNames.includes(menuName);
-      })
-      .sort((a, b) => {
-        if (a.menuConfig.categoryIndex !== b.menuConfig.categoryIndex) {
-          return a.menuConfig.categoryIndex - b.menuConfig.categoryIndex;
+      .filter(({ item, menuConfig }) => {
+        const categoryName = item.category?.name?.trim();
+
+        if (categoryName === CRISBRO_REDEEM_MENU_CATEGORY_NAME) {
+          return true;
         }
 
-        return a.menuConfig.itemIndex - b.menuConfig.itemIndex;
+        return menuConfig?.categoryName === categoryName;
+      })
+      .sort((a, b) => {
+        const categorySortA = a.item.category?.sort_order ?? 0;
+        const categorySortB = b.item.category?.sort_order ?? 0;
+
+        if (categorySortA !== categorySortB) {
+          return categorySortA - categorySortB;
+        }
+
+        if (a.item.category?.name === CRISBRO_REDEEM_MENU_CATEGORY_NAME) {
+          return a.item.name.localeCompare(b.item.name);
+        }
+
+        const categoryIndexA = a.menuConfig?.categoryIndex ?? 999;
+        const categoryIndexB = b.menuConfig?.categoryIndex ?? 999;
+        const itemIndexA = a.menuConfig?.itemIndex ?? 999;
+        const itemIndexB = b.menuConfig?.itemIndex ?? 999;
+
+        if (categoryIndexA !== categoryIndexB) {
+          return categoryIndexA - categoryIndexB;
+        }
+
+        return itemIndexA - itemIndexB;
       })
       .map(({ item, menuConfig }) => ({
         id: item.id,
@@ -45,9 +71,11 @@ router.get('/', async (req, res) => {
         description: item.description,
         points_required: Number(item.price),
         image_url: item.image_url,
-        category: menuConfig.categoryName,
-        category_id: menuConfig.categoryIndex,
-        sort_order: menuConfig.itemIndex,
+        category: item.category?.name ?? menuConfig?.categoryName ?? null,
+        category_id: item.category?.id ?? menuConfig?.categoryIndex ?? null,
+        sort_order: item.category?.name === CRISBRO_REDEEM_MENU_CATEGORY_NAME
+          ? 0
+          : menuConfig?.itemIndex ?? 0,
       }));
 
     res.json(result);

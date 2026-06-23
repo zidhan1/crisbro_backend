@@ -6,6 +6,7 @@ const {
   fetchAllLocations,
 } = require('./runchiseService');
 const {
+  CRISBRO_REDEEM_MENU_CATEGORY_NAME,
   CRISBRO_REDEEM_ITEM_CATEGORIES,
   buildCrisbroRedeemMenuLookup,
   normalizeMenuName,
@@ -201,11 +202,19 @@ async function syncCrisbroRedeemMenu(brandId = 1) {
   const menuLookup = buildCrisbroRedeemMenuLookup();
   const categoriesByName = new Map();
 
+  const menuCrisbroCategory = await findOrCreateMenuCategory({
+    brandId,
+    name: CRISBRO_REDEEM_MENU_CATEGORY_NAME,
+    sortOrder: 0,
+  });
+
+  categoriesByName.set(CRISBRO_REDEEM_MENU_CATEGORY_NAME, menuCrisbroCategory);
+
   for (const [index, category] of CRISBRO_REDEEM_ITEM_CATEGORIES.entries()) {
     const localCategory = await findOrCreateMenuCategory({
       brandId,
       name: category.name,
-      sortOrder: index,
+      sortOrder: index + 1,
     });
 
     categoriesByName.set(category.name, localCategory);
@@ -214,10 +223,50 @@ async function syncCrisbroRedeemMenu(brandId = 1) {
   const seenMenuNames = new Set();
   const syncedRunchiseIds = [];
   const duplicateNames = [];
+  const syncedMenuCrisbroNames = [];
   let synced = 0;
 
   for (const product of products) {
     const normalizedProductName = normalizeMenuName(product.name);
+    const normalizedProductCategory = normalizeMenuName(
+      product.product_category?.name,
+    );
+
+    if (
+      normalizedProductCategory ===
+      normalizeMenuName(CRISBRO_REDEEM_MENU_CATEGORY_NAME)
+    ) {
+      const isActive = product.status === 'activated';
+
+      await prisma.menuItem.upsert({
+        where: { runchise_id: product.id },
+        update: {
+          brand_id: brandId,
+          category_id: menuCrisbroCategory.id,
+          name: product.name,
+          description: product.description ?? null,
+          price: parseFloat(product.sell_price ?? 0),
+          image_url: product.image_url || null,
+          is_active: isActive,
+        },
+        create: {
+          runchise_id: product.id,
+          brand_id: brandId,
+          category_id: menuCrisbroCategory.id,
+          name: product.name,
+          description: product.description ?? null,
+          price: parseFloat(product.sell_price ?? 0),
+          image_url: product.image_url || null,
+          is_active: isActive,
+        },
+      });
+
+      syncedRunchiseIds.push(product.id);
+      syncedMenuCrisbroNames.push(product.name);
+      synced++;
+      continue;
+    }
+
     const menuConfig = menuLookup.get(normalizedProductName);
 
     if (!menuConfig) continue;
@@ -279,9 +328,14 @@ async function syncCrisbroRedeemMenu(brandId = 1) {
   const staleItemIds = localRedeemItems
     .filter((item) => {
       const isWhitelisted = expectedMenuNames.has(normalizeMenuName(item.name));
+      const isMenuCrisbroItem =
+        item.category_id === menuCrisbroCategory.id &&
+        syncedMenuCrisbroNames
+          .map((name) => normalizeMenuName(name))
+          .includes(normalizeMenuName(item.name));
       const wasSynced = syncedRunchiseIds.includes(item.runchise_id);
 
-      return !isWhitelisted || !wasSynced;
+      return !(isWhitelisted || isMenuCrisbroItem) || !wasSynced;
     })
     .map((item) => item.id);
 
