@@ -5,6 +5,11 @@ const {
   fetchAllSubBrands,
   fetchAllLocations,
 } = require('./runchiseService');
+const {
+  CRISBRO_REDEEM_ITEM_CATEGORIES,
+  buildCrisbroRedeemMenuLookup,
+  normalizeMenuName,
+} = require('../constants/crisbroRedeemMenu');
 
 // ── Sync Customers dari Runchise ke DB lokal ──
 async function syncCustomers(locationId = 1) {
@@ -157,6 +162,143 @@ async function syncProducts(brandId = 1) {
   }
 
   return { synced, total: products.length };
+}
+
+async function findOrCreateMenuCategory({ brandId, name, sortOrder }) {
+  const existing = await prisma.menuCategory.findFirst({
+    where: { brand_id: brandId, name },
+  });
+
+  if (existing) {
+    return prisma.menuCategory.update({
+      where: { id: existing.id },
+      data: {
+        sort_order: sortOrder,
+        is_active: true,
+      },
+    });
+  }
+
+  return prisma.menuCategory.create({
+    data: {
+      brand_id: brandId,
+      name,
+      sort_order: sortOrder,
+      is_active: true,
+    },
+  });
+}
+
+// Sync menu redeem Crisbro dari Runchise ke MenuCategory/MenuItem lokal.
+async function syncCrisbroRedeemMenu(brandId = 1) {
+  await prisma.brand.upsert({
+    where: { id: brandId },
+    update: {},
+    create: { id: brandId, name: `Brand ${brandId}` },
+  });
+
+  const products = await fetchAllProducts();
+  const menuLookup = buildCrisbroRedeemMenuLookup();
+  const categoriesByName = new Map();
+
+  for (const [index, category] of CRISBRO_REDEEM_ITEM_CATEGORIES.entries()) {
+    const localCategory = await findOrCreateMenuCategory({
+      brandId,
+      name: category.name,
+      sortOrder: index,
+    });
+
+    categoriesByName.set(category.name, localCategory);
+  }
+
+  const seenMenuNames = new Set();
+  const syncedRunchiseIds = [];
+  const duplicateNames = [];
+  let synced = 0;
+
+  for (const product of products) {
+    const normalizedProductName = normalizeMenuName(product.name);
+    const menuConfig = menuLookup.get(normalizedProductName);
+
+    if (!menuConfig) continue;
+
+    if (seenMenuNames.has(normalizedProductName)) {
+      duplicateNames.push(product.name);
+      continue;
+    }
+
+    seenMenuNames.add(normalizedProductName);
+
+    const category = categoriesByName.get(menuConfig.categoryName);
+    const isActive = product.status === 'activated';
+
+    await prisma.menuItem.upsert({
+      where: { runchise_id: product.id },
+      update: {
+        brand_id: brandId,
+        category_id: category.id,
+        name: product.name,
+        description: product.description ?? null,
+        price: parseFloat(product.sell_price ?? 0),
+        image_url: product.image_url || null,
+        is_active: isActive,
+      },
+      create: {
+        runchise_id: product.id,
+        brand_id: brandId,
+        category_id: category.id,
+        name: product.name,
+        description: product.description ?? null,
+        price: parseFloat(product.sell_price ?? 0),
+        image_url: product.image_url || null,
+        is_active: isActive,
+      },
+    });
+
+    syncedRunchiseIds.push(product.id);
+    synced++;
+  }
+
+  const missingMenuNames = Array.from(menuLookup.entries())
+    .filter(([menuName]) => !seenMenuNames.has(menuName))
+    .map(([, menuConfig]) => menuConfig.displayName);
+  const expectedMenuNames = new Set(menuLookup.keys());
+
+  const categoryIds = Array.from(categoriesByName.values()).map(
+    (category) => category.id,
+  );
+
+  const localRedeemItems = await prisma.menuItem.findMany({
+    where: {
+      brand_id: brandId,
+      category_id: { in: categoryIds },
+    },
+    select: { id: true, name: true, runchise_id: true },
+  });
+
+  const staleItemIds = localRedeemItems
+    .filter((item) => {
+      const isWhitelisted = expectedMenuNames.has(normalizeMenuName(item.name));
+      const wasSynced = syncedRunchiseIds.includes(item.runchise_id);
+
+      return !isWhitelisted || !wasSynced;
+    })
+    .map((item) => item.id);
+
+  if (staleItemIds.length > 0) {
+    await prisma.menuItem.updateMany({
+      where: { id: { in: staleItemIds } },
+      data: { is_active: false },
+    });
+  }
+
+  return {
+    synced,
+    total_runchise_products: products.length,
+    missing: missingMenuNames,
+    duplicate_names_skipped: duplicateNames,
+    deactivated_stale_items: staleItemIds.length,
+  };
 }
 
 // ── Sync Brands dari Runchise ke DB lokal ──
@@ -316,6 +458,7 @@ async function syncLocations(brandId = 1) {
 module.exports = {
   syncCustomers,
   syncProducts,
+  syncCrisbroRedeemMenu,
   syncCustomerPoints,
   syncBrands,
   syncLocations,

@@ -5,6 +5,7 @@ const express = require('express');
 const cors = require('cors');
 const prisma = require('./lib/prisma');
 const auth = require('./middleware/auth');
+const requireRole = require('./middleware/requireRole');
 const customerRoutes = require('./routes/customerRoutes');
 const authRoutes = require('./routes/authRoutes');
 const rewardsCatalogRoutes = require('./routes/rewardsCatalogRoutes');
@@ -13,7 +14,14 @@ const locationRoutes = require('./routes/locationRoutes');
 const productCatalogRoutes = require('./routes/productCatalogRoutes');
 const redeemMenuRoutes = require('./routes/redeemMenuRoutes');
 const promoRoutes = require('./routes/promoRoutes');
-const { syncCustomers, syncProducts, syncCustomerPoints, syncBrands, syncLocations } = require('./services/syncService');
+const {
+  syncCustomers,
+  syncProducts,
+  syncCrisbroRedeemMenu,
+  syncCustomerPoints,
+  syncBrands,
+  syncLocations,
+} = require('./services/syncService');
 
 // ===================== APP =====================
 const app = express();
@@ -82,7 +90,7 @@ app.post('/redeem/:id', auth, async (req, res) => {
 });
 
 // ===================== SYNC RUNCHISE =====================
-app.post('/admin/sync/customers', auth, async (req, res) => {
+async function handleSyncCustomers(req, res) {
   try {
     const locationId = req.query.location_id || 1;
     const result = await syncCustomers(locationId);
@@ -90,18 +98,27 @@ app.post('/admin/sync/customers', auth, async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
-});
+}
 
-app.post('/admin/sync/products', auth, async (req, res) => {
+async function handleSyncProducts(req, res) {
   try {
     const result = await syncProducts();
     res.json({ message: 'Sync products selesai', ...result });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
-});
+}
 
-app.post('/admin/sync/points', auth, async (req, res) => {
+async function handleSyncRedeemMenu(req, res) {
+  try {
+    const result = await syncCrisbroRedeemMenu();
+    res.json({ message: 'Sync menu redeem Crisbro selesai', ...result });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+async function handleSyncPoints(req, res) {
   try {
     const locationId = req.query.location_id || 1;
     const result = await syncCustomerPoints(locationId);
@@ -109,25 +126,41 @@ app.post('/admin/sync/points', auth, async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
-});
+}
 
-app.post('/admin/sync/brands', auth, async (req, res) => {
+async function handleSyncBrands(req, res) {
   try {
     const result = await syncBrands();
     res.json({ message: 'Sync brands selesai', ...result });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
-});
+}
 
-app.post('/admin/sync/locations', async (req, res) => {
+async function handleSyncLocations(req, res) {
   try {
     const result = await syncLocations();
     res.json({ message: 'Sync locations selesai', ...result });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
-});
+}
+
+const adminOnly = [auth, requireRole('admin', 'staff')];
+
+app.post('/admin/sync/customers', ...adminOnly, handleSyncCustomers);
+app.post('/admin/sync/products', ...adminOnly, handleSyncProducts);
+app.post('/admin/sync/redeem-menu', ...adminOnly, handleSyncRedeemMenu);
+app.post('/admin/sync/points', ...adminOnly, handleSyncPoints);
+app.post('/admin/sync/brands', ...adminOnly, handleSyncBrands);
+app.post('/admin/sync/locations', ...adminOnly, handleSyncLocations);
+
+app.post('/api/admin/sync/customers', ...adminOnly, handleSyncCustomers);
+app.post('/api/admin/sync/products', ...adminOnly, handleSyncProducts);
+app.post('/api/admin/sync/redeem-menu', ...adminOnly, handleSyncRedeemMenu);
+app.post('/api/admin/sync/points', ...adminOnly, handleSyncPoints);
+app.post('/api/admin/sync/brands', ...adminOnly, handleSyncBrands);
+app.post('/api/admin/sync/locations', ...adminOnly, handleSyncLocations);
 
 // ===================== START SERVER =====================
 app.listen(5000, () => {
