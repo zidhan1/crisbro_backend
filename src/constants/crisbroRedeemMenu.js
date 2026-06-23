@@ -32,7 +32,7 @@ const CRISBRO_REDEEM_MENU_CATEGORIES = [
     items: ['jamur crispy balado', 'jamur crispy keju salju'],
   },
   {
-    name: 'Cocolove Stories',
+    name: 'Cocolove Stories 🫶🏻',
     items: ['Coconut Blush'],
   },
 ];
