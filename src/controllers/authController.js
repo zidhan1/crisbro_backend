@@ -4,6 +4,8 @@ const prisma = require('../lib/prisma');
 const getJwtSecret = require('../lib/jwtSecret');
 const { createCustomer } = require('../services/runchiseService');
 
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+
 function isSyncedPlaceholderUser(user) {
   return user && user.password_hash === '';
 }
@@ -202,12 +204,14 @@ async function login(req, res) {
     const token = jwt.sign(
       { id: user.id, role: user.role },
       getJwtSecret(),
+      { expiresIn: JWT_EXPIRES_IN },
     );
 
     const { password_hash, ...safeUser } = user;
 
     res.json({
       token,
+      expiresIn: JWT_EXPIRES_IN,
       user: safeUser,
     });
   } catch (error) {
