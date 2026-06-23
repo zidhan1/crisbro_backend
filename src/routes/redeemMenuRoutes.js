@@ -1,7 +1,6 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
 const {
-  CRISBRO_REDEEM_ITEM_CATEGORY_NAMES,
   buildCrisbroRedeemMenuLookup,
   normalizeMenuName,
 } = require('../constants/crisbroRedeemMenu');
@@ -13,44 +12,43 @@ const CRISBRO_BRAND_ID = 1;
 router.get('/', async (req, res) => {
   try {
     const allowedMenuLookup = buildCrisbroRedeemMenuLookup();
+    const allowedMenuNames = Array.from(allowedMenuLookup.keys());
 
-    const categories = await prisma.menuCategory.findMany({
+    const items = await prisma.menuItem.findMany({
       where: {
         brand_id: CRISBRO_BRAND_ID,
         is_active: true,
-        name: { in: CRISBRO_REDEEM_ITEM_CATEGORY_NAMES },
       },
-      include: {
-        items: {
-          where: { is_active: true },
-          orderBy: { name: 'asc' },
-        },
-      },
-      orderBy: [{ sort_order: 'asc' }, { name: 'asc' }],
+      orderBy: { name: 'asc' },
     });
 
-    const result = categories.flatMap((category) =>
-      category.items
-        .map((item) => ({
-          item,
-          menuConfig: allowedMenuLookup.get(normalizeMenuName(item.name)),
-        }))
-        .filter(({ menuConfig }) => {
-          return menuConfig?.categoryName === category.name.trim();
-        })
-        .sort((a, b) => a.menuConfig.itemIndex - b.menuConfig.itemIndex)
-        .map(({ item, menuConfig }) => ({
-          id: item.id,
-          sku: item.runchise_id ? `RUNCHISE-${item.runchise_id}` : `MENU-${item.id}`,
-          name: item.name,
-          description: item.description,
-          points_required: Number(item.price),
-          image_url: item.image_url,
-          category: category.name,
-          category_id: category.id,
-          sort_order: menuConfig.itemIndex,
-        })),
-    );
+    const result = items
+      .map((item) => ({
+        item,
+        menuName: normalizeMenuName(item.name),
+        menuConfig: allowedMenuLookup.get(normalizeMenuName(item.name)),
+      }))
+      .filter(({ menuName, menuConfig }) => {
+        return menuConfig && allowedMenuNames.includes(menuName);
+      })
+      .sort((a, b) => {
+        if (a.menuConfig.categoryIndex !== b.menuConfig.categoryIndex) {
+          return a.menuConfig.categoryIndex - b.menuConfig.categoryIndex;
+        }
+
+        return a.menuConfig.itemIndex - b.menuConfig.itemIndex;
+      })
+      .map(({ item, menuConfig }) => ({
+        id: item.id,
+        sku: item.runchise_id ? `RUNCHISE-${item.runchise_id}` : `MENU-${item.id}`,
+        name: item.name,
+        description: item.description,
+        points_required: Number(item.price),
+        image_url: item.image_url,
+        category: menuConfig.categoryName,
+        category_id: menuConfig.categoryIndex,
+        sort_order: menuConfig.itemIndex,
+      }));
 
     res.json(result);
   } catch (error) {

@@ -32,7 +32,7 @@ const CRISBRO_REDEEM_MENU_CATEGORIES = [
     items: ['jamur crispy balado', 'jamur crispy keju salju'],
   },
   {
-    name: 'Cocolove Stories 🫶🏻',
+    name: 'Cocolove Series',
     items: ['Coconut Blush'],
   },
 ];
@@ -42,7 +42,7 @@ const CRISBRO_REDEEM_CATEGORY_NAMES = CRISBRO_REDEEM_MENU_CATEGORIES.map(
 );
 
 const CRISBRO_REDEEM_ITEM_CATEGORIES = CRISBRO_REDEEM_MENU_CATEGORIES.filter(
-  (category) => category.items.length > 0,
+  (category) => Array.isArray(category.items) && category.items.length > 0,
 );
 
 const CRISBRO_REDEEM_ITEM_CATEGORY_NAMES = CRISBRO_REDEEM_ITEM_CATEGORIES.map(
