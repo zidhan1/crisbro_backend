@@ -47,9 +47,12 @@ Content-Type: application/json
 ## Sync entrypoints
 
 - Cron worker: `src/jobs/runchiseSyncCron.js`
-- Default schedule: every 30 minutes (`*/30 * * * *`)
+- Default master-data schedule: twice daily at 12:00 and 18:00 (`0 12,18 * * *`)
+- Default customer-points schedule: every 30 minutes (`*/30 * * * *`)
 - Disable cron: `RUNCHISE_SYNC_CRON_ENABLED=false`
-- Change schedule: `RUNCHISE_SYNC_CRON="*/15 * * * *"`
+- Change master-data schedule: `RUNCHISE_MASTER_SYNC_CRON="0 1,13 * * *"`
+- Legacy master-data override still supported: `RUNCHISE_SYNC_CRON="0 1,13 * * *"`
+- Change customer-points schedule: `RUNCHISE_POINTS_SYNC_CRON="*/15 * * * *"`
 - Disable initial boot sync: `RUNCHISE_SYNC_ON_START=false`
 - Manual admin endpoints:
   - `POST /api/admin/sync/customers`
