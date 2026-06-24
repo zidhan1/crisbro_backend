@@ -54,6 +54,8 @@ Content-Type: application/json
 - Legacy master-data override still supported: `RUNCHISE_SYNC_CRON="0 1,13 * * *"`
 - Change customer-points schedule: `RUNCHISE_POINTS_SYNC_CRON="*/15 * * * *"`
 - Disable initial boot sync: `RUNCHISE_SYNC_ON_START=false`
+- Product/catalog response cache TTL: `CATALOG_RESPONSE_CACHE_TTL_MS=300000`
+- Promo response cache TTL: `PROMO_RESPONSE_CACHE_TTL_MS=300000`
 - Manual admin endpoints:
   - `POST /api/admin/sync/customers`
   - `POST /api/admin/sync/points`
@@ -71,3 +73,9 @@ Only these backend modules should import or call Runchise functions:
 - `src/services/syncService.js`
 
 If a route/controller imports `runchiseService`, that is a regression against the DB-only boundary.
+
+## Performance notes
+
+- Public catalog and promo responses are cached in memory for 5 minutes by default.
+- Master sync reuses one Runchise `/products` fetch for product sync and redeem-menu sync.
+- Database indexes exist for common catalog, promo, and registration lookup paths.

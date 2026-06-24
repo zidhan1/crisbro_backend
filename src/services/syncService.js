@@ -228,11 +228,11 @@ async function syncCustomerPoints(locationId = 1) {
 // ===================== SYNC PRODUCTS =====================
 
 // Sync product dari Runchise → menuItem lokal
-async function syncProducts(brandId = 1) {
-  const products = await fetchAllProducts();
+async function syncProducts(brandId = 1, products = null) {
+  const productList = products || (await fetchAllProducts());
   let synced = 0;
 
-  for (const p of products) {
+  for (const p of productList) {
     // Pastikan category ada, atau buat baru jika belum ada
     let category;
     if (p.product_category?.id) {
@@ -279,7 +279,7 @@ async function syncProducts(brandId = 1) {
     synced++;
   }
 
-  return { synced, total: products.length };
+  return { synced, total: productList.length };
 }
 
 // ===================== SYNC FIND OR CREATE CATEGORY =====================
@@ -312,7 +312,7 @@ async function findOrCreateMenuCategory({ brandId, name, sortOrder }) {
 // ===================== SYNC CRISBRO REDEEM MENU =====================
 
 // Sync menu redeem khusus Crisbro dari Runchise → database lokal
-async function syncCrisbroRedeemMenu(brandId = 1) {
+async function syncCrisbroRedeemMenu(brandId = 1, products = null) {
   // Pastikan brand ada
   await prisma.brand.upsert({
     where: { id: brandId },
@@ -320,7 +320,7 @@ async function syncCrisbroRedeemMenu(brandId = 1) {
     create: { id: brandId, name: `Brand ${brandId}` },
   });
 
-  const products = await fetchAllProducts();
+  const productList = products || (await fetchAllProducts());
   const menuLookup = buildCrisbroRedeemMenuLookup();
   const categoriesByName = new Map();
 
@@ -350,7 +350,7 @@ async function syncCrisbroRedeemMenu(brandId = 1) {
   const syncedMenuCrisbroNames = [];
   let synced = 0;
 
-  for (const product of products) {
+  for (const product of productList) {
     const normalizedProductName = normalizeMenuName(product.name);
     const normalizedProductCategory = normalizeMenuName(
       product.product_category?.name,
@@ -474,10 +474,19 @@ async function syncCrisbroRedeemMenu(brandId = 1) {
 
   return {
     synced,
-    total_runchise_products: products.length,
+    total_runchise_products: productList.length,
     missing: missingMenuNames,
     duplicate_names_skipped: duplicateNames,
     deactivated_stale_items: staleItemIds.length,
+  };
+}
+
+async function syncProductsAndRedeemMenu(brandId = 1) {
+  const products = await fetchAllProducts();
+
+  return {
+    products: await syncProducts(brandId, products),
+    redeemMenu: await syncCrisbroRedeemMenu(brandId, products),
   };
 }
 
@@ -780,6 +789,7 @@ async function syncPromos() {
 module.exports = {
   syncCustomers,
   syncProducts,
+  syncProductsAndRedeemMenu,
   syncCrisbroRedeemMenu,
   syncCustomerPoints,
   syncBrands,

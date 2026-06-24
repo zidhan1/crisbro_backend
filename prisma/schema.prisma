@@ -79,6 +79,9 @@ model Customer {
   customer_point     CustomerPoint?
   point_histories    PointHistory[]
   redemptions        RewardRedemption[]
+
+  @@index([phone_number])
+  @@index([runchise_id])
 }
 
 // ───────────────────────────────────────────────
@@ -162,6 +165,8 @@ model MenuCategory {
   brand            Brand                     @relation(fields: [brand_id], references: [id])
   items            MenuItem[]
   sub_brand_links  SubBrandProductCategory[]
+
+  @@index([name])
 }
 
 model SubBrandProductCategory {
@@ -173,6 +178,8 @@ model SubBrandProductCategory {
   menu_category MenuCategory @relation(fields: [menu_category_id], references: [id])
 
   @@unique([sub_brand_id, menu_category_id])
+  @@index([sub_brand_id])
+  @@index([menu_category_id])
 }
 
 model MenuItem {
@@ -191,6 +198,10 @@ model MenuItem {
 
   brand    Brand        @relation(fields: [brand_id], references: [id])
   category MenuCategory @relation(fields: [category_id], references: [id])
+
+  @@index([brand_id])
+  @@index([category_id])
+  @@index([is_active])
 }
 
 // ───────────────────────────────────────────────
@@ -257,6 +268,10 @@ model Promo {
   raw                    Json?
   created_at             DateTime @default(now())
   updated_at             DateTime @updatedAt
+
+  @@index([is_visible])
+  @@index([start_at])
+  @@index([is_visible, start_at])
 }
 
 model RewardRedemption {

@@ -1,10 +1,22 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
+const { createResponseCache } = require('../lib/responseCache');
+
+const cache = createResponseCache(
+  Number(process.env.PROMO_RESPONSE_CACHE_TTL_MS || 5 * 60 * 1000),
+);
 
 // GET /api/promos
 router.get('/', async (req, res) => {
   try {
+    const cacheKey = 'promos:visible';
+    const cached = cache.get(cacheKey);
+
+    if (cached) {
+      return res.json(cached);
+    }
+
     const promos = await prisma.promo.findMany({
       where: { is_visible: true },
       orderBy: [{ start_at: 'desc' }, { id: 'desc' }],
@@ -27,6 +39,7 @@ router.get('/', async (req, res) => {
       template: promo.template,
     }));
 
+    cache.set(cacheKey, result);
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });

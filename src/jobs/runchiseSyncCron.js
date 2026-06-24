@@ -2,8 +2,7 @@ const cron = require('node-cron');
 const {
   syncCustomers,
   syncCustomerPoints,
-  syncProducts,
-  syncCrisbroRedeemMenu,
+  syncProductsAndRedeemMenu,
   syncBrands,
   syncLocations,
   syncPromos,
@@ -38,8 +37,7 @@ async function runRunchiseMasterSyncJob() {
 
     results.locations = await syncLocations(brandId);
     results.brands = await syncBrands();
-    results.products = await syncProducts(brandId);
-    results.redeemMenu = await syncCrisbroRedeemMenu(brandId);
+    Object.assign(results, await syncProductsAndRedeemMenu(brandId));
     results.customers = await syncCustomers(locationId);
     results.promos = await syncPromos();
 
