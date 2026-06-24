@@ -21,6 +21,7 @@ const locationRoutes = require('./routes/locationRoutes');
 const productCatalogRoutes = require('./routes/productCatalogRoutes');
 const redeemMenuRoutes = require('./routes/redeemMenuRoutes');
 const promoRoutes = require('./routes/promoRoutes');
+const adminLoyaltyRoutes = require('./routes/adminLoyaltyRoutes');
 
 // Sync services (ETL dari Runchise → DB lokal)
 const {
@@ -46,6 +47,7 @@ app.use('/api/locations', locationRoutes);
 app.use('/api/catalog/redeem-menu', redeemMenuRoutes);
 app.use('/api/catalog/products', productCatalogRoutes);
 app.use('/api/promos', promoRoutes);
+app.use('/api/admin', adminLoyaltyRoutes);
 
 // ===================== HEALTH CHECK =====================
 app.get('/', (req, res) => {

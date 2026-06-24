@@ -1,0 +1,3 @@
+-- No-op migration placeholder.
+-- This migration directory existed without migration.sql; keeping it prevents
+-- Prisma from failing migration status checks with P3015.

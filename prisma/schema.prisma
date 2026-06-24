@@ -198,10 +198,49 @@ model MenuItem {
 
   brand    Brand        @relation(fields: [brand_id], references: [id])
   category MenuCategory @relation(fields: [category_id], references: [id])
+  redeem_menu_items RedeemMenuItem[]
 
   @@index([brand_id])
   @@index([category_id])
   @@index([is_active])
+}
+
+model RedeemMenuCategory {
+  id         Int      @id @default(autoincrement())
+  name       String
+  sort_order Int      @default(0)
+  is_active  Boolean  @default(true)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  items RedeemMenuItem[]
+
+  @@index([is_active])
+  @@index([sort_order])
+}
+
+model RedeemMenuItem {
+  id                 Int       @id @default(autoincrement())
+  menu_item_id       Int
+  category_id        Int
+  points_required    Int
+  is_active          Boolean   @default(true)
+  badge              String?
+  sort_order         Int       @default(0)
+  start_at           DateTime?
+  end_at             DateTime?
+  stock_limit        Int?
+  daily_limit        Int?
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  menu_item MenuItem           @relation(fields: [menu_item_id], references: [id])
+  category  RedeemMenuCategory @relation(fields: [category_id], references: [id])
+
+  @@unique([menu_item_id])
+  @@index([category_id])
+  @@index([is_active])
+  @@index([sort_order])
 }
 
 // ───────────────────────────────────────────────
