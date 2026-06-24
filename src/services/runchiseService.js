@@ -10,6 +10,15 @@ const runchiseClient = axios.create({
 });
 
 // ── Ambil semua customers dengan pagination otomatis ──
+function normalizeIndonesianPhone(raw) {
+  if (!raw) return null;
+
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.startsWith('62')) return digits.slice(2);
+  if (digits.startsWith('0')) return digits.slice(1);
+  return digits;
+}
+
 async function fetchAllCustomers(locationId) {
   let allCustomers = [];
   let page = 1;
@@ -29,6 +38,20 @@ async function fetchAllCustomers(locationId) {
   }
 
   return allCustomers;
+}
+
+async function findCustomerByPhone(locationId, phoneNumber) {
+  const normalizedPhone = normalizeIndonesianPhone(phoneNumber);
+  if (!normalizedPhone) return null;
+
+  const customers = await fetchAllCustomers(locationId);
+
+  return (
+    customers.find(
+      (customer) =>
+        normalizeIndonesianPhone(customer.phone_number) === normalizedPhone,
+    ) || null
+  );
 }
 
 // ── Ambil semua products dengan pagination otomatis ──
@@ -148,6 +171,7 @@ async function createCustomer(locationId, customerData) {
 
 module.exports = {
   fetchAllCustomers,
+  findCustomerByPhone,
   fetchAllProducts,
   fetchAllSubBrands,
   fetchAllLocations,

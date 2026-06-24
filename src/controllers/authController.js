@@ -2,9 +2,11 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
 const getJwtSecret = require('../lib/jwtSecret');
-const { createCustomer } = require('../services/runchiseService');
+const { findCustomerByPhone } = require('../services/runchiseService');
 
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+const RUNCHISE_REGISTRATION_LOCATION_ID =
+  process.env.RUNCHISE_REGISTRATION_LOCATION_ID || 4453;
 
 function isSyncedPlaceholderUser(user) {
   return user && user.password_hash === '';
@@ -16,6 +18,37 @@ function normalizePhone(raw) {
   if (digits.startsWith('62')) return digits.slice(2);
   if (digits.startsWith('0')) return digits.slice(1);
   return digits;
+}
+
+function phoneVariants(normalizedPhone) {
+  if (!normalizedPhone) return [];
+
+  return Array.from(
+    new Set([normalizedPhone, `0${normalizedPhone}`, `62${normalizedPhone}`]),
+  );
+}
+
+function mapRunchiseCustomerToLocalPayload(runchiseCustomer, fallback) {
+  return {
+    runchise_id: runchiseCustomer.id,
+    name: runchiseCustomer.name || fallback.name,
+    phone_number: fallback.phone_number,
+    phone_number_country_code: runchiseCustomer.phone_number_country_code ?? 62,
+    address: runchiseCustomer.address ?? null,
+    province: runchiseCustomer.province ?? null,
+    city: runchiseCustomer.city ?? null,
+    country: runchiseCustomer.country ?? null,
+    postal_code: runchiseCustomer.postal_code ?? null,
+    dob:
+      runchiseCustomer.dob && !isNaN(new Date(runchiseCustomer.dob))
+        ? new Date(runchiseCustomer.dob)
+        : null,
+    gender: runchiseCustomer.gender ?? 'unknown',
+    status: runchiseCustomer.status ?? 'active',
+    balance: parseFloat(runchiseCustomer.balance ?? 0),
+    brand_id: runchiseCustomer.brand_id ?? fallback.brand_id,
+    owner_location_id: null,
+  };
 }
 
 // ===================== REGISTER =====================
@@ -30,41 +63,85 @@ async function register(req, res) {
       });
     }
 
-    // 1. Cek dulu apakah nomor telepon sudah terdaftar di DB lokal
-    const existingUser = await prisma.user.findUnique({
-      where: { phone_number },
+    let runchiseCustomer;
+
+    try {
+      runchiseCustomer = await prisma.customer.findFirst({
+        where: { phone_number },
+      });
+    } catch (apiError) {
+      console.log(apiError);
+      return res.status(424).json({
+        message: 'Gagal memeriksa data customer ke sistem Runchise',
+        error: apiError.message,
+      });
+    }
+
+    if (!runchiseCustomer) {
+      return res.status(404).json({
+        message:
+          'Nomor telepon belum terdaftar di Runchise. Registrasi hanya untuk customer yang sudah terdaftar.',
+      });
+    }
+
+    const existingUserByPhone = await prisma.user.findFirst({
+      where: { phone_number: { in: phoneVariants(phone_number) } },
       include: {
         customer: {
           include: { customer_point: true },
         },
       },
     });
-    if (existingUser && !isSyncedPlaceholderUser(existingUser)) {
+
+    const existingUserByRunchiseId = await prisma.user.findFirst({
+      where: {
+        customer: {
+          runchise_id: runchiseCustomer.id,
+        },
+      },
+      include: {
+        customer: {
+          include: { customer_point: true },
+        },
+      },
+    });
+
+    const registeredExistingUser = [
+      existingUserByPhone,
+      existingUserByRunchiseId,
+    ].find((user) => user && !isSyncedPlaceholderUser(user));
+
+    if (registeredExistingUser) {
       return res.status(400).json({ message: 'Nomor telepon sudah terdaftar' });
     }
 
+    const existingUser = existingUserByPhone || existingUserByRunchiseId;
     const hashedPassword = await bcrypt.hash(password, 10);
+    const brandId =
+      runchiseCustomer.brand_id ?? existingUser?.customer?.brand_id ?? 1;
 
-    if (isSyncedPlaceholderUser(existingUser)) {
-      if (!existingUser.customer) {
-        return res.status(409).json({
-          message: 'Data akun belum lengkap, silahkan hubungi admin',
-        });
-      }
+    await prisma.brand.upsert({
+      where: { id: brandId },
+      update: {},
+      create: { id: brandId, name: `Brand ${brandId}` },
+    });
 
+    if (existingUser) {
       const user = await prisma.$transaction(async (tx) => {
+        const customerPayload = mapRunchiseCustomerToLocalPayload(
+          runchiseCustomer,
+          { name, phone_number, brand_id: brandId },
+        );
+
         const updatedUser = await tx.user.update({
           where: { id: existingUser.id },
           data: {
             email,
+            phone_number,
             password_hash: hashedPassword,
-            customer: {
-              update: {
-                name,
-                phone_number,
-                status: 'active',
-              },
-            },
+            customer: existingUser.customer
+              ? { update: customerPayload }
+              : { create: customerPayload },
           },
           include: {
             customer: {
@@ -77,8 +154,8 @@ async function register(req, res) {
           await tx.customerPoint.create({
             data: {
               customer_id: updatedUser.customer.id,
-              total_point: 0,
-              available_point: 0,
+              total_point: runchiseCustomer.total_point ?? 0,
+              available_point: runchiseCustomer.available_point ?? 0,
               next_reward_threshold: 2000,
             },
           });
@@ -100,29 +177,6 @@ async function register(req, res) {
       return res.status(200).json(safeUser);
     }
 
-    // 2. DAFTARKAN KE RUNCHISE TERLEBIH DAHULU
-    // Catatan: Tentukan locationId default untuk registrasi, misalnya 4453 (Antapani) seperti di contohmu
-    const defaultLocationId = 4453;
-    let runchiseId = null;
-
-    try {
-      const runchiseResponse = await createCustomer(defaultLocationId, {
-        name,
-        phone_number,
-        email,
-      });
-
-      // Ambil ID dari response Runchise (sesuaikan strukturnya dengan payload asli dari Runchise)
-      // Biasanya berbentuk runchiseResponse.id atau runchiseResponse.customer.id
-      runchiseId = runchiseResponse?.id || runchiseResponse?.customer?.id;
-    } catch (apiError) {
-      return res.status(424).json({
-        message: 'Gagal sinkronisasi pendaftaran dengan sistem Runchise',
-        error: apiError.message,
-      });
-    }
-
-    // 3. JIKA SUKSES DI RUNCHISE, SIMPAN KE DATABASE POSTGRESQL LOKAL
     const user = await prisma.user.create({
       data: {
         email,
@@ -131,17 +185,15 @@ async function register(req, res) {
         role: 'customer',
         customer: {
           create: {
-            name: name,
-            status: 'active',
-            brand_id: 1, // Sesuaikan dengan id brand lokalmu
-            runchise_id: runchiseId, // <-- SEKARANG RUNCHISE_ID SUDAH TERSIMPAN!
-            balance: 0,
-            phone_number_country_code: 62,
-            owner_location_id: null, // Hubungkan dengan ID lokasi lokalmu jika ada
+            ...mapRunchiseCustomerToLocalPayload(runchiseCustomer, {
+              name,
+              phone_number,
+              brand_id: brandId,
+            }),
             customer_point: {
               create: {
-                total_point: 0,
-                available_point: 0,
+                total_point: runchiseCustomer.total_point ?? 0,
+                available_point: runchiseCustomer.available_point ?? 0,
                 next_reward_threshold: 2000,
               },
             },
@@ -149,7 +201,9 @@ async function register(req, res) {
         },
       },
       include: {
-        customer: true,
+        customer: {
+          include: { customer_point: true },
+        },
       },
     });
 
@@ -201,11 +255,9 @@ async function login(req, res) {
       return res.status(401).json({ message: 'Password salah' });
     }
 
-    const token = jwt.sign(
-      { id: user.id, role: user.role },
-      getJwtSecret(),
-      { expiresIn: JWT_EXPIRES_IN },
-    );
+    const token = jwt.sign({ id: user.id, role: user.role }, getJwtSecret(), {
+      expiresIn: JWT_EXPIRES_IN,
+    });
 
     const { password_hash, ...safeUser } = user;
 
