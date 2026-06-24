@@ -1,10 +1,15 @@
+// Mengimpor Prisma untuk akses database lokal
 const prisma = require('../lib/prisma');
+
+// Mengimpor service Runchise (API eksternal)
 const {
   fetchAllCustomers,
   fetchAllProducts,
   fetchAllSubBrands,
   fetchAllLocations,
 } = require('./runchiseService');
+
+// Mengimpor konfigurasi menu redeem Crisbro
 const {
   CRISBRO_REDEEM_MENU_CATEGORY_NAME,
   CRISBRO_REDEEM_ITEM_CATEGORIES,
@@ -12,23 +17,27 @@ const {
   normalizeMenuName,
 } = require('../constants/crisbroRedeemMenu');
 
-// ── Sync Customers dari Runchise ke DB lokal ──
+// ===================== SYNC CUSTOMERS =====================
+
+// Sync customer dari Runchise → database lokal
 async function syncCustomers(locationId = 1) {
   const customers = await fetchAllCustomers(locationId);
   let synced = 0;
 
   for (const c of customers) {
-    // ── Pastikan Brand ada dulu ──
+    // Pastikan brand sudah ada di database
     await prisma.brand.upsert({
       where: { id: c.brand_id },
       update: {},
       create: { id: c.brand_id, name: `Brand ${c.brand_id}` },
     });
 
+    // Cek apakah customer sudah ada (berdasarkan runchise_id)
     const existing = await prisma.customer.findFirst({
       where: { runchise_id: c.id },
     });
 
+    // Mapping data customer dari Runchise ke format lokal
     const payload = {
       runchise_id: c.id,
       name: c.name,
@@ -47,6 +56,7 @@ async function syncCustomers(locationId = 1) {
       owner_location_id: null, // skip dulu karena Location juga belum tentu ada
     };
 
+    // Update jika sudah ada, create jika belum
     if (existing) {
       await prisma.customer.update({
         where: { id: existing.id },
@@ -68,8 +78,11 @@ async function syncCustomers(locationId = 1) {
   return { synced, total: customers.length };
 }
 
+// ===================== SYNC CUSTOMER POINTS =====================
+
+// Sync poin customer dari Runchise ke database lokal
 async function syncCustomerPoints(locationId = 1) {
-  // Fetch dari Runchise API dan dari DB secara paralel
+  // Ambil data dari API + database sekaligus
   const [runchiseCustomers, localCustomers] = await Promise.all([
     fetchAllCustomers(locationId),
     prisma.customer.findMany({
@@ -78,7 +91,7 @@ async function syncCustomerPoints(locationId = 1) {
     }),
   ]);
 
-  // Buat map runchise_id → local id (lookup di memory, bukan query DB)
+  // Mapping runchise_id → local_id (biar cepat, tidak query DB berulang)
   const runchiseToLocal = new Map(
     localCustomers.map((c) => [c.runchise_id, c.id]),
   );
@@ -89,6 +102,7 @@ async function syncCustomerPoints(locationId = 1) {
     const localId = runchiseToLocal.get(c.id);
     if (!localId) continue;
 
+    // Upsert poin customer
     ops.push(
       prisma.customerPoint.upsert({
         where: { customer_id: localId },
@@ -111,7 +125,9 @@ async function syncCustomerPoints(locationId = 1) {
   return { synced: ops.length, total: runchiseCustomers.length };
 }
 
-// ── Sync Products dari Runchise ke MenuItem DB lokal ──
+// ===================== SYNC PRODUCTS =====================
+
+// Sync product dari Runchise → menuItem lokal
 async function syncProducts(brandId = 1) {
   const products = await fetchAllProducts();
   let synced = 0;
@@ -138,6 +154,7 @@ async function syncProducts(brandId = 1) {
       });
     }
 
+    // Upsert menu item
     await prisma.menuItem.upsert({
       where: { runchise_id: p.id },
       update: {
@@ -165,6 +182,8 @@ async function syncProducts(brandId = 1) {
   return { synced, total: products.length };
 }
 
+// ===================== SYNC FIND OR CREATE CATEGORY =====================
+
 async function findOrCreateMenuCategory({ brandId, name, sortOrder }) {
   const existing = await prisma.menuCategory.findFirst({
     where: { brand_id: brandId, name },
@@ -190,8 +209,11 @@ async function findOrCreateMenuCategory({ brandId, name, sortOrder }) {
   });
 }
 
-// Sync menu redeem Crisbro dari Runchise ke MenuCategory/MenuItem lokal.
+// ===================== SYNC CRISBRO REDEEM MENU =====================
+
+// Sync menu redeem khusus Crisbro dari Runchise → database lokal
 async function syncCrisbroRedeemMenu(brandId = 1) {
+  // Pastikan brand ada
   await prisma.brand.upsert({
     where: { id: brandId },
     update: {},
@@ -202,6 +224,7 @@ async function syncCrisbroRedeemMenu(brandId = 1) {
   const menuLookup = buildCrisbroRedeemMenuLookup();
   const categoriesByName = new Map();
 
+  // Buat kategori utama redeem
   const menuCrisbroCategory = await findOrCreateMenuCategory({
     brandId,
     name: CRISBRO_REDEEM_MENU_CATEGORY_NAME,
@@ -210,6 +233,7 @@ async function syncCrisbroRedeemMenu(brandId = 1) {
 
   categoriesByName.set(CRISBRO_REDEEM_MENU_CATEGORY_NAME, menuCrisbroCategory);
 
+  // Buat kategori dari config redeem
   for (const [index, category] of CRISBRO_REDEEM_ITEM_CATEGORIES.entries()) {
     const localCategory = await findOrCreateMenuCategory({
       brandId,
@@ -232,6 +256,7 @@ async function syncCrisbroRedeemMenu(brandId = 1) {
       product.product_category?.name,
     );
 
+    // Jika masuk kategori Crisbro langsung sync
     if (
       normalizedProductCategory ===
       normalizeMenuName(CRISBRO_REDEEM_MENU_CATEGORY_NAME)
@@ -267,6 +292,7 @@ async function syncCrisbroRedeemMenu(brandId = 1) {
       continue;
     }
 
+    // Cek apakah termasuk whitelist redeem menu
     const menuConfig = menuLookup.get(normalizedProductName);
 
     if (!menuConfig) continue;
@@ -355,7 +381,9 @@ async function syncCrisbroRedeemMenu(brandId = 1) {
   };
 }
 
-// ── Sync Brands dari Runchise ke DB lokal ──
+// ===================== SYNC BRANDS =====================
+
+// Sync brand & sub-brand dari Runchise
 async function syncBrands() {
   const subBrandsArray = await fetchAllSubBrands();
 
@@ -456,6 +484,9 @@ async function syncBrands() {
   return { synced, total: subBrandsArray.length };
 }
 
+// ===================== SYNC LOCATIONS =====================
+
+// Sync lokasi outlet dari Runchise
 async function syncLocations(brandId = 1) {
   const locations = await fetchAllLocations();
 

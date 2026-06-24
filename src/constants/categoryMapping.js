@@ -1,7 +1,6 @@
 const CRISBAR_SUB_BRAND_NAME = 'Crisbar';
 
-// Tambahkan ke sini hanya kategori yang sifatnya operasional/internal
-// (option set, bahan baku, promo internal, dsb), bukan kategori display produk.
+// Kategori operasional/internal, bukan kategori display produk
 const EXCLUDED_CRISBAR_CATEGORY_NAMES = new Set([
   'Bahan Baku',
   'Option Set',

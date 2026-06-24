@@ -1,5 +1,7 @@
+// Mengimpor axios untuk melakukan HTTP request ke API eksternal
 const axios = require('axios');
 
+// Membuat instance axios khusus untuk API Runchise
 const runchiseClient = axios.create({
   baseURL: 'https://api.runchise.com/api/public',
   headers: {
@@ -9,7 +11,9 @@ const runchiseClient = axios.create({
   },
 });
 
-// ── Ambil semua customers dengan pagination otomatis ──
+// ===================== UTIL =====================
+
+// Normalisasi nomor HP Indonesia (hapus 0 / 62 / karakter non-digit)
 function normalizeIndonesianPhone(raw) {
   if (!raw) return null;
 
@@ -19,6 +23,9 @@ function normalizeIndonesianPhone(raw) {
   return digits;
 }
 
+// ===================== CUSTOMERS =====================
+
+// Mengambil semua customer dari Runchise (pagination otomatis)
 async function fetchAllCustomers(locationId) {
   let allCustomers = [];
   let page = 1;
@@ -40,6 +47,7 @@ async function fetchAllCustomers(locationId) {
   return allCustomers;
 }
 
+// Mencari customer berdasarkan nomor HP
 async function findCustomerByPhone(locationId, phoneNumber) {
   const normalizedPhone = normalizeIndonesianPhone(phoneNumber);
   if (!normalizedPhone) return null;
@@ -54,7 +62,9 @@ async function findCustomerByPhone(locationId, phoneNumber) {
   );
 }
 
-// ── Ambil semua products dengan pagination otomatis ──
+// ===================== PRODUCTS =====================
+
+// Mengambil semua produk dari Runchise (pagination otomatis)
 async function fetchAllProducts() {
   let allProducts = [];
   let page = 1;
@@ -73,7 +83,9 @@ async function fetchAllProducts() {
   return allProducts;
 }
 
-// ── Ambil semua sub-brands dengan pagination otomatis ──
+// ===================== SUB BRANDS =====================
+
+// Mengambil semua sub-brand dari Runchise
 async function fetchAllSubBrands() {
   let allSubBrands = [];
   let page = 1;
@@ -87,7 +99,7 @@ async function fetchAllSubBrands() {
       },
     });
 
-    // Menggabungkan data sub_brands yang didapat ke dalam array utama
+    // Gabungkan data sub-brand
     allSubBrands = allSubBrands.concat(data.sub_brands);
 
     // Cek apakah masih ada halaman berikutnya
@@ -98,6 +110,9 @@ async function fetchAllSubBrands() {
   return allSubBrands;
 }
 
+// ===================== LOCATIONS =====================
+
+// Mengambil semua lokasi dari Runchise
 async function fetchAllLocations() {
   let allLocations = [];
   let page = 1;
@@ -110,7 +125,7 @@ async function fetchAllLocations() {
 
     allLocations = allLocations.concat(data.locations);
 
-    // API ini pakai total_item, bukan next_page — hitung manual
+    // Karena API pakai total_item, bukan next_page
     const totalFetched = allLocations.length;
     hasMore = totalFetched < data.paging.total_item;
     page++;
@@ -119,6 +134,9 @@ async function fetchAllLocations() {
   return allLocations;
 }
 
+// ===================== PROMOS =====================
+
+// Mengambil semua promo dari Runchise
 async function fetchAllPromos() {
   let allPromos = [];
   let page = 1;
@@ -137,6 +155,9 @@ async function fetchAllPromos() {
   return allPromos;
 }
 
+// ===================== CREATE CUSTOMER =====================
+
+// Membuat customer baru di Runchise
 async function createCustomer(locationId, customerData) {
   try {
     // Sesuai dokumentasi/kebutuhan API Runchise kamu biasanya dikirim ke endpoint lokasinya
@@ -148,10 +169,9 @@ async function createCustomer(locationId, customerData) {
         email: customerData.email || null,
         status: 'active',
         phone_number_country_code: 62,
-        // tambahkan fields lain jika diwajibkan oleh Runchise
       },
     );
-    return data; // Mengembalikan data customer yang sukses dibuat di Runchise
+    return data;
   } catch (error) {
     // Mengambil pesan error dari server Runchise dengan aman
     const errorData = error.response?.data;

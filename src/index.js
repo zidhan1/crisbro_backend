@@ -1,11 +1,18 @@
-// ===================== IMPORT =====================
+// Load environment variables (.env)
 require('dotenv').config();
 
+// Core dependencies
 const express = require('express');
 const cors = require('cors');
+
+// Prisma ORM (database client)
 const prisma = require('./lib/prisma');
+
+// Middleware
 const auth = require('./middleware/auth');
 const requireRole = require('./middleware/requireRole');
+
+// Routes (modular API)
 const customerRoutes = require('./routes/customerRoutes');
 const authRoutes = require('./routes/authRoutes');
 const rewardsCatalogRoutes = require('./routes/rewardsCatalogRoutes');
@@ -14,6 +21,8 @@ const locationRoutes = require('./routes/locationRoutes');
 const productCatalogRoutes = require('./routes/productCatalogRoutes');
 const redeemMenuRoutes = require('./routes/redeemMenuRoutes');
 const promoRoutes = require('./routes/promoRoutes');
+
+// Sync services (ETL dari Runchise → DB lokal)
 const {
   syncCustomers,
   syncProducts,
@@ -23,7 +32,7 @@ const {
   syncLocations,
 } = require('./services/syncService');
 
-// ===================== APP =====================
+// ===================== APP SETUP =====================
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -36,12 +45,14 @@ app.use('/api/catalog/redeem-menu', redeemMenuRoutes);
 app.use('/api/catalog/products', productCatalogRoutes);
 app.use('/api/promos', promoRoutes);
 
-// ===================== TEST =====================
+// ===================== HEALTH CHECK =====================
 app.get('/', (req, res) => {
   res.json({ message: 'API Running' });
 });
 
-// ===================== REWARDS =====================
+// ===================== REWARDS (LEGACY / SIMPLE ENDPOINT) =====================
+
+// Ambil reward aktif (langsung dari DB)
 app.get('/rewards', async (req, res) => {
   try {
     // Diubah dari .reward menjadi .rewardsCatalog sesuai skema baru
@@ -53,6 +64,8 @@ app.get('/rewards', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ===================== POINTS USER =====================
 
 // GET /api/my-points — ambil poin customer yang login
 app.get('/api/my-points', auth, async (req, res) => {
@@ -68,10 +81,11 @@ app.get('/api/my-points', auth, async (req, res) => {
   }
 });
 
-// ===================== REDEEM (DUMMY UNTUK SEKARANG) =====================
+// ===================== REDEEM DUMMY ENDPOINT =====================
+
+// Endpoint sementara untuk cek reward (belum pakai logic poin)
 app.post('/redeem/:id', auth, async (req, res) => {
   try {
-    // Diubah dari .reward menjadi .rewardsCatalog sesuai skema baru
     const reward = await prisma.rewardsCatalog.findUnique({
       where: { id: Number(req.params.id) },
     });
@@ -89,7 +103,9 @@ app.post('/redeem/:id', auth, async (req, res) => {
   }
 });
 
-// ===================== SYNC RUNCHISE =====================
+// ===================== SYNC HANDLERS (WRAPPER API) =====================
+
+// Sync customers dari Runchise → DB lokal
 async function handleSyncCustomers(req, res) {
   try {
     const locationId = req.query.location_id || 1;
@@ -100,6 +116,7 @@ async function handleSyncCustomers(req, res) {
   }
 }
 
+// Sync products
 async function handleSyncProducts(req, res) {
   try {
     const result = await syncProducts();
@@ -109,6 +126,7 @@ async function handleSyncProducts(req, res) {
   }
 }
 
+// Sync redeem menu
 async function handleSyncRedeemMenu(req, res) {
   try {
     const result = await syncCrisbroRedeemMenu();
@@ -118,6 +136,7 @@ async function handleSyncRedeemMenu(req, res) {
   }
 }
 
+// Sync points
 async function handleSyncPoints(req, res) {
   try {
     const locationId = req.query.location_id || 1;
@@ -128,6 +147,7 @@ async function handleSyncPoints(req, res) {
   }
 }
 
+// Sync brands
 async function handleSyncBrands(req, res) {
   try {
     const result = await syncBrands();
@@ -137,6 +157,7 @@ async function handleSyncBrands(req, res) {
   }
 }
 
+// Sync locations
 async function handleSyncLocations(req, res) {
   try {
     const result = await syncLocations();
@@ -146,8 +167,14 @@ async function handleSyncLocations(req, res) {
   }
 }
 
+// ===================== ADMIN MIDDLEWARE =====================
+
+// Middleware gabungan: login + role check
 const adminOnly = [auth, requireRole('admin', 'staff')];
 
+// ===================== ADMIN SYNC ROUTES =====================
+
+// Endpoint sync (tanpa prefix /api)
 app.post('/admin/sync/customers', ...adminOnly, handleSyncCustomers);
 app.post('/admin/sync/products', ...adminOnly, handleSyncProducts);
 app.post('/admin/sync/redeem-menu', ...adminOnly, handleSyncRedeemMenu);
@@ -155,6 +182,7 @@ app.post('/admin/sync/points', ...adminOnly, handleSyncPoints);
 app.post('/admin/sync/brands', ...adminOnly, handleSyncBrands);
 app.post('/admin/sync/locations', ...adminOnly, handleSyncLocations);
 
+// Endpoint sync (dengan prefix /api)
 app.post('/api/admin/sync/customers', ...adminOnly, handleSyncCustomers);
 app.post('/api/admin/sync/products', ...adminOnly, handleSyncProducts);
 app.post('/api/admin/sync/redeem-menu', ...adminOnly, handleSyncRedeemMenu);

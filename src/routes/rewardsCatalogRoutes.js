@@ -1,8 +1,14 @@
+// Mengimpor Express untuk membuat router
 const express = require('express');
 const router = express.Router();
 
+// Middleware autentikasi JWT
 const auth = require('../middleware/auth');
+
+// Middleware otorisasi berdasarkan role (admin, staff, dll)
 const requireRole = require('../middleware/requireRole');
+
+// Mengimpor controller untuk katalog reward
 const {
   getAll,
   getOne,
@@ -11,10 +17,23 @@ const {
   remove,
 } = require('../controllers/rewardsCatalogController');
 
-router.get('/', getAll);           // publik — bisa difilter ?brand_id=1&is_active=true
-router.get('/:id', getOne);        // publik
-router.post('/', auth, requireRole('admin', 'staff'), create);    // admin/staff only
-router.put('/:id', auth, requireRole('admin', 'staff'), update);  // admin/staff only
-router.delete('/:id', auth, requireRole('admin', 'staff'), remove); // admin/staff only
+// ===================== PUBLIC ROUTES =====================
+
+// Ambil semua reward (bisa difilter brand & status)
+router.get('/', getAll);
+
+// Ambil detail reward berdasarkan ID
+router.get('/:id', getOne);
+
+// ===================== ADMIN / STAFF ONLY =====================
+
+// Tambah reward baru (hanya admin/staff)
+router.post('/', auth, requireRole('admin', 'staff'), create);
+
+// Update reward (hanya admin/staff)
+router.put('/:id', auth, requireRole('admin', 'staff'), update);
+
+// Hapus reward (hanya admin/staff)
+router.delete('/:id', auth, requireRole('admin', 'staff'), remove);
 
 module.exports = router;
