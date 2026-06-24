@@ -114,7 +114,8 @@ model SubBrand {
   created_at             DateTime @default(now())
   updated_at             DateTime @updatedAt
 
-  brand Brand @relation(fields: [brand_id], references: [id])
+  brand              Brand                     @relation(fields: [brand_id], references: [id])
+  product_categories SubBrandProductCategory[]
 }
 
 model Location {
@@ -158,8 +159,20 @@ model MenuCategory {
   sort_order Int     @default(0)
   is_active  Boolean @default(true)
 
-  brand Brand      @relation(fields: [brand_id], references: [id])
-  items MenuItem[]
+  brand            Brand                     @relation(fields: [brand_id], references: [id])
+  items            MenuItem[]
+  sub_brand_links  SubBrandProductCategory[]
+}
+
+model SubBrandProductCategory {
+  id               Int @id @default(autoincrement())
+  sub_brand_id     Int
+  menu_category_id Int
+
+  sub_brand     SubBrand     @relation(fields: [sub_brand_id], references: [id])
+  menu_category MenuCategory @relation(fields: [menu_category_id], references: [id])
+
+  @@unique([sub_brand_id, menu_category_id])
 }
 
 model MenuItem {
@@ -221,6 +234,29 @@ model RewardsCatalog {
 
   brand       Brand              @relation(fields: [brand_id], references: [id])
   redemptions RewardRedemption[]
+}
+
+model Promo {
+  id                     Int      @id @default(autoincrement())
+  runchise_id            Int      @unique
+  name                   String
+  status                 String?
+  start_date             String?
+  end_date               String?
+  channel                String?
+  is_online_only         Boolean  @default(false)
+  is_all_outlets         Boolean  @default(false)
+  locations              Json?
+  discount_amount        Decimal? @db.Decimal(12, 2)
+  discount_is_percentage Boolean  @default(false)
+  template               String?
+  sub_brand              String?
+  is_pos_channel         Boolean  @default(false)
+  is_visible             Boolean  @default(true)
+  start_at               DateTime?
+  raw                    Json?
+  created_at             DateTime @default(now())
+  updated_at             DateTime @updatedAt
 }
 
 model RewardRedemption {

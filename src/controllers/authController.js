@@ -3,14 +3,9 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
 const getJwtSecret = require('../lib/jwtSecret');
-const { findCustomerByPhone } = require('../services/runchiseService');
 
 // Konfigurasi masa berlaku token login
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
-
-// Konfigurasi ID lokasi registrasi default Runchise
-const RUNCHISE_REGISTRATION_LOCATION_ID =
-  process.env.RUNCHISE_REGISTRATION_LOCATION_ID || 4453;
 
 // Mengecek apakah user hasil sinkronisasi dan belum memiliki password
 function isSyncedPlaceholderUser(user) {
@@ -35,30 +30,6 @@ function phoneVariants(normalizedPhone) {
   );
 }
 
-// Mengubah data customer dari Runchise menjadi format database lokal
-function mapRunchiseCustomerToLocalPayload(runchiseCustomer, fallback) {
-  return {
-    runchise_id: runchiseCustomer.id,
-    name: runchiseCustomer.name || fallback.name,
-    phone_number: fallback.phone_number,
-    phone_number_country_code: runchiseCustomer.phone_number_country_code ?? 62,
-    address: runchiseCustomer.address ?? null,
-    province: runchiseCustomer.province ?? null,
-    city: runchiseCustomer.city ?? null,
-    country: runchiseCustomer.country ?? null,
-    postal_code: runchiseCustomer.postal_code ?? null,
-    dob:
-      runchiseCustomer.dob && !isNaN(new Date(runchiseCustomer.dob))
-        ? new Date(runchiseCustomer.dob)
-        : null,
-    gender: runchiseCustomer.gender ?? 'unknown',
-    status: runchiseCustomer.status ?? 'active',
-    balance: parseFloat(runchiseCustomer.balance ?? 0),
-    brand_id: runchiseCustomer.brand_id ?? fallback.brand_id,
-    owner_location_id: null,
-  };
-}
-
 // ===================== REGISTER =====================
 // Menangani proses registrasi customer
 async function register(req, res) {
@@ -73,32 +44,30 @@ async function register(req, res) {
       });
     }
 
-    let runchiseCustomer;
+    const phoneNumberVariants = phoneVariants(phone_number);
 
-    try {
-      // Mengecek apakah customer sudah terdaftar di Runchise
-      runchiseCustomer = await prisma.customer.findFirst({
-        where: { phone_number },
-      });
-    } catch (apiError) {
-      console.log(apiError);
-      return res.status(424).json({
-        message: 'Gagal memeriksa data customer ke sistem Runchise',
-        error: apiError.message,
-      });
-    }
+    const syncedCustomer = await prisma.customer.findFirst({
+      where: {
+        phone_number: { in: phoneNumberVariants },
+        runchise_id: { not: null },
+      },
+      include: {
+        user: true,
+        customer_point: true,
+      },
+    });
 
-    // Jika customer belum ada di Runchise maka registrasi ditolak
-    if (!runchiseCustomer) {
+    // Jika customer belum tersinkron dari Runchise maka registrasi ditolak
+    if (!syncedCustomer) {
       return res.status(404).json({
         message:
-          'Nomor telepon belum terdaftar di Runchise. Registrasi hanya untuk customer yang sudah terdaftar.',
+          'Nomor telepon belum terdaftar di data Runchise lokal. Silakan tunggu sinkronisasi data customer.',
       });
     }
 
     // Mencari user berdasarkan nomor telepon
     const existingUserByPhone = await prisma.user.findFirst({
-      where: { phone_number: { in: phoneVariants(phone_number) } },
+      where: { phone_number: { in: phoneNumberVariants } },
       include: {
         customer: {
           include: { customer_point: true },
@@ -110,7 +79,7 @@ async function register(req, res) {
     const existingUserByRunchiseId = await prisma.user.findFirst({
       where: {
         customer: {
-          runchise_id: runchiseCustomer.id,
+          runchise_id: syncedCustomer.runchise_id,
         },
       },
       include: {
@@ -137,7 +106,7 @@ async function register(req, res) {
 
     // Menentukan brand customer
     const brandId =
-      runchiseCustomer.brand_id ?? existingUser?.customer?.brand_id ?? 1;
+      syncedCustomer.brand_id ?? existingUser?.customer?.brand_id ?? 1;
 
     // Membuat data brand jika belum tersedia
     await prisma.brand.upsert({
@@ -150,11 +119,6 @@ async function register(req, res) {
     if (existingUser) {
       // Update user dan customer dalam satu transaksi database
       const user = await prisma.$transaction(async (tx) => {
-        const customerPayload = mapRunchiseCustomerToLocalPayload(
-          runchiseCustomer,
-          { name, phone_number, brand_id: brandId },
-        );
-
         const updatedUser = await tx.user.update({
           where: { id: existingUser.id },
           data: {
@@ -162,8 +126,33 @@ async function register(req, res) {
             phone_number,
             password_hash: hashedPassword,
             customer: existingUser.customer
-              ? { update: customerPayload }
-              : { create: customerPayload },
+              ? {
+                  update: {
+                    name,
+                    phone_number,
+                    status: 'active',
+                  },
+                }
+              : {
+                  create: {
+                    runchise_id: syncedCustomer.runchise_id,
+                    name,
+                    phone_number,
+                    phone_number_country_code:
+                      syncedCustomer.phone_number_country_code,
+                    address: syncedCustomer.address,
+                    province: syncedCustomer.province,
+                    city: syncedCustomer.city,
+                    country: syncedCustomer.country,
+                    postal_code: syncedCustomer.postal_code,
+                    dob: syncedCustomer.dob,
+                    gender: syncedCustomer.gender,
+                    status: 'active',
+                    balance: syncedCustomer.balance,
+                    brand_id: brandId,
+                    owner_location_id: syncedCustomer.owner_location_id,
+                  },
+                },
           },
           include: {
             customer: {
@@ -176,8 +165,9 @@ async function register(req, res) {
           await tx.customerPoint.create({
             data: {
               customer_id: updatedUser.customer.id,
-              total_point: runchiseCustomer.total_point ?? 0,
-              available_point: runchiseCustomer.available_point ?? 0,
+              total_point: syncedCustomer.customer_point?.total_point ?? 0,
+              available_point:
+                syncedCustomer.customer_point?.available_point ?? 0,
               next_reward_threshold: 2000,
             },
           });
@@ -209,15 +199,26 @@ async function register(req, res) {
         role: 'customer',
         customer: {
           create: {
-            ...mapRunchiseCustomerToLocalPayload(runchiseCustomer, {
-              name,
-              phone_number,
-              brand_id: brandId,
-            }),
+            runchise_id: syncedCustomer.runchise_id,
+            name,
+            phone_number,
+            phone_number_country_code: syncedCustomer.phone_number_country_code,
+            address: syncedCustomer.address,
+            province: syncedCustomer.province,
+            city: syncedCustomer.city,
+            country: syncedCustomer.country,
+            postal_code: syncedCustomer.postal_code,
+            dob: syncedCustomer.dob,
+            gender: syncedCustomer.gender,
+            status: 'active',
+            balance: syncedCustomer.balance,
+            brand_id: brandId,
+            owner_location_id: syncedCustomer.owner_location_id,
             customer_point: {
               create: {
-                total_point: runchiseCustomer.total_point ?? 0,
-                available_point: runchiseCustomer.available_point ?? 0,
+                total_point: syncedCustomer.customer_point?.total_point ?? 0,
+                available_point:
+                  syncedCustomer.customer_point?.available_point ?? 0,
                 next_reward_threshold: 2000,
               },
             },

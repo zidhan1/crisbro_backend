@@ -7,7 +7,9 @@ const {
   fetchAllProducts,
   fetchAllSubBrands,
   fetchAllLocations,
+  fetchAllPromos,
 } = require('./runchiseService');
+const { getSubBrandMapping } = require('./subBrandService');
 
 // Mengimpor konfigurasi menu redeem Crisbro
 const {
@@ -16,6 +18,98 @@ const {
   buildCrisbroRedeemMenuLookup,
   normalizeMenuName,
 } = require('../constants/crisbroRedeemMenu');
+
+const VISIBLE_PROMO_SUB_BRANDS = new Set(['Crisbar']);
+const DEFAULT_PROMO_LIFESPAN_DAYS = 90;
+const POS_CHANNEL = 'pos';
+
+function normalizeChannel(rawChannel) {
+  return String(rawChannel ?? '').trim().toLowerCase();
+}
+
+function normalizePhone(raw) {
+  if (!raw) return raw;
+  const digits = String(raw).replace(/\D/g, '');
+  if (digits.startsWith('62')) return digits.slice(2);
+  if (digits.startsWith('0')) return digits.slice(1);
+  return digits;
+}
+
+function isPosChannel(channel) {
+  return normalizeChannel(channel) === POS_CHANNEL;
+}
+
+function isOnlineChannel(channel) {
+  const normalized = normalizeChannel(channel);
+  if (!normalized) return false;
+  return normalized !== POS_CHANNEL;
+}
+
+function parseRunchiseDate(value, endOfDay = false) {
+  if (!value) return null;
+
+  const parts = String(value).split('/');
+  if (parts.length !== 3) return null;
+
+  const [day, month, year] = parts.map(Number);
+  if (!day || !month || !year) return null;
+
+  return endOfDay
+    ? new Date(year, month - 1, day, 23, 59, 59, 999)
+    : new Date(year, month - 1, day, 0, 0, 0, 0);
+}
+
+function addDays(date, days) {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+}
+
+function getEffectivePromoStatus(promo, now) {
+  const start = parseRunchiseDate(promo.start_date, false);
+  let end = parseRunchiseDate(promo.end_date, true);
+
+  if (promo.deleted) return 'inactive';
+
+  if (!end && start) {
+    end = addDays(start, DEFAULT_PROMO_LIFESPAN_DAYS);
+  }
+
+  if (end && end.getTime() < now.getTime()) return 'completed';
+  if (start && start.getTime() > now.getTime()) return 'inactive';
+
+  return promo.status || 'active';
+}
+
+function detectPromoSubBrand(promo, categoryIdToSubBrand) {
+  const rule = promo.promo_rule;
+  if (!rule) return 'Crisbar';
+
+  for (const category of rule.product_categories ?? []) {
+    const subBrand = categoryIdToSubBrand.get(category.id);
+    if (subBrand) return subBrand;
+  }
+
+  const productNames = [
+    ...(rule.products ?? []).map((product) => product.name),
+    ...(promo.promo_reward?.get_products ?? []).map((product) => product.name),
+  ];
+  const lowerNames = productNames.map((name) => name.toLowerCase());
+
+  if (
+    lowerNames.some((name) => name.includes('jeong bok') || name.includes('bokki'))
+  ) {
+    return 'Jeong Bok Chicken';
+  }
+  if (lowerNames.some((name) => name.includes('jaya') || name.includes('sambal'))) {
+    return 'Green Jaya';
+  }
+  if (lowerNames.some((name) => name.includes('warkop'))) {
+    return 'Warkop CBR';
+  }
+
+  return 'Crisbar';
+}
 
 // ===================== SYNC CUSTOMERS =====================
 
@@ -41,7 +135,7 @@ async function syncCustomers(locationId = 1) {
     const payload = {
       runchise_id: c.id,
       name: c.name,
-      phone_number: c.phone_number,
+      phone_number: normalizePhone(c.phone_number),
       phone_number_country_code: c.phone_number_country_code ?? 62,
       address: c.address ?? null,
       province: c.province ?? null,
@@ -58,14 +152,20 @@ async function syncCustomers(locationId = 1) {
 
     // Update jika sudah ada, create jika belum
     if (existing) {
-      await prisma.customer.update({
-        where: { id: existing.id },
-        data: payload,
-      });
+      await prisma.$transaction([
+        prisma.customer.update({
+          where: { id: existing.id },
+          data: payload,
+        }),
+        prisma.user.update({
+          where: { id: existing.user_id },
+          data: { phone_number: payload.phone_number },
+        }),
+      ]);
     } else {
       await prisma.user.create({
         data: {
-          phone_number: c.phone_number,
+          phone_number: normalizePhone(c.phone_number),
           password_hash: '',
           role: 'customer',
           customer: { create: payload },
@@ -454,7 +554,7 @@ async function syncBrands() {
 
     // 2. Upsert sub_brand
     try {
-      await prisma.subBrand.upsert({
+      const subBrand = await prisma.subBrand.upsert({
         where: { runchise_id: sb.id },
         update: {
           name: sb.name,
@@ -474,6 +574,48 @@ async function syncBrands() {
           enable_online_order: sb.enable_online_order ?? true,
         },
       });
+
+      const categoryIds = [];
+
+      for (const category of sb.product_categories ?? []) {
+        if (category.id == null) continue;
+
+        await prisma.menuCategory.upsert({
+          where: { id: category.id },
+          update: {
+            name: category.name,
+          },
+          create: {
+            id: category.id,
+            brand_id: localBrand.id,
+            name: category.name,
+          },
+        });
+
+        await prisma.subBrandProductCategory.upsert({
+          where: {
+            sub_brand_id_menu_category_id: {
+              sub_brand_id: subBrand.id,
+              menu_category_id: category.id,
+            },
+          },
+          update: {},
+          create: {
+            sub_brand_id: subBrand.id,
+            menu_category_id: category.id,
+          },
+        });
+
+        categoryIds.push(category.id);
+      }
+
+      await prisma.subBrandProductCategory.deleteMany({
+        where: {
+          sub_brand_id: subBrand.id,
+          menu_category_id: { notIn: categoryIds },
+        },
+      });
+
       synced++;
       console.log(`Sub_brand synced: runchise_id=${sb.id}, name=${sb.name}`);
     } catch (error) {
@@ -540,6 +682,101 @@ async function syncLocations(brandId = 1) {
   return { synced, total: locations.length };
 }
 
+// ===================== SYNC PROMOS =====================
+
+async function syncPromos() {
+  const [promos, { categoryIdToSubBrand }] = await Promise.all([
+    fetchAllPromos(),
+    getSubBrandMapping(),
+  ]);
+  const now = new Date();
+  const syncedPromoIds = [];
+  let synced = 0;
+
+  for (const promo of promos) {
+    const status = getEffectivePromoStatus(promo, now);
+    const subBrand = detectPromoSubBrand(promo, categoryIdToSubBrand);
+    const posChannel = isPosChannel(promo.channel);
+    const isVisible =
+      status !== 'completed' &&
+      status !== 'inactive' &&
+      VISIBLE_PROMO_SUB_BRANDS.has(subBrand) &&
+      !posChannel;
+    const startAt = parseRunchiseDate(promo.start_date, false);
+
+    await prisma.promo.upsert({
+      where: { runchise_id: promo.id },
+      update: {
+        name: promo.name,
+        status,
+        start_date: promo.start_date ?? null,
+        end_date: promo.end_date ?? null,
+        channel: promo.channel ?? null,
+        is_online_only: isOnlineChannel(promo.channel),
+        is_all_outlets: promo.is_select_all_location === true,
+        locations:
+          promo.is_select_all_location === true
+            ? []
+            : (promo.locations ?? []).map((location) => ({
+                id: location.id,
+                name: location.name,
+              })),
+        discount_amount: promo.promo_reward?.discount_amount
+          ? parseFloat(promo.promo_reward.discount_amount)
+          : null,
+        discount_is_percentage:
+          promo.promo_reward?.discount_is_percentage ?? false,
+        template: promo.promo_reward?.template ?? null,
+        sub_brand: subBrand,
+        is_pos_channel: posChannel,
+        is_visible: isVisible,
+        start_at: startAt,
+        raw: promo,
+      },
+      create: {
+        runchise_id: promo.id,
+        name: promo.name,
+        status,
+        start_date: promo.start_date ?? null,
+        end_date: promo.end_date ?? null,
+        channel: promo.channel ?? null,
+        is_online_only: isOnlineChannel(promo.channel),
+        is_all_outlets: promo.is_select_all_location === true,
+        locations:
+          promo.is_select_all_location === true
+            ? []
+            : (promo.locations ?? []).map((location) => ({
+                id: location.id,
+                name: location.name,
+              })),
+        discount_amount: promo.promo_reward?.discount_amount
+          ? parseFloat(promo.promo_reward.discount_amount)
+          : null,
+        discount_is_percentage:
+          promo.promo_reward?.discount_is_percentage ?? false,
+        template: promo.promo_reward?.template ?? null,
+        sub_brand: subBrand,
+        is_pos_channel: posChannel,
+        is_visible: isVisible,
+        start_at: startAt,
+        raw: promo,
+      },
+    });
+
+    syncedPromoIds.push(promo.id);
+    synced++;
+  }
+
+  await prisma.promo.updateMany({
+    where: {
+      runchise_id: { notIn: syncedPromoIds },
+    },
+    data: { is_visible: false },
+  });
+
+  return { synced, total: promos.length };
+}
+
 module.exports = {
   syncCustomers,
   syncProducts,
@@ -547,4 +784,5 @@ module.exports = {
   syncCustomerPoints,
   syncBrands,
   syncLocations,
+  syncPromos,
 };

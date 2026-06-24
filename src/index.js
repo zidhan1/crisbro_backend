@@ -30,7 +30,9 @@ const {
   syncCustomerPoints,
   syncBrands,
   syncLocations,
+  syncPromos,
 } = require('./services/syncService');
+const { startRunchiseSyncCron } = require('./jobs/runchiseSyncCron');
 
 // ===================== APP SETUP =====================
 const app = express();
@@ -167,6 +169,15 @@ async function handleSyncLocations(req, res) {
   }
 }
 
+async function handleSyncPromos(req, res) {
+  try {
+    const result = await syncPromos();
+    res.json({ message: 'Sync promos selesai', ...result });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
 // ===================== ADMIN MIDDLEWARE =====================
 
 // Middleware gabungan: login + role check
@@ -181,6 +192,7 @@ app.post('/admin/sync/redeem-menu', ...adminOnly, handleSyncRedeemMenu);
 app.post('/admin/sync/points', ...adminOnly, handleSyncPoints);
 app.post('/admin/sync/brands', ...adminOnly, handleSyncBrands);
 app.post('/admin/sync/locations', ...adminOnly, handleSyncLocations);
+app.post('/admin/sync/promos', ...adminOnly, handleSyncPromos);
 
 // Endpoint sync (dengan prefix /api)
 app.post('/api/admin/sync/customers', ...adminOnly, handleSyncCustomers);
@@ -189,8 +201,10 @@ app.post('/api/admin/sync/redeem-menu', ...adminOnly, handleSyncRedeemMenu);
 app.post('/api/admin/sync/points', ...adminOnly, handleSyncPoints);
 app.post('/api/admin/sync/brands', ...adminOnly, handleSyncBrands);
 app.post('/api/admin/sync/locations', ...adminOnly, handleSyncLocations);
+app.post('/api/admin/sync/promos', ...adminOnly, handleSyncPromos);
 
 // ===================== START SERVER =====================
 app.listen(5000, () => {
   console.log('Server running on port 5000');
+  startRunchiseSyncCron();
 });
