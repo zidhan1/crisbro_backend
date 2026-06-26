@@ -61,7 +61,9 @@ async function register(req, res) {
     if (!syncedCustomer) {
       return res.status(404).json({
         message:
-          'Nomor telepon belum terdaftar di data Runchise lokal. Silakan tunggu sinkronisasi data customer.',
+          'Nomor telepon belum terdaftar di data Runchise. Silakan hubungi Admin untuk melakukan pendaftaran.',
+        whatsappUrl:
+          'https://wa.me/6282121214145?text=Halo%20Admin,%20nomor%20telepon%20saya%20belum%20terdaftar%20di%20data%20Runchise.%20Mohon%20bantuannya.',
       });
     }
 
