@@ -99,6 +99,40 @@ function parseOptionalDate(value, fieldName) {
   return date;
 }
 
+function parseOptionalNumber(value, fieldName, { min = 0 } = {}) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+
+  const number = Number(value);
+  if (Number.isNaN(number) || number < min) {
+    throw new Error(`${fieldName} harus berupa angka minimal ${min}`);
+  }
+
+  return number;
+}
+
+function parseCustomerStatus(value) {
+  const status = parseOptionalString(value ?? 'active', 'status', 30) ?? 'active';
+  const allowed = new Set(['active', 'inactive']);
+
+  if (!allowed.has(status)) {
+    throw new Error('status harus active atau inactive');
+  }
+
+  return status;
+}
+
+function parseCustomerGender(value) {
+  const gender = parseOptionalString(value ?? 'unknown', 'gender', 30) ?? 'unknown';
+  const allowed = new Set(['male', 'female', 'unknown']);
+
+  if (!allowed.has(gender)) {
+    throw new Error('gender harus male, female, atau unknown');
+  }
+
+  return gender;
+}
+
 function handleError(res, error) {
   if (error.message?.includes('harus') || error.message?.includes('wajib')) {
     return badRequest(res, error.message);
@@ -262,6 +296,280 @@ async function deleteAdminUser(req, res) {
     ]);
 
     res.json({ message: 'User berhasil dihapus' });
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+async function listAdminCustomers(req, res) {
+  try {
+    const search = parseOptionalString(req.query.search, 'search', 100);
+    const page = parsePositiveInt(req.query.page ?? 1, 'page');
+    const limit = Math.min(parsePositiveInt(req.query.limit ?? 20, 'limit'), 100);
+    const skip = (page - 1) * limit;
+    const where = {
+      ...(search && {
+        OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { phone_number: { contains: search } },
+          { user: { email: { contains: search, mode: 'insensitive' } } },
+          { owner_location: { name: { contains: search, mode: 'insensitive' } } },
+        ],
+      }),
+    };
+
+    const [total, customers] = await Promise.all([
+      prisma.customer.count({ where }),
+      prisma.customer.findMany({
+        where,
+        include: {
+          user: { select: { id: true, email: true, phone_number: true, role: true } },
+          brand: { select: { id: true, name: true } },
+          owner_location: { select: { id: true, name: true, city: true } },
+          customer_point: true,
+        },
+        orderBy: { updated_at: 'desc' },
+        skip,
+        take: limit,
+      }),
+    ]);
+
+    res.json({
+      items: customers,
+      page,
+      limit,
+      total,
+      total_pages: Math.max(1, Math.ceil(total / limit)),
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+async function createAdminCustomer(req, res) {
+  try {
+    const name = parseRequiredString(req.body.name, 'name', 120);
+    const phone_number = normalizePhone(req.body.phone_number);
+    const email = parseOptionalString(req.body.email, 'email', 255);
+    const brand_id = parsePositiveInt(req.body.brand_id ?? 1, 'brand_id');
+    const owner_location_id = parsePositiveInt(req.body.owner_location_id, 'owner_location_id', {
+      required: false,
+    });
+    const total_point = parseNonNegativeInt(req.body.total_point ?? 0, 'total_point');
+    const available_point = parseNonNegativeInt(req.body.available_point ?? total_point, 'available_point');
+
+    if (!phone_number) {
+      return badRequest(res, 'Nomor telepon wajib diisi');
+    }
+
+    const customer = await prisma.$transaction(async (tx) => {
+      await tx.brand.upsert({
+        where: { id: brand_id },
+        update: {},
+        create: { id: brand_id, name: `Brand ${brand_id}` },
+      });
+
+      const user = await tx.user.create({
+        data: {
+          email,
+          phone_number,
+          password_hash: '',
+          role: 'customer',
+        },
+      });
+
+      return tx.customer.create({
+        data: {
+          user_id: user.id,
+          name,
+          phone_number,
+          phone_number_country_code: parsePositiveInt(
+            req.body.phone_number_country_code ?? 62,
+            'phone_number_country_code',
+          ),
+          address: parseOptionalString(req.body.address, 'address', 1000),
+          province: parseOptionalString(req.body.province, 'province', 120),
+          city: parseOptionalString(req.body.city, 'city', 120),
+          country: parseOptionalString(req.body.country ?? 'Indonesia', 'country', 120),
+          postal_code: parseOptionalString(req.body.postal_code, 'postal_code', 20),
+          dob: parseOptionalDate(req.body.dob, 'dob'),
+          gender: parseCustomerGender(req.body.gender),
+          status: parseCustomerStatus(req.body.status),
+          balance: parseOptionalNumber(req.body.balance ?? 0, 'balance') ?? 0,
+          brand_id,
+          owner_location_id,
+          created_by_id: req.user.id,
+          last_updated_by_id: req.user.id,
+          customer_point: {
+            create: {
+              total_point,
+              available_point,
+              next_reward_threshold: parsePositiveInt(
+                req.body.next_reward_threshold ?? 2000,
+                'next_reward_threshold',
+              ),
+            },
+          },
+        },
+        include: {
+          user: { select: { id: true, email: true, phone_number: true, role: true } },
+          brand: { select: { id: true, name: true } },
+          owner_location: { select: { id: true, name: true, city: true } },
+          customer_point: true,
+        },
+      });
+    });
+
+    res.status(201).json(customer);
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+async function updateAdminCustomer(req, res) {
+  try {
+    const id = parsePositiveInt(req.params.id, 'id');
+    const data = {};
+    const userData = {};
+    const pointData = {};
+
+    if (req.body.name !== undefined) data.name = parseRequiredString(req.body.name, 'name', 120);
+    if (req.body.phone_number !== undefined) {
+      data.phone_number = normalizePhone(req.body.phone_number);
+      userData.phone_number = data.phone_number;
+    }
+    if (req.body.email !== undefined) userData.email = parseOptionalString(req.body.email, 'email', 255);
+    if (req.body.phone_number_country_code !== undefined) {
+      data.phone_number_country_code = parsePositiveInt(
+        req.body.phone_number_country_code,
+        'phone_number_country_code',
+      );
+    }
+    if (req.body.address !== undefined) data.address = parseOptionalString(req.body.address, 'address', 1000);
+    if (req.body.province !== undefined) data.province = parseOptionalString(req.body.province, 'province', 120);
+    if (req.body.city !== undefined) data.city = parseOptionalString(req.body.city, 'city', 120);
+    if (req.body.country !== undefined) data.country = parseOptionalString(req.body.country, 'country', 120);
+    if (req.body.postal_code !== undefined) data.postal_code = parseOptionalString(req.body.postal_code, 'postal_code', 20);
+    if (req.body.dob !== undefined) data.dob = parseOptionalDate(req.body.dob, 'dob');
+    if (req.body.gender !== undefined) data.gender = parseCustomerGender(req.body.gender);
+    if (req.body.status !== undefined) data.status = parseCustomerStatus(req.body.status);
+    if (req.body.balance !== undefined) data.balance = parseOptionalNumber(req.body.balance, 'balance') ?? 0;
+    if (req.body.brand_id !== undefined) data.brand_id = parsePositiveInt(req.body.brand_id, 'brand_id');
+    if (req.body.owner_location_id !== undefined) {
+      data.owner_location_id = parsePositiveInt(req.body.owner_location_id, 'owner_location_id', {
+        required: false,
+      }) ?? null;
+    }
+    if (req.body.total_point !== undefined) {
+      pointData.total_point = parseNonNegativeInt(req.body.total_point, 'total_point');
+    }
+    if (req.body.available_point !== undefined) {
+      pointData.available_point = parseNonNegativeInt(req.body.available_point, 'available_point');
+    }
+    if (req.body.next_reward_threshold !== undefined) {
+      pointData.next_reward_threshold = parsePositiveInt(
+        req.body.next_reward_threshold,
+        'next_reward_threshold',
+      );
+    }
+
+    data.last_updated_by_id = req.user.id;
+
+    const customer = await prisma.$transaction(async (tx) => {
+      const existing = await tx.customer.findUnique({
+        where: { id },
+        select: { user_id: true },
+      });
+
+      if (!existing) {
+        throw Object.assign(new Error('Customer tidak ditemukan'), { code: 'P2025' });
+      }
+
+      if (Object.keys(userData).length > 0) {
+        await tx.user.update({ where: { id: existing.user_id }, data: userData });
+      }
+
+      if (Object.keys(pointData).length > 0) {
+        await tx.customerPoint.upsert({
+          where: { customer_id: id },
+          update: pointData,
+          create: {
+            customer_id: id,
+            total_point: pointData.total_point ?? 0,
+            available_point: pointData.available_point ?? 0,
+            next_reward_threshold: pointData.next_reward_threshold ?? 2000,
+          },
+        });
+      }
+
+      return tx.customer.update({
+        where: { id },
+        data,
+        include: {
+          user: { select: { id: true, email: true, phone_number: true, role: true } },
+          brand: { select: { id: true, name: true } },
+          owner_location: { select: { id: true, name: true, city: true } },
+          customer_point: true,
+        },
+      });
+    });
+
+    res.json(customer);
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+async function deleteAdminCustomer(req, res) {
+  try {
+    const id = parsePositiveInt(req.params.id, 'id');
+    const customer = await prisma.customer.findUnique({
+      where: { id },
+      select: { user_id: true },
+    });
+
+    if (!customer) {
+      return res.status(404).json({ message: 'Customer tidak ditemukan' });
+    }
+
+    await prisma.$transaction([
+      prisma.pointHistory.deleteMany({ where: { customer_id: id } }),
+      prisma.rewardRedemption.deleteMany({ where: { customer_id: id } }),
+      prisma.customerPoint.deleteMany({ where: { customer_id: id } }),
+      prisma.customerLocation.deleteMany({ where: { customer_id: id } }),
+      prisma.customer.delete({ where: { id } }),
+      prisma.session.deleteMany({ where: { user_id: customer.user_id } }),
+      prisma.user.delete({ where: { id: customer.user_id } }),
+    ]);
+
+    res.json({ message: 'Customer berhasil dihapus' });
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+async function listAdminBrands(req, res) {
+  try {
+    const brands = await prisma.brand.findMany({
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+
+    res.json(brands);
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+async function listAdminLocations(req, res) {
+  try {
+    const locations = await prisma.location.findMany({
+      where: { is_active: true, is_outlet: true },
+      select: { id: true, name: true, city: true },
+      orderBy: [{ city: 'asc' }, { name: 'asc' }],
+    });
+
+    res.json(locations);
   } catch (error) {
     handleError(res, error);
   }
@@ -591,6 +899,12 @@ module.exports = {
   createAdminUser,
   updateAdminUser,
   deleteAdminUser,
+  listAdminCustomers,
+  createAdminCustomer,
+  updateAdminCustomer,
+  deleteAdminCustomer,
+  listAdminBrands,
+  listAdminLocations,
   getSummary,
   listRewards,
   createReward,

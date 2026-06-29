@@ -6,6 +6,12 @@ const {
   createAdminUser,
   updateAdminUser,
   deleteAdminUser,
+  listAdminCustomers,
+  createAdminCustomer,
+  updateAdminCustomer,
+  deleteAdminCustomer,
+  listAdminBrands,
+  listAdminLocations,
   getSummary,
   listRewards,
   createReward,
@@ -31,6 +37,14 @@ router.get('/users', superAdminOnly, listAdminUsers);
 router.post('/users', superAdminOnly, createAdminUser);
 router.put('/users/:id', superAdminOnly, updateAdminUser);
 router.delete('/users/:id', superAdminOnly, deleteAdminUser);
+
+router.get('/customers', listAdminCustomers);
+router.post('/customers', createAdminCustomer);
+router.put('/customers/:id', updateAdminCustomer);
+router.delete('/customers/:id', deleteAdminCustomer);
+
+router.get('/brands', listAdminBrands);
+router.get('/locations', listAdminLocations);
 
 router.get('/loyalty-summary', getSummary);
 
