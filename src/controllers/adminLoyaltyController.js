@@ -587,6 +587,8 @@ async function getSummary(req, res) {
       pendingRedemptions,
       claimedRedemptions,
       topRewards,
+      activatedCustomersByOutlet,
+      redemptionsByCustomer,
     ] = await Promise.all([
       prisma.customer.count(),
       prisma.customer.count({ where: { status: 'active' } }),
@@ -611,14 +613,67 @@ async function getSummary(req, res) {
         orderBy: { _count: { reward_id: 'desc' } },
         take: 5,
       }),
+      prisma.customer.groupBy({
+        by: ['owner_location_id'],
+        where: {
+          owner_location_id: { not: null },
+          user: { password_hash: { not: '' } },
+        },
+        _count: { id: true },
+        orderBy: { _count: { id: 'desc' } },
+      }),
+      prisma.rewardRedemption.groupBy({
+        by: ['customer_id'],
+        _count: { id: true },
+        _sum: { points_spent: true },
+      }),
     ]);
 
     const rewardIds = topRewards.map((item) => item.reward_id);
-    const rewards = await prisma.rewardsCatalog.findMany({
-      where: { id: { in: rewardIds } },
-      select: { id: true, name: true },
-    });
+    const outletIds = activatedCustomersByOutlet
+      .map((item) => item.owner_location_id)
+      .filter(Boolean);
+    const redemptionCustomerIds = redemptionsByCustomer.map((item) => item.customer_id);
+    const [rewards, outlets, redemptionCustomers] = await Promise.all([
+      prisma.rewardsCatalog.findMany({
+        where: { id: { in: rewardIds } },
+        select: { id: true, name: true },
+      }),
+      prisma.location.findMany({
+        where: { id: { in: outletIds } },
+        select: { id: true, name: true, city: true },
+      }),
+      prisma.customer.findMany({
+        where: { id: { in: redemptionCustomerIds } },
+        select: {
+          id: true,
+          owner_location_id: true,
+          owner_location: { select: { id: true, name: true, city: true } },
+        },
+      }),
+    ]);
     const rewardById = new Map(rewards.map((reward) => [reward.id, reward]));
+    const outletById = new Map(outlets.map((outlet) => [outlet.id, outlet]));
+    const customerById = new Map(redemptionCustomers.map((customer) => [customer.id, customer]));
+    const outletRedemptionById = new Map();
+
+    for (const redemption of redemptionsByCustomer) {
+      const customer = customerById.get(redemption.customer_id);
+      const outlet = customer?.owner_location;
+      if (!outlet) continue;
+
+      const current = outletRedemptionById.get(outlet.id) ?? {
+        outlet_id: outlet.id,
+        outlet_name: outlet.name,
+        city: outlet.city,
+        redemption_count: 0,
+        points_spent: 0,
+      };
+
+      current.redemption_count += redemption._count.id;
+      current.points_spent += redemption._sum.points_spent ?? 0;
+      outletRedemptionById.set(outlet.id, current);
+    }
 
     res.json({
       total_members: totalMembers,
@@ -636,6 +691,19 @@ async function getSummary(req, res) {
         redemption_count: item._count.reward_id,
         points_spent: item._sum.points_spent ?? 0,
       })),
+      activation_by_outlet: activatedCustomersByOutlet.map((item) => {
+        const outlet = outletById.get(item.owner_location_id);
+
+        return {
+          outlet_id: item.owner_location_id,
+          outlet_name: outlet?.name ?? 'Outlet tidak diketahui',
+          city: outlet?.city ?? null,
+          activated_count: item._count.id,
+        };
+      }),
+      top_redeem_outlets: Array.from(outletRedemptionById.values())
+        .sort((a, b) => b.redemption_count - a.redemption_count)
+        .slice(0, 5),
     });
   } catch (error) {
     handleError(res, error);
