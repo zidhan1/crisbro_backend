@@ -2,6 +2,10 @@ const express = require('express');
 const auth = require('../middleware/auth');
 const requireRole = require('../middleware/requireRole');
 const {
+  listAdminUsers,
+  createAdminUser,
+  updateAdminUser,
+  deleteAdminUser,
   getSummary,
   listRewards,
   createReward,
@@ -19,8 +23,14 @@ const {
 
 const router = express.Router();
 const adminOnly = [auth, requireRole('admin', 'staff')];
+const superAdminOnly = requireRole('admin');
 
 router.use(...adminOnly);
+
+router.get('/users', superAdminOnly, listAdminUsers);
+router.post('/users', superAdminOnly, createAdminUser);
+router.put('/users/:id', superAdminOnly, updateAdminUser);
+router.delete('/users/:id', superAdminOnly, deleteAdminUser);
 
 router.get('/loyalty-summary', getSummary);
 

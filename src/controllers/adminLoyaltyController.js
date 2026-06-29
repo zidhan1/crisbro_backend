@@ -1,4 +1,5 @@
 const prisma = require('../lib/prisma');
+const bcrypt = require('bcrypt');
 
 function badRequest(res, message) {
   return res.status(400).json({ message });
@@ -64,6 +65,28 @@ function parseRequiredString(value, fieldName, maxLength = 255) {
   return parsed;
 }
 
+function normalizePhone(raw) {
+  const phone = parseOptionalString(raw, 'phone_number', 30);
+  if (!phone) return null;
+
+  const digits = phone.replace(/\D/g, '');
+  if (!digits) return null;
+  if (digits.startsWith('62')) return digits.slice(2);
+  if (digits.startsWith('0')) return digits.slice(1);
+  return digits;
+}
+
+function parseAdminUserRole(value) {
+  const role = parseRequiredString(value ?? 'marketing', 'role', 30);
+  const allowedRoles = new Set(['admin', 'staff', 'marketing']);
+
+  if (!allowedRoles.has(role)) {
+    throw new Error('role harus admin, staff, atau marketing');
+  }
+
+  return role;
+}
+
 function parseOptionalDate(value, fieldName) {
   if (value === undefined) return undefined;
   if (value === null || value === '') return null;
@@ -89,7 +112,159 @@ function handleError(res, error) {
     return badRequest(res, 'Referensi data tidak valid');
   }
 
+  if (error.code === 'P2025') {
+    return res.status(404).json({ message: 'Data tidak ditemukan' });
+  }
+
   return res.status(500).json({ error: error.message });
+}
+
+async function listAdminUsers(req, res) {
+  try {
+    const search = parseOptionalString(req.query.search, 'search', 100);
+
+    const users = await prisma.user.findMany({
+      where: {
+        role: { in: ['admin', 'staff', 'marketing'] },
+        ...(search && {
+          OR: [
+            { email: { contains: search, mode: 'insensitive' } },
+            { phone_number: { contains: search } },
+            { role: { contains: search, mode: 'insensitive' } },
+          ],
+        }),
+      },
+      select: {
+        id: true,
+        email: true,
+        phone_number: true,
+        role: true,
+        created_at: true,
+        updated_at: true,
+      },
+      orderBy: [{ role: 'asc' }, { created_at: 'desc' }],
+    });
+
+    res.json(users);
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+async function createAdminUser(req, res) {
+  try {
+    const email = parseOptionalString(req.body.email, 'email', 255);
+    const phone_number = normalizePhone(req.body.phone_number);
+    const password = parseRequiredString(req.body.password, 'password', 255);
+    const role = parseAdminUserRole(req.body.role);
+
+    if (!email && !phone_number) {
+      return badRequest(res, 'Email atau nomor telepon wajib diisi');
+    }
+
+    if (password.length < 6) {
+      return badRequest(res, 'Password minimal 6 karakter');
+    }
+
+    const password_hash = await bcrypt.hash(password, 10);
+
+    const user = await prisma.user.create({
+      data: {
+        email,
+        phone_number,
+        password_hash,
+        role,
+      },
+      select: {
+        id: true,
+        email: true,
+        phone_number: true,
+        role: true,
+        created_at: true,
+        updated_at: true,
+      },
+    });
+
+    res.status(201).json(user);
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+async function updateAdminUser(req, res) {
+  try {
+    const id = parsePositiveInt(req.params.id, 'id');
+    const data = {};
+
+    if (req.body.email !== undefined) data.email = parseOptionalString(req.body.email, 'email', 255);
+    if (req.body.phone_number !== undefined) data.phone_number = normalizePhone(req.body.phone_number);
+    if (req.body.role !== undefined) data.role = parseAdminUserRole(req.body.role);
+
+    if (req.body.password !== undefined && req.body.password !== '') {
+      const password = parseRequiredString(req.body.password, 'password', 255);
+      if (password.length < 6) {
+        return badRequest(res, 'Password minimal 6 karakter');
+      }
+      data.password_hash = await bcrypt.hash(password, 10);
+    }
+
+    if (Object.keys(data).length === 0) {
+      return badRequest(res, 'Tidak ada data yang diubah');
+    }
+
+    if (data.role && id === req.user.id && data.role !== 'admin') {
+      return badRequest(res, 'Admin tidak dapat mengubah role akun sendiri');
+    }
+
+    const user = await prisma.user.update({
+      where: { id },
+      data,
+      select: {
+        id: true,
+        email: true,
+        phone_number: true,
+        role: true,
+        created_at: true,
+        updated_at: true,
+      },
+    });
+
+    res.json(user);
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+async function deleteAdminUser(req, res) {
+  try {
+    const id = parsePositiveInt(req.params.id, 'id');
+
+    if (id === req.user.id) {
+      return badRequest(res, 'Admin tidak dapat menghapus akun sendiri');
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id },
+      include: { customer: { select: { id: true } } },
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User tidak ditemukan' });
+    }
+
+    if (user.customer) {
+      return badRequest(res, 'User customer tidak dapat dihapus dari menu admin ini');
+    }
+
+    await prisma.$transaction([
+      prisma.session.deleteMany({ where: { user_id: id } }),
+      prisma.user.delete({ where: { id } }),
+    ]);
+
+    res.json({ message: 'User berhasil dihapus' });
+  } catch (error) {
+    handleError(res, error);
+  }
 }
 
 async function getSummary(req, res) {
@@ -412,6 +587,10 @@ async function updateRedemptionStatus(req, res) {
 }
 
 module.exports = {
+  listAdminUsers,
+  createAdminUser,
+  updateAdminUser,
+  deleteAdminUser,
   getSummary,
   listRewards,
   createReward,
