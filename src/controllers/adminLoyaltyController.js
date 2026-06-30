@@ -49,7 +49,8 @@ function parseBoolean(value, fieldName, { required = true } = {}) {
 function parseOptionalString(value, fieldName, maxLength = 255) {
   if (value === undefined) return undefined;
   if (value === null || value === '') return null;
-  if (typeof value !== 'string') throw new Error(`${fieldName} harus berupa string`);
+  if (typeof value !== 'string')
+    throw new Error(`${fieldName} harus berupa string`);
 
   const trimmed = value.trim();
   if (trimmed.length > maxLength) {
@@ -99,6 +100,19 @@ function parseOptionalDate(value, fieldName) {
   return date;
 }
 
+function parseDateBoundary(value, fieldName, endOfDay = false) {
+  const date = parseOptionalDate(value, fieldName);
+  if (!date) return null;
+
+  if (endOfDay) {
+    date.setHours(23, 59, 59, 999);
+  } else {
+    date.setHours(0, 0, 0, 0);
+  }
+
+  return date;
+}
+
 function parseOptionalNumber(value, fieldName, { min = 0 } = {}) {
   if (value === undefined) return undefined;
   if (value === null || value === '') return null;
@@ -112,7 +126,8 @@ function parseOptionalNumber(value, fieldName, { min = 0 } = {}) {
 }
 
 function parseCustomerStatus(value) {
-  const status = parseOptionalString(value ?? 'active', 'status', 30) ?? 'active';
+  const status =
+    parseOptionalString(value ?? 'active', 'status', 30) ?? 'active';
   const allowed = new Set(['active', 'inactive']);
 
   if (!allowed.has(status)) {
@@ -123,7 +138,8 @@ function parseCustomerStatus(value) {
 }
 
 function parseCustomerGender(value) {
-  const gender = parseOptionalString(value ?? 'unknown', 'gender', 30) ?? 'unknown';
+  const gender =
+    parseOptionalString(value ?? 'unknown', 'gender', 30) ?? 'unknown';
   const allowed = new Set(['male', 'female', 'unknown']);
 
   if (!allowed.has(gender)) {
@@ -230,9 +246,12 @@ async function updateAdminUser(req, res) {
     const id = parsePositiveInt(req.params.id, 'id');
     const data = {};
 
-    if (req.body.email !== undefined) data.email = parseOptionalString(req.body.email, 'email', 255);
-    if (req.body.phone_number !== undefined) data.phone_number = normalizePhone(req.body.phone_number);
-    if (req.body.role !== undefined) data.role = parseAdminUserRole(req.body.role);
+    if (req.body.email !== undefined)
+      data.email = parseOptionalString(req.body.email, 'email', 255);
+    if (req.body.phone_number !== undefined)
+      data.phone_number = normalizePhone(req.body.phone_number);
+    if (req.body.role !== undefined)
+      data.role = parseAdminUserRole(req.body.role);
 
     if (req.body.password !== undefined && req.body.password !== '') {
       const password = parseRequiredString(req.body.password, 'password', 255);
@@ -287,7 +306,10 @@ async function deleteAdminUser(req, res) {
     }
 
     if (user.customer) {
-      return badRequest(res, 'User customer tidak dapat dihapus dari menu admin ini');
+      return badRequest(
+        res,
+        'User customer tidak dapat dihapus dari menu admin ini',
+      );
     }
 
     await prisma.$transaction([
@@ -305,7 +327,10 @@ async function listAdminCustomers(req, res) {
   try {
     const search = parseOptionalString(req.query.search, 'search', 100);
     const page = parsePositiveInt(req.query.page ?? 1, 'page');
-    const limit = Math.min(parsePositiveInt(req.query.limit ?? 20, 'limit'), 100);
+    const limit = Math.min(
+      parsePositiveInt(req.query.limit ?? 20, 'limit'),
+      100,
+    );
     const skip = (page - 1) * limit;
     const where = {
       ...(search && {
@@ -313,7 +338,9 @@ async function listAdminCustomers(req, res) {
           { name: { contains: search, mode: 'insensitive' } },
           { phone_number: { contains: search } },
           { user: { email: { contains: search, mode: 'insensitive' } } },
-          { owner_location: { name: { contains: search, mode: 'insensitive' } } },
+          {
+            owner_location: { name: { contains: search, mode: 'insensitive' } },
+          },
         ],
       }),
     };
@@ -323,7 +350,9 @@ async function listAdminCustomers(req, res) {
       prisma.customer.findMany({
         where,
         include: {
-          user: { select: { id: true, email: true, phone_number: true, role: true } },
+          user: {
+            select: { id: true, email: true, phone_number: true, role: true },
+          },
           brand: { select: { id: true, name: true } },
           owner_location: { select: { id: true, name: true, city: true } },
           customer_point: true,
@@ -352,11 +381,21 @@ async function createAdminCustomer(req, res) {
     const phone_number = normalizePhone(req.body.phone_number);
     const email = parseOptionalString(req.body.email, 'email', 255);
     const brand_id = parsePositiveInt(req.body.brand_id ?? 1, 'brand_id');
-    const owner_location_id = parsePositiveInt(req.body.owner_location_id, 'owner_location_id', {
-      required: false,
-    });
-    const total_point = parseNonNegativeInt(req.body.total_point ?? 0, 'total_point');
-    const available_point = parseNonNegativeInt(req.body.available_point ?? total_point, 'available_point');
+    const owner_location_id = parsePositiveInt(
+      req.body.owner_location_id,
+      'owner_location_id',
+      {
+        required: false,
+      },
+    );
+    const total_point = parseNonNegativeInt(
+      req.body.total_point ?? 0,
+      'total_point',
+    );
+    const available_point = parseNonNegativeInt(
+      req.body.available_point ?? total_point,
+      'available_point',
+    );
 
     if (!phone_number) {
       return badRequest(res, 'Nomor telepon wajib diisi');
@@ -390,8 +429,16 @@ async function createAdminCustomer(req, res) {
           address: parseOptionalString(req.body.address, 'address', 1000),
           province: parseOptionalString(req.body.province, 'province', 120),
           city: parseOptionalString(req.body.city, 'city', 120),
-          country: parseOptionalString(req.body.country ?? 'Indonesia', 'country', 120),
-          postal_code: parseOptionalString(req.body.postal_code, 'postal_code', 20),
+          country: parseOptionalString(
+            req.body.country ?? 'Indonesia',
+            'country',
+            120,
+          ),
+          postal_code: parseOptionalString(
+            req.body.postal_code,
+            'postal_code',
+            20,
+          ),
           dob: parseOptionalDate(req.body.dob, 'dob'),
           gender: parseCustomerGender(req.body.gender),
           status: parseCustomerStatus(req.body.status),
@@ -412,7 +459,9 @@ async function createAdminCustomer(req, res) {
           },
         },
         include: {
-          user: { select: { id: true, email: true, phone_number: true, role: true } },
+          user: {
+            select: { id: true, email: true, phone_number: true, role: true },
+          },
           brand: { select: { id: true, name: true } },
           owner_location: { select: { id: true, name: true, city: true } },
           customer_point: true,
@@ -433,38 +482,61 @@ async function updateAdminCustomer(req, res) {
     const userData = {};
     const pointData = {};
 
-    if (req.body.name !== undefined) data.name = parseRequiredString(req.body.name, 'name', 120);
+    if (req.body.name !== undefined)
+      data.name = parseRequiredString(req.body.name, 'name', 120);
     if (req.body.phone_number !== undefined) {
       data.phone_number = normalizePhone(req.body.phone_number);
       userData.phone_number = data.phone_number;
     }
-    if (req.body.email !== undefined) userData.email = parseOptionalString(req.body.email, 'email', 255);
+    if (req.body.email !== undefined)
+      userData.email = parseOptionalString(req.body.email, 'email', 255);
     if (req.body.phone_number_country_code !== undefined) {
       data.phone_number_country_code = parsePositiveInt(
         req.body.phone_number_country_code,
         'phone_number_country_code',
       );
     }
-    if (req.body.address !== undefined) data.address = parseOptionalString(req.body.address, 'address', 1000);
-    if (req.body.province !== undefined) data.province = parseOptionalString(req.body.province, 'province', 120);
-    if (req.body.city !== undefined) data.city = parseOptionalString(req.body.city, 'city', 120);
-    if (req.body.country !== undefined) data.country = parseOptionalString(req.body.country, 'country', 120);
-    if (req.body.postal_code !== undefined) data.postal_code = parseOptionalString(req.body.postal_code, 'postal_code', 20);
-    if (req.body.dob !== undefined) data.dob = parseOptionalDate(req.body.dob, 'dob');
-    if (req.body.gender !== undefined) data.gender = parseCustomerGender(req.body.gender);
-    if (req.body.status !== undefined) data.status = parseCustomerStatus(req.body.status);
-    if (req.body.balance !== undefined) data.balance = parseOptionalNumber(req.body.balance, 'balance') ?? 0;
-    if (req.body.brand_id !== undefined) data.brand_id = parsePositiveInt(req.body.brand_id, 'brand_id');
+    if (req.body.address !== undefined)
+      data.address = parseOptionalString(req.body.address, 'address', 1000);
+    if (req.body.province !== undefined)
+      data.province = parseOptionalString(req.body.province, 'province', 120);
+    if (req.body.city !== undefined)
+      data.city = parseOptionalString(req.body.city, 'city', 120);
+    if (req.body.country !== undefined)
+      data.country = parseOptionalString(req.body.country, 'country', 120);
+    if (req.body.postal_code !== undefined)
+      data.postal_code = parseOptionalString(
+        req.body.postal_code,
+        'postal_code',
+        20,
+      );
+    if (req.body.dob !== undefined)
+      data.dob = parseOptionalDate(req.body.dob, 'dob');
+    if (req.body.gender !== undefined)
+      data.gender = parseCustomerGender(req.body.gender);
+    if (req.body.status !== undefined)
+      data.status = parseCustomerStatus(req.body.status);
+    if (req.body.balance !== undefined)
+      data.balance = parseOptionalNumber(req.body.balance, 'balance') ?? 0;
+    if (req.body.brand_id !== undefined)
+      data.brand_id = parsePositiveInt(req.body.brand_id, 'brand_id');
     if (req.body.owner_location_id !== undefined) {
-      data.owner_location_id = parsePositiveInt(req.body.owner_location_id, 'owner_location_id', {
-        required: false,
-      }) ?? null;
+      data.owner_location_id =
+        parsePositiveInt(req.body.owner_location_id, 'owner_location_id', {
+          required: false,
+        }) ?? null;
     }
     if (req.body.total_point !== undefined) {
-      pointData.total_point = parseNonNegativeInt(req.body.total_point, 'total_point');
+      pointData.total_point = parseNonNegativeInt(
+        req.body.total_point,
+        'total_point',
+      );
     }
     if (req.body.available_point !== undefined) {
-      pointData.available_point = parseNonNegativeInt(req.body.available_point, 'available_point');
+      pointData.available_point = parseNonNegativeInt(
+        req.body.available_point,
+        'available_point',
+      );
     }
     if (req.body.next_reward_threshold !== undefined) {
       pointData.next_reward_threshold = parsePositiveInt(
@@ -482,11 +554,16 @@ async function updateAdminCustomer(req, res) {
       });
 
       if (!existing) {
-        throw Object.assign(new Error('Customer tidak ditemukan'), { code: 'P2025' });
+        throw Object.assign(new Error('Customer tidak ditemukan'), {
+          code: 'P2025',
+        });
       }
 
       if (Object.keys(userData).length > 0) {
-        await tx.user.update({ where: { id: existing.user_id }, data: userData });
+        await tx.user.update({
+          where: { id: existing.user_id },
+          data: userData,
+        });
       }
 
       if (Object.keys(pointData).length > 0) {
@@ -506,7 +583,9 @@ async function updateAdminCustomer(req, res) {
         where: { id },
         data,
         include: {
-          user: { select: { id: true, email: true, phone_number: true, role: true } },
+          user: {
+            select: { id: true, email: true, phone_number: true, role: true },
+          },
           brand: { select: { id: true, name: true } },
           owner_location: { select: { id: true, name: true, city: true } },
           customer_point: true,
@@ -577,6 +656,22 @@ async function listAdminLocations(req, res) {
 
 async function getSummary(req, res) {
   try {
+    const redemptionFrom = parseDateBoundary(
+      req.query.redemption_from,
+      'redemption_from',
+    );
+    const redemptionTo = parseDateBoundary(
+      req.query.redemption_to,
+      'redemption_to',
+      true,
+    );
+    const redemptionDateWhere = {
+      redeemed_at: {
+        not: null,
+        ...(redemptionFrom ? { gte: redemptionFrom } : {}),
+        ...(redemptionTo ? { lte: redemptionTo } : {}),
+      },
+    };
     const [
       totalMembers,
       activeMembers,
@@ -589,6 +684,7 @@ async function getSummary(req, res) {
       topRewards,
       activatedCustomersByOutlet,
       redemptionsByCustomer,
+      redemptionHistory,
     ] = await Promise.all([
       prisma.customer.count(),
       prisma.customer.count({ where: { status: 'active' } }),
@@ -627,13 +723,29 @@ async function getSummary(req, res) {
         _count: { id: true },
         _sum: { points_spent: true },
       }),
+      prisma.rewardRedemption.findMany({
+        where: redemptionDateWhere,
+        include: {
+          reward: { select: { id: true, name: true, points_required: true } },
+          customer: {
+            select: {
+              id: true,
+              name: true,
+              owner_location: { select: { id: true, name: true, city: true } },
+            },
+          },
+        },
+        orderBy: { redeemed_at: 'desc' },
+      }),
     ]);
 
     const rewardIds = topRewards.map((item) => item.reward_id);
     const outletIds = activatedCustomersByOutlet
       .map((item) => item.owner_location_id)
       .filter(Boolean);
-    const redemptionCustomerIds = redemptionsByCustomer.map((item) => item.customer_id);
+    const redemptionCustomerIds = redemptionsByCustomer.map(
+      (item) => item.customer_id,
+    );
     const [rewards, outlets, redemptionCustomers] = await Promise.all([
       prisma.rewardsCatalog.findMany({
         where: { id: { in: rewardIds } },
@@ -654,8 +766,11 @@ async function getSummary(req, res) {
     ]);
     const rewardById = new Map(rewards.map((reward) => [reward.id, reward]));
     const outletById = new Map(outlets.map((outlet) => [outlet.id, outlet]));
-    const customerById = new Map(redemptionCustomers.map((customer) => [customer.id, customer]));
+    const customerById = new Map(
+      redemptionCustomers.map((customer) => [customer.id, customer]),
+    );
     const outletRedemptionById = new Map();
+    const redemptionTrendByDate = new Map();
 
     for (const redemption of redemptionsByCustomer) {
       const customer = customerById.get(redemption.customer_id);
@@ -673,6 +788,21 @@ async function getSummary(req, res) {
       current.redemption_count += redemption._count.id;
       current.points_spent += redemption._sum.points_spent ?? 0;
       outletRedemptionById.set(outlet.id, current);
+    }
+
+    for (const redemption of redemptionHistory) {
+      if (!redemption.redeemed_at) continue;
+
+      const date = redemption.redeemed_at.toISOString().slice(0, 10);
+      const current = redemptionTrendByDate.get(date) ?? {
+        date,
+        redemption_count: 0,
+        points_spent: 0,
+      };
+
+      current.redemption_count += 1;
+      current.points_spent += redemption.points_spent;
+      redemptionTrendByDate.set(date, current);
     }
 
     res.json({
@@ -704,6 +834,20 @@ async function getSummary(req, res) {
       top_redeem_outlets: Array.from(outletRedemptionById.values())
         .sort((a, b) => b.redemption_count - a.redemption_count)
         .slice(0, 5),
+      redemption_trend: Array.from(redemptionTrendByDate.values()).sort(
+        (a, b) => a.date.localeCompare(b.date),
+      ),
+      redemption_history: redemptionHistory.map((redemption) => ({
+        id: redemption.id,
+        reward_id: redemption.reward_id,
+        reward_name: redemption.reward.name,
+        points_spent: redemption.points_spent,
+        outlet_id: redemption.customer.owner_location?.id ?? null,
+        outlet_name:
+          redemption.customer.owner_location?.name ?? 'Outlet tidak diketahui',
+        outlet_city: redemption.customer.owner_location?.city ?? null,
+        redeemed_at: redemption.redeemed_at,
+      })),
     });
   } catch (error) {
     handleError(res, error);
@@ -729,8 +873,15 @@ async function createReward(req, res) {
       data: {
         brand_id: parsePositiveInt(req.body.brand_id ?? 1, 'brand_id'),
         name: parseRequiredString(req.body.name, 'name', 120),
-        description: parseOptionalString(req.body.description, 'description', 1000),
-        points_required: parsePositiveInt(req.body.points_required, 'points_required'),
+        description: parseOptionalString(
+          req.body.description,
+          'description',
+          1000,
+        ),
+        points_required: parsePositiveInt(
+          req.body.points_required,
+          'points_required',
+        ),
         image_url: parseOptionalString(req.body.image_url, 'image_url', 1000),
         is_active: parseBoolean(req.body.is_active ?? true, 'is_active'),
       },
@@ -747,12 +898,29 @@ async function updateReward(req, res) {
     const id = parsePositiveInt(req.params.id, 'id');
     const data = {};
 
-    if (req.body.brand_id !== undefined) data.brand_id = parsePositiveInt(req.body.brand_id, 'brand_id');
-    if (req.body.name !== undefined) data.name = parseRequiredString(req.body.name, 'name', 120);
-    if (req.body.description !== undefined) data.description = parseOptionalString(req.body.description, 'description', 1000);
-    if (req.body.points_required !== undefined) data.points_required = parsePositiveInt(req.body.points_required, 'points_required');
-    if (req.body.image_url !== undefined) data.image_url = parseOptionalString(req.body.image_url, 'image_url', 1000);
-    if (req.body.is_active !== undefined) data.is_active = parseBoolean(req.body.is_active, 'is_active');
+    if (req.body.brand_id !== undefined)
+      data.brand_id = parsePositiveInt(req.body.brand_id, 'brand_id');
+    if (req.body.name !== undefined)
+      data.name = parseRequiredString(req.body.name, 'name', 120);
+    if (req.body.description !== undefined)
+      data.description = parseOptionalString(
+        req.body.description,
+        'description',
+        1000,
+      );
+    if (req.body.points_required !== undefined)
+      data.points_required = parsePositiveInt(
+        req.body.points_required,
+        'points_required',
+      );
+    if (req.body.image_url !== undefined)
+      data.image_url = parseOptionalString(
+        req.body.image_url,
+        'image_url',
+        1000,
+      );
+    if (req.body.is_active !== undefined)
+      data.is_active = parseBoolean(req.body.is_active, 'is_active');
 
     const reward = await prisma.rewardsCatalog.update({ where: { id }, data });
     res.json(reward);
@@ -764,7 +932,10 @@ async function updateReward(req, res) {
 async function listCatalogMenuItems(req, res) {
   try {
     const search = parseOptionalString(req.query.search, 'search', 100);
-    const limit = Math.min(parsePositiveInt(req.query.limit ?? 50, 'limit'), 100);
+    const limit = Math.min(
+      parsePositiveInt(req.query.limit ?? 50, 'limit'),
+      100,
+    );
 
     const items = await prisma.menuItem.findMany({
       where: {
@@ -817,11 +988,17 @@ async function updateRedeemCategory(req, res) {
     const id = parsePositiveInt(req.params.id, 'id');
     const data = {};
 
-    if (req.body.name !== undefined) data.name = parseRequiredString(req.body.name, 'name', 80);
-    if (req.body.sort_order !== undefined) data.sort_order = parseNonNegativeInt(req.body.sort_order, 'sort_order');
-    if (req.body.is_active !== undefined) data.is_active = parseBoolean(req.body.is_active, 'is_active');
+    if (req.body.name !== undefined)
+      data.name = parseRequiredString(req.body.name, 'name', 80);
+    if (req.body.sort_order !== undefined)
+      data.sort_order = parseNonNegativeInt(req.body.sort_order, 'sort_order');
+    if (req.body.is_active !== undefined)
+      data.is_active = parseBoolean(req.body.is_active, 'is_active');
 
-    const category = await prisma.redeemMenuCategory.update({ where: { id }, data });
+    const category = await prisma.redeemMenuCategory.update({
+      where: { id },
+      data,
+    });
     res.json(category);
   } catch (error) {
     handleError(res, error);
@@ -856,18 +1033,27 @@ async function createRedeemItem(req, res) {
       data: {
         menu_item_id: parsePositiveInt(req.body.menu_item_id, 'menu_item_id'),
         category_id: parsePositiveInt(req.body.category_id, 'category_id'),
-        points_required: parsePositiveInt(req.body.points_required, 'points_required'),
+        points_required: parsePositiveInt(
+          req.body.points_required,
+          'points_required',
+        ),
         is_active: parseBoolean(req.body.is_active ?? true, 'is_active'),
         badge: parseOptionalString(req.body.badge, 'badge', 40),
         sort_order: parseNonNegativeInt(req.body.sort_order ?? 0, 'sort_order'),
         start_at: parseOptionalDate(req.body.start_at, 'start_at'),
         end_at: parseOptionalDate(req.body.end_at, 'end_at'),
-        stock_limit: parsePositiveInt(req.body.stock_limit, 'stock_limit', { required: false }),
-        daily_limit: parsePositiveInt(req.body.daily_limit, 'daily_limit', { required: false }),
+        stock_limit: parsePositiveInt(req.body.stock_limit, 'stock_limit', {
+          required: false,
+        }),
+        daily_limit: parsePositiveInt(req.body.daily_limit, 'daily_limit', {
+          required: false,
+        }),
       },
       include: {
         category: true,
-        menu_item: { include: { category: { select: { id: true, name: true } } } },
+        menu_item: {
+          include: { category: { select: { id: true, name: true } } },
+        },
       },
     });
 
@@ -882,23 +1068,45 @@ async function updateRedeemItem(req, res) {
     const id = parsePositiveInt(req.params.id, 'id');
     const data = {};
 
-    if (req.body.menu_item_id !== undefined) data.menu_item_id = parsePositiveInt(req.body.menu_item_id, 'menu_item_id');
-    if (req.body.category_id !== undefined) data.category_id = parsePositiveInt(req.body.category_id, 'category_id');
-    if (req.body.points_required !== undefined) data.points_required = parsePositiveInt(req.body.points_required, 'points_required');
-    if (req.body.is_active !== undefined) data.is_active = parseBoolean(req.body.is_active, 'is_active');
-    if (req.body.badge !== undefined) data.badge = parseOptionalString(req.body.badge, 'badge', 40);
-    if (req.body.sort_order !== undefined) data.sort_order = parseNonNegativeInt(req.body.sort_order, 'sort_order');
-    if (req.body.start_at !== undefined) data.start_at = parseOptionalDate(req.body.start_at, 'start_at');
-    if (req.body.end_at !== undefined) data.end_at = parseOptionalDate(req.body.end_at, 'end_at');
-    if (req.body.stock_limit !== undefined) data.stock_limit = parsePositiveInt(req.body.stock_limit, 'stock_limit', { required: false });
-    if (req.body.daily_limit !== undefined) data.daily_limit = parsePositiveInt(req.body.daily_limit, 'daily_limit', { required: false });
+    if (req.body.menu_item_id !== undefined)
+      data.menu_item_id = parsePositiveInt(
+        req.body.menu_item_id,
+        'menu_item_id',
+      );
+    if (req.body.category_id !== undefined)
+      data.category_id = parsePositiveInt(req.body.category_id, 'category_id');
+    if (req.body.points_required !== undefined)
+      data.points_required = parsePositiveInt(
+        req.body.points_required,
+        'points_required',
+      );
+    if (req.body.is_active !== undefined)
+      data.is_active = parseBoolean(req.body.is_active, 'is_active');
+    if (req.body.badge !== undefined)
+      data.badge = parseOptionalString(req.body.badge, 'badge', 40);
+    if (req.body.sort_order !== undefined)
+      data.sort_order = parseNonNegativeInt(req.body.sort_order, 'sort_order');
+    if (req.body.start_at !== undefined)
+      data.start_at = parseOptionalDate(req.body.start_at, 'start_at');
+    if (req.body.end_at !== undefined)
+      data.end_at = parseOptionalDate(req.body.end_at, 'end_at');
+    if (req.body.stock_limit !== undefined)
+      data.stock_limit = parsePositiveInt(req.body.stock_limit, 'stock_limit', {
+        required: false,
+      });
+    if (req.body.daily_limit !== undefined)
+      data.daily_limit = parsePositiveInt(req.body.daily_limit, 'daily_limit', {
+        required: false,
+      });
 
     const item = await prisma.redeemMenuItem.update({
       where: { id },
       data,
       include: {
         category: true,
-        menu_item: { include: { category: { select: { id: true, name: true } } } },
+        menu_item: {
+          include: { category: { select: { id: true, name: true } } },
+        },
       },
     });
 
