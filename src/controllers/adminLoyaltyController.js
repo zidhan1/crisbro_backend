@@ -125,6 +125,13 @@ function parseOptionalNumber(value, fieldName, { min = 0 } = {}) {
   return number;
 }
 
+function normalizeReportName(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
 function parseCustomerStatus(value) {
   const status =
     parseOptionalString(value ?? 'active', 'status', 30) ?? 'active';
@@ -746,24 +753,28 @@ async function getSummary(req, res) {
     const redemptionCustomerIds = redemptionsByCustomer.map(
       (item) => item.customer_id,
     );
-    const [rewards, outlets, redemptionCustomers] = await Promise.all([
-      prisma.rewardsCatalog.findMany({
-        where: { id: { in: rewardIds } },
-        select: { id: true, name: true },
-      }),
-      prisma.location.findMany({
-        where: { id: { in: outletIds } },
-        select: { id: true, name: true, city: true },
-      }),
-      prisma.customer.findMany({
-        where: { id: { in: redemptionCustomerIds } },
-        select: {
-          id: true,
-          owner_location_id: true,
-          owner_location: { select: { id: true, name: true, city: true } },
-        },
-      }),
-    ]);
+    const [rewards, outlets, redemptionCustomers, redeemMenuItemsForCost] =
+      await Promise.all([
+        prisma.rewardsCatalog.findMany({
+          where: { id: { in: rewardIds } },
+          select: { id: true, name: true },
+        }),
+        prisma.location.findMany({
+          where: { id: { in: outletIds } },
+          select: { id: true, name: true, city: true },
+        }),
+        prisma.customer.findMany({
+          where: { id: { in: redemptionCustomerIds } },
+          select: {
+            id: true,
+            owner_location_id: true,
+            owner_location: { select: { id: true, name: true, city: true } },
+          },
+        }),
+        prisma.redeemMenuItem.findMany({
+          include: { menu_item: { select: { name: true, price: true } } },
+        }),
+      ]);
     const rewardById = new Map(rewards.map((reward) => [reward.id, reward]));
     const outletById = new Map(outlets.map((outlet) => [outlet.id, outlet]));
     const customerById = new Map(
@@ -771,6 +782,16 @@ async function getSummary(req, res) {
     );
     const outletRedemptionById = new Map();
     const redemptionTrendByDate = new Map();
+    const redeemMenuCostByName = new Map(
+      redeemMenuItemsForCost.map((item) => [
+        normalizeReportName(item.menu_item.name),
+        {
+          estimated_cost: item.estimated_cost ? Number(item.estimated_cost) : 0,
+          menu_price: Number(item.menu_item.price),
+        },
+      ]),
+    );
+    let totalEstimatedRedemptionCost = 0;
 
     for (const redemption of redemptionsByCustomer) {
       const customer = customerById.get(redemption.customer_id);
@@ -798,10 +819,16 @@ async function getSummary(req, res) {
         date,
         redemption_count: 0,
         points_spent: 0,
+        estimated_cost: 0,
       };
+      const cost = redeemMenuCostByName.get(
+        normalizeReportName(redemption.reward.name),
+      )?.estimated_cost ?? 0;
 
       current.redemption_count += 1;
       current.points_spent += redemption.points_spent;
+      current.estimated_cost += cost;
+      totalEstimatedRedemptionCost += cost;
       redemptionTrendByDate.set(date, current);
     }
 
@@ -815,6 +842,7 @@ async function getSummary(req, res) {
       redemption_count: redemptionCount,
       pending_redemptions: pendingRedemptions,
       claimed_redemptions: claimedRedemptions,
+      total_estimated_redemption_cost: totalEstimatedRedemptionCost,
       top_rewards: topRewards.map((item) => ({
         reward_id: item.reward_id,
         reward_name: rewardById.get(item.reward_id)?.name ?? 'Reward',
@@ -842,6 +870,12 @@ async function getSummary(req, res) {
         reward_id: redemption.reward_id,
         reward_name: redemption.reward.name,
         points_spent: redemption.points_spent,
+        estimated_cost:
+          redeemMenuCostByName.get(normalizeReportName(redemption.reward.name))
+            ?.estimated_cost ?? 0,
+        menu_price:
+          redeemMenuCostByName.get(normalizeReportName(redemption.reward.name))
+            ?.menu_price ?? null,
         outlet_id: redemption.customer.owner_location?.id ?? null,
         outlet_name:
           redemption.customer.owner_location?.name ?? 'Outlet tidak diketahui',
@@ -1037,6 +1071,10 @@ async function createRedeemItem(req, res) {
           req.body.points_required,
           'points_required',
         ),
+        estimated_cost: parseOptionalNumber(
+          req.body.estimated_cost,
+          'estimated_cost',
+        ),
         is_active: parseBoolean(req.body.is_active ?? true, 'is_active'),
         badge: parseOptionalString(req.body.badge, 'badge', 40),
         sort_order: parseNonNegativeInt(req.body.sort_order ?? 0, 'sort_order'),
@@ -1079,6 +1117,11 @@ async function updateRedeemItem(req, res) {
       data.points_required = parsePositiveInt(
         req.body.points_required,
         'points_required',
+      );
+    if (req.body.estimated_cost !== undefined)
+      data.estimated_cost = parseOptionalNumber(
+        req.body.estimated_cost,
+        'estimated_cost',
       );
     if (req.body.is_active !== undefined)
       data.is_active = parseBoolean(req.body.is_active, 'is_active');
