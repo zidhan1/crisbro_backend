@@ -968,24 +968,43 @@ async function listCatalogMenuItems(req, res) {
     const search = parseOptionalString(req.query.search, 'search', 100);
     const limit = Math.min(
       parsePositiveInt(req.query.limit ?? 50, 'limit'),
-      100,
+      1000,
     );
-
-    const items = await prisma.menuItem.findMany({
-      where: {
-        is_active: true,
-        ...(search && {
-          name: { contains: search, mode: 'insensitive' },
-        }),
+    const categoryWhere = {
+      sub_brand_links: {
+        some: {
+          sub_brand: { name: 'Crisbar' },
+        },
       },
-      include: {
-        category: { select: { id: true, name: true } },
-      },
-      orderBy: { name: 'asc' },
-      take: limit,
-    });
+    };
 
-    res.json(items);
+    const [categories, items] = await Promise.all([
+      prisma.menuCategory.findMany({
+        where: categoryWhere,
+        select: { id: true, name: true, is_active: true },
+        orderBy: [{ is_active: 'desc' }, { name: 'asc' }],
+      }),
+      prisma.menuItem.findMany({
+        where: {
+          is_active: true,
+          category: categoryWhere,
+          ...(search && {
+            name: { contains: search, mode: 'insensitive' },
+          }),
+        },
+        include: {
+          category: { select: { id: true, name: true, is_active: true } },
+        },
+        orderBy: [
+          { category: { is_active: 'desc' } },
+          { category: { name: 'asc' } },
+          { name: 'asc' },
+        ],
+        take: limit,
+      }),
+    ]);
+
+    res.json({ categories, items });
   } catch (error) {
     handleError(res, error);
   }
