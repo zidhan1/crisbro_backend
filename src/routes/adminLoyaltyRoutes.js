@@ -23,6 +23,7 @@ const {
   listRedeemItems,
   createRedeemItem,
   updateRedeemItem,
+  deleteRedeemItem,
   listRedemptions,
   updateRedemptionStatus,
 } = require('../controllers/adminLoyaltyController');
@@ -61,6 +62,7 @@ router.put('/redeem-menu/categories/:id', updateRedeemCategory);
 router.get('/redeem-menu/items', listRedeemItems);
 router.post('/redeem-menu/items', createRedeemItem);
 router.put('/redeem-menu/items/:id', updateRedeemItem);
+router.delete('/redeem-menu/items/:id', deleteRedeemItem);
 
 router.get('/redemptions', listRedemptions);
 router.put('/redemptions/:id/status', updateRedemptionStatus);

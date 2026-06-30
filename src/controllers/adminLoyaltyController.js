@@ -1178,6 +1178,18 @@ async function updateRedeemItem(req, res) {
   }
 }
 
+async function deleteRedeemItem(req, res) {
+  try {
+    const id = parsePositiveInt(req.params.id, 'id');
+
+    await prisma.redeemMenuItem.delete({ where: { id } });
+
+    res.json({ message: 'Item redeem berhasil dihapus' });
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
 async function listRedemptions(req, res) {
   try {
     const status = parseOptionalString(req.query.status, 'status', 30);
@@ -1254,6 +1266,7 @@ module.exports = {
   listRedeemItems,
   createRedeemItem,
   updateRedeemItem,
+  deleteRedeemItem,
   listRedemptions,
   updateRedemptionStatus,
 };
