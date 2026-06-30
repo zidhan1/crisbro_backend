@@ -24,7 +24,9 @@ const DEFAULT_PROMO_LIFESPAN_DAYS = 90;
 const POS_CHANNEL = 'pos';
 
 function normalizeChannel(rawChannel) {
-  return String(rawChannel ?? '').trim().toLowerCase();
+  return String(rawChannel ?? '')
+    .trim()
+    .toLowerCase();
 }
 
 function normalizePhone(raw) {
@@ -97,11 +99,15 @@ function detectPromoSubBrand(promo, categoryIdToSubBrand) {
   const lowerNames = productNames.map((name) => name.toLowerCase());
 
   if (
-    lowerNames.some((name) => name.includes('jeong bok') || name.includes('bokki'))
+    lowerNames.some(
+      (name) => name.includes('jeong bok') || name.includes('bokki'),
+    )
   ) {
     return 'Jeong Bok Chicken';
   }
-  if (lowerNames.some((name) => name.includes('jaya') || name.includes('sambal'))) {
+  if (
+    lowerNames.some((name) => name.includes('jaya') || name.includes('sambal'))
+  ) {
     return 'Green Jaya';
   }
   if (lowerNames.some((name) => name.includes('warkop'))) {
@@ -116,6 +122,14 @@ function detectPromoSubBrand(promo, categoryIdToSubBrand) {
 // Sync customer dari Runchise → database lokal
 async function syncCustomers(locationId = 1) {
   const customers = await fetchAllCustomers(locationId);
+  const numericLocationId = Number(locationId);
+  const ownerLocation =
+    Number.isInteger(numericLocationId) && numericLocationId > 0
+      ? await prisma.location.findUnique({
+          where: { id: numericLocationId },
+          select: { id: true },
+        })
+      : null;
   let synced = 0;
 
   for (const c of customers) {
@@ -147,7 +161,8 @@ async function syncCustomers(locationId = 1) {
       status: c.status ?? 'active',
       balance: parseFloat(c.balance ?? 0),
       brand_id: c.brand_id,
-      owner_location_id: null, // skip dulu karena Location juga belum tentu ada
+      owner_location_id:
+        c.owner_location_id && ownerLocation ? c.owner_location_id : null,
     };
 
     // Update jika sudah ada, create jika belum
