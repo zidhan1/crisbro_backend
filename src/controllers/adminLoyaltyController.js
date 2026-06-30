@@ -132,6 +132,27 @@ function normalizeReportName(value) {
     .replace(/\s+/g, ' ');
 }
 
+async function getDefaultRedeemCategoryId(tx = prisma) {
+  const category = await tx.redeemMenuCategory.findFirst({
+    where: { is_active: true },
+    orderBy: [{ sort_order: 'asc' }, { name: 'asc' }],
+    select: { id: true },
+  });
+
+  if (category) return category.id;
+
+  const created = await tx.redeemMenuCategory.create({
+    data: {
+      name: 'Redeem Menu',
+      sort_order: 0,
+      is_active: true,
+    },
+    select: { id: true },
+  });
+
+  return created.id;
+}
+
 function parseCustomerStatus(value) {
   const status =
     parseOptionalString(value ?? 'active', 'status', 30) ?? 'active';
@@ -1082,10 +1103,15 @@ async function listRedeemItems(req, res) {
 
 async function createRedeemItem(req, res) {
   try {
+    const categoryId =
+      parsePositiveInt(req.body.category_id, 'category_id', {
+        required: false,
+      }) ?? (await getDefaultRedeemCategoryId());
+
     const item = await prisma.redeemMenuItem.create({
       data: {
         menu_item_id: parsePositiveInt(req.body.menu_item_id, 'menu_item_id'),
-        category_id: parsePositiveInt(req.body.category_id, 'category_id'),
+        category_id: categoryId,
         points_required: parsePositiveInt(
           req.body.points_required,
           'points_required',
