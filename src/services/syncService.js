@@ -123,12 +123,9 @@ function detectPromoSubBrand(promo, categoryIdToSubBrand) {
 async function syncCustomers(locationId = 1) {
   const customers = await fetchAllCustomers(locationId);
   const numericLocationId = Number(locationId);
-  const ownerLocation =
+  const fallbackLocationId =
     Number.isInteger(numericLocationId) && numericLocationId > 0
-      ? await prisma.location.findUnique({
-          where: { id: numericLocationId },
-          select: { id: true },
-        })
+      ? numericLocationId
       : null;
   let synced = 0;
 
@@ -139,6 +136,28 @@ async function syncCustomers(locationId = 1) {
       update: {},
       create: { id: c.brand_id, name: `Brand ${c.brand_id}` },
     });
+
+    const ownerLocationId = Number(c.owner_location_id) || fallbackLocationId;
+    const ownerLocationName = c.owner_location?.name ?? `Outlet ${ownerLocationId}`;
+
+    if (ownerLocationId) {
+      await prisma.location.upsert({
+        where: { id: ownerLocationId },
+        update: {
+          name: ownerLocationName,
+          brand_id: c.brand_id,
+          is_outlet: true,
+        },
+        create: {
+          id: ownerLocationId,
+          brand_id: c.brand_id,
+          runchise_id: ownerLocationId,
+          name: ownerLocationName,
+          is_active: true,
+          is_outlet: true,
+        },
+      });
+    }
 
     // Cek apakah customer sudah ada (berdasarkan runchise_id)
     const existing = await prisma.customer.findFirst({
@@ -161,8 +180,7 @@ async function syncCustomers(locationId = 1) {
       status: c.status ?? 'active',
       balance: parseFloat(c.balance ?? 0),
       brand_id: c.brand_id,
-      owner_location_id:
-        c.owner_location_id && ownerLocation ? c.owner_location_id : null,
+      owner_location_id: ownerLocationId,
     };
 
     // Update jika sudah ada, create jika belum
