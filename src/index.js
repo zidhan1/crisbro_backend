@@ -4,6 +4,11 @@ require('dotenv').config();
 // Core dependencies
 const express = require('express');
 const cors = require('cors');
+const {
+  openApiSpec,
+  swaggerUi,
+  swaggerUiOptions,
+} = require('./docs/swagger');
 
 // Prisma ORM (database client)
 const prisma = require('./lib/prisma');
@@ -39,6 +44,8 @@ const { startRunchiseSyncCron } = require('./jobs/runchiseSyncCron');
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.get('/api/docs/openapi.json', (req, res) => res.json(openApiSpec));
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiSpec, swaggerUiOptions));
 app.use('/api', customerRoutes);
 app.use('/api', authRoutes);
 app.use('/api/rewards-catalog', rewardsCatalogRoutes);

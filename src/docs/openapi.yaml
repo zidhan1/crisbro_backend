@@ -1,0 +1,1414 @@
+openapi: 3.0.3
+info:
+  title: Crisbar Rewards API
+  version: 1.0.0
+  description: >
+    Dokumentasi API untuk aplikasi Crisbar Rewards. Endpoint admin mengubah
+    database lokal aplikasi. Endpoint sync mengambil data dari Runchise ke
+    database lokal, sehingga data lokal yang berasal dari Runchise dapat
+    tertimpa saat sync berikutnya berjalan.
+servers:
+  - url: http://localhost:5000
+    description: Local backend
+  - url: /
+    description: Same origin
+tags:
+  - name: Health
+  - name: Auth
+  - name: Customer
+  - name: Catalog
+  - name: Rewards
+  - name: Redemption
+  - name: Admin Users
+  - name: Admin Customers
+  - name: Admin Redeem
+  - name: Admin Reports
+  - name: Admin Sync
+
+paths:
+  /:
+    get:
+      tags: [Health]
+      summary: Health check
+      responses:
+        "200":
+          description: API is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /api/register:
+    post:
+      tags: [Auth]
+      summary: Register customer account
+      description: >
+        Registrasi hanya berhasil jika nomor telepon sudah ada pada customer
+        lokal hasil sinkronisasi Runchise.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Phone number is not available from synced Runchise data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/login:
+    post:
+      tags: [Auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Account exists from sync but has not registered a password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "444":
+          description: Number exists centrally and must register first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/profile:
+    get:
+      tags: [Auth]
+      summary: Get authenticated profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/customer-points:
+    get:
+      tags: [Customer]
+      summary: Get current customer points
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Customer points
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerPoint"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/my-points:
+    get:
+      tags: [Customer]
+      summary: Get current customer points
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Customer points
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomerPoint"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/catalog/products:
+    get:
+      tags: [Catalog]
+      summary: List visible Crisbar products
+      parameters:
+        - in: query
+          name: category_id
+          schema:
+            type: integer
+          required: false
+      responses:
+        "200":
+          description: Product list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CatalogProduct"
+
+  /api/catalog/products/categories:
+    get:
+      tags: [Catalog]
+      summary: List visible product categories
+      responses:
+        "200":
+          description: Category list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CatalogCategory"
+
+  /api/catalog/redeem-menu:
+    get:
+      tags: [Catalog]
+      summary: List active redeem menu items
+      responses:
+        "200":
+          description: Redeem menu
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PublicRedeemMenuItem"
+
+  /api/locations:
+    get:
+      tags: [Catalog]
+      summary: List active outlet locations
+      responses:
+        "200":
+          description: Location list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Location"
+
+  /api/promos:
+    get:
+      tags: [Catalog]
+      summary: List visible promos
+      responses:
+        "200":
+          description: Promo list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Promo"
+
+  /api/rewards-catalog:
+    get:
+      tags: [Rewards]
+      summary: List rewards catalog
+      parameters:
+        - in: query
+          name: brand_id
+          schema:
+            type: integer
+        - in: query
+          name: is_active
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: Reward list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Reward"
+    post:
+      tags: [Rewards]
+      summary: Create reward
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RewardWriteRequest"
+      responses:
+        "201":
+          description: Reward created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reward"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/rewards-catalog/{id}:
+    get:
+      tags: [Rewards]
+      summary: Get reward by id
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Reward detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reward"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Rewards]
+      summary: Update reward
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RewardWriteRequest"
+      responses:
+        "200":
+          description: Reward updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reward"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    delete:
+      tags: [Rewards]
+      summary: Delete reward
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/Message"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/redeem/{rewardId}:
+    post:
+      tags: [Redemption]
+      summary: Redeem a reward
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: rewardId
+          required: true
+          schema:
+            type: integer
+      responses:
+        "201":
+          description: Redeem success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RedeemResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/redeem/my:
+    get:
+      tags: [Redemption]
+      summary: List current customer redemptions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Redemption list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Redemption"
+
+  /api/admin/users:
+    get:
+      tags: [Admin Users]
+      summary: List admin users
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: search
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Admin user list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminUser"
+    post:
+      tags: [Admin Users]
+      summary: Create admin user
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminUserWriteRequest"
+      responses:
+        "201":
+          description: Admin user created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUser"
+
+  /api/admin/users/{id}:
+    put:
+      tags: [Admin Users]
+      summary: Update admin user
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminUserWriteRequest"
+      responses:
+        "200":
+          description: Admin user updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUser"
+    delete:
+      tags: [Admin Users]
+      summary: Delete admin user
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/Message"
+
+  /api/admin/customers:
+    get:
+      tags: [Admin Customers]
+      summary: List customers
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: search
+          schema:
+            type: string
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Paged customer list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCustomerPage"
+    post:
+      tags: [Admin Customers]
+      summary: Create customer in local database
+      description: >
+        Membuat customer di database lokal aplikasi. Endpoint ini tidak
+        membuat customer di Runchise.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCustomerWriteRequest"
+      responses:
+        "201":
+          description: Customer created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCustomer"
+
+  /api/admin/customers/{id}:
+    put:
+      tags: [Admin Customers]
+      summary: Update customer in local database
+      description: >
+        Mengubah customer di database lokal aplikasi. Endpoint ini tidak
+        mengirim perubahan ke Runchise. Field yang berasal dari Runchise dapat
+        tertimpa saat sync berikutnya.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminCustomerWriteRequest"
+      responses:
+        "200":
+          description: Customer updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCustomer"
+    delete:
+      tags: [Admin Customers]
+      summary: Delete customer from local database
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/Message"
+
+  /api/admin/brands:
+    get:
+      tags: [Admin Customers]
+      summary: List brands
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Brand list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Brand"
+
+  /api/admin/locations:
+    get:
+      tags: [Admin Customers]
+      summary: List active outlet locations for admin forms
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Location list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminLocation"
+
+  /api/admin/loyalty-summary:
+    get:
+      tags: [Admin Reports]
+      summary: Get loyalty dashboard summary
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: redemption_from
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: redemption_to
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Summary data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoyaltySummary"
+
+  /api/admin/catalog/menu-items:
+    get:
+      tags: [Admin Redeem]
+      summary: List catalog menu items for redeem setup
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: search
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Catalog categories and items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminCatalogMenuResponse"
+
+  /api/admin/redeem-menu/items:
+    get:
+      tags: [Admin Redeem]
+      summary: List admin redeem items
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Redeem item list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminRedeemItem"
+    post:
+      tags: [Admin Redeem]
+      summary: Create redeem item in local database
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminRedeemItemWriteRequest"
+      responses:
+        "201":
+          description: Redeem item created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminRedeemItem"
+
+  /api/admin/redeem-menu/items/{id}:
+    put:
+      tags: [Admin Redeem]
+      summary: Update redeem item in local database
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminRedeemItemWriteRequest"
+      responses:
+        "200":
+          description: Redeem item updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminRedeemItem"
+    delete:
+      tags: [Admin Redeem]
+      summary: Delete redeem item
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          $ref: "#/components/responses/Message"
+
+  /api/admin/redemptions:
+    get:
+      tags: [Admin Redeem]
+      summary: List redemptions
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, claimed, expired]
+      responses:
+        "200":
+          description: Redemption list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Redemption"
+
+  /api/admin/redemptions/{id}/status:
+    put:
+      tags: [Admin Redeem]
+      summary: Update redemption status
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [pending, claimed, expired]
+      responses:
+        "200":
+          description: Redemption updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Redemption"
+
+  /api/admin/sync/customers:
+    post:
+      tags: [Admin Sync]
+      summary: Sync customers from Runchise to local database
+      description: Ambil data customer dari Runchise lalu upsert ke database lokal.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: location_id
+          schema:
+            type: integer
+            default: 1
+      responses:
+        "200":
+          $ref: "#/components/responses/SyncResult"
+
+  /api/admin/sync/products:
+    post:
+      tags: [Admin Sync]
+      summary: Sync products from Runchise to local database
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          $ref: "#/components/responses/SyncResult"
+
+  /api/admin/sync/redeem-menu:
+    post:
+      tags: [Admin Sync]
+      summary: Sync Crisbro redeem menu from Runchise to local database
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          $ref: "#/components/responses/SyncResult"
+
+  /api/admin/sync/points:
+    post:
+      tags: [Admin Sync]
+      summary: Sync customer points from Runchise to local database
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: location_id
+          schema:
+            type: integer
+            default: 1
+      responses:
+        "200":
+          $ref: "#/components/responses/SyncResult"
+
+  /api/admin/sync/brands:
+    post:
+      tags: [Admin Sync]
+      summary: Sync brands and sub-brands from Runchise to local database
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          $ref: "#/components/responses/SyncResult"
+
+  /api/admin/sync/locations:
+    post:
+      tags: [Admin Sync]
+      summary: Sync locations from Runchise to local database
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          $ref: "#/components/responses/SyncResult"
+
+  /api/admin/sync/promos:
+    post:
+      tags: [Admin Sync]
+      summary: Sync promos from Runchise to local database
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          $ref: "#/components/responses/SyncResult"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdPath:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: integer
+
+  responses:
+    Message:
+      description: Message response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/MessageResponse"
+    SyncResult:
+      description: Sync result
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SyncResult"
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Missing, invalid, or unauthorized token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        error:
+          type: string
+        whatsappUrl:
+          type: string
+          nullable: true
+
+    SyncResult:
+      type: object
+      properties:
+        message:
+          type: string
+        synced:
+          type: integer
+        total:
+          type: integer
+
+    RegisterRequest:
+      type: object
+      required: [name, phone_number, password]
+      properties:
+        name:
+          type: string
+          example: Budi Santoso
+        phone_number:
+          type: string
+          description: Nomor diawali 8, contoh 81234567890
+          example: "81234567890"
+        email:
+          type: string
+          nullable: true
+          example: budi@example.com
+        password:
+          type: string
+          format: password
+          example: password123
+
+    LoginRequest:
+      type: object
+      required: [phone_number, password]
+      properties:
+        phone_number:
+          type: string
+          example: "81234567890"
+        password:
+          type: string
+          format: password
+          example: password123
+
+    LoginResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        expiresIn:
+          type: string
+          example: 7d
+        user:
+          $ref: "#/components/schemas/User"
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+          nullable: true
+        phone_number:
+          type: string
+          nullable: true
+        role:
+          type: string
+          example: customer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        customer:
+          $ref: "#/components/schemas/Customer"
+
+    Customer:
+      type: object
+      properties:
+        id:
+          type: integer
+        runchise_id:
+          type: integer
+          nullable: true
+        name:
+          type: string
+        phone_number:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        customer_point:
+          $ref: "#/components/schemas/CustomerPoint"
+
+    CustomerPoint:
+      type: object
+      properties:
+        total_point:
+          type: integer
+        available_point:
+          type: integer
+        next_reward_threshold:
+          type: integer
+
+    CatalogProduct:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        sell_price:
+          type: number
+        image_url:
+          type: string
+          nullable: true
+        category:
+          type: string
+        category_id:
+          type: integer
+        sku:
+          type: string
+          nullable: true
+
+    CatalogCategory:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        total_products:
+          type: integer
+
+    PublicRedeemMenuItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        sku:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        points_required:
+          type: integer
+        image_url:
+          type: string
+          nullable: true
+        category:
+          type: string
+        category_id:
+          type: integer
+        badge:
+          type: string
+          nullable: true
+        sort_order:
+          type: integer
+
+    Location:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        address:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        phone:
+          type: string
+          nullable: true
+        hours:
+          type: string
+
+    Promo:
+      type: object
+      properties:
+        id:
+          type: integer
+          nullable: true
+        name:
+          type: string
+        status:
+          type: string
+        start_date:
+          type: string
+          nullable: true
+        end_date:
+          type: string
+          nullable: true
+        channel:
+          type: string
+          nullable: true
+        is_online_only:
+          type: boolean
+        is_all_outlets:
+          type: boolean
+        locations:
+          type: array
+          items:
+            type: object
+        discount_amount:
+          type: number
+          nullable: true
+        discount_is_percentage:
+          type: boolean
+        template:
+          type: string
+          nullable: true
+
+    Reward:
+      type: object
+      properties:
+        id:
+          type: integer
+        brand_id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        points_required:
+          type: integer
+        image_url:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+
+    RewardWriteRequest:
+      type: object
+      required: [brand_id, name, points_required]
+      properties:
+        brand_id:
+          type: integer
+          example: 1
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        points_required:
+          type: integer
+        image_url:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+
+    RedeemResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        redemption_code:
+          type: string
+        points_spent:
+          type: integer
+        available_point:
+          type: integer
+
+    Redemption:
+      type: object
+      properties:
+        id:
+          type: integer
+        customer_id:
+          type: integer
+        reward_id:
+          type: integer
+        points_spent:
+          type: integer
+        status:
+          type: string
+        redemption_code:
+          type: string
+          nullable: true
+        redeemed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    AdminUser:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+          nullable: true
+        phone_number:
+          type: string
+          nullable: true
+        role:
+          type: string
+          enum: [admin, staff, marketing]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AdminUserWriteRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          nullable: true
+        phone_number:
+          type: string
+          nullable: true
+        password:
+          type: string
+          format: password
+        role:
+          type: string
+          enum: [admin, staff, marketing]
+
+    Brand:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+
+    AdminLocation:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        city:
+          type: string
+          nullable: true
+
+    AdminCustomer:
+      allOf:
+        - $ref: "#/components/schemas/Customer"
+        - type: object
+          properties:
+            user_id:
+              type: integer
+            email:
+              type: string
+              nullable: true
+            brand_id:
+              type: integer
+            owner_location_id:
+              type: integer
+              nullable: true
+            balance:
+              type: number
+            brand:
+              $ref: "#/components/schemas/Brand"
+            owner_location:
+              $ref: "#/components/schemas/AdminLocation"
+
+    AdminCustomerPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminCustomer"
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+        total_pages:
+          type: integer
+
+    AdminCustomerWriteRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          nullable: true
+        phone_number:
+          type: string
+          nullable: true
+        phone_number_country_code:
+          type: integer
+          example: 62
+        address:
+          type: string
+          nullable: true
+        province:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        country:
+          type: string
+          nullable: true
+        postal_code:
+          type: string
+          nullable: true
+        dob:
+          type: string
+          format: date
+          nullable: true
+        gender:
+          type: string
+        status:
+          type: string
+        balance:
+          type: number
+        brand_id:
+          type: integer
+        owner_location_id:
+          type: integer
+          nullable: true
+        total_point:
+          type: integer
+        available_point:
+          type: integer
+        next_reward_threshold:
+          type: integer
+
+    LoyaltySummary:
+      type: object
+      properties:
+        total_members:
+          type: integer
+        active_members:
+          type: integer
+        total_points_given:
+          type: integer
+        total_points_available:
+          type: integer
+        points_earned:
+          type: integer
+        points_redeemed:
+          type: integer
+        redemption_count:
+          type: integer
+        total_estimated_redemption_cost:
+          type: number
+        top_rewards:
+          type: array
+          items:
+            type: object
+        activation_by_outlet:
+          type: array
+          items:
+            type: object
+        top_redeem_outlets:
+          type: array
+          items:
+            type: object
+        redemption_trend:
+          type: array
+          items:
+            type: object
+        redemption_history:
+          type: array
+          items:
+            type: object
+
+    AdminCatalogMenuResponse:
+      type: object
+      properties:
+        categories:
+          type: array
+          items:
+            type: object
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogMenuItem"
+
+    CatalogMenuItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        runchise_id:
+          type: integer
+          nullable: true
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        price:
+          type: number
+        image_url:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+
+    AdminRedeemItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        menu_item_id:
+          type: integer
+        category_id:
+          type: integer
+        points_required:
+          type: integer
+        estimated_cost:
+          type: number
+          nullable: true
+        is_active:
+          type: boolean
+        badge:
+          type: string
+          nullable: true
+        sort_order:
+          type: integer
+        menu_item:
+          $ref: "#/components/schemas/CatalogMenuItem"
+
+    AdminRedeemItemWriteRequest:
+      type: object
+      required: [menu_item_id, points_required]
+      properties:
+        menu_item_id:
+          type: integer
+        category_id:
+          type: integer
+          nullable: true
+        points_required:
+          type: integer
+        estimated_cost:
+          type: number
+          nullable: true
+        is_active:
+          type: boolean
+        badge:
+          type: string
+          nullable: true
+        sort_order:
+          type: integer
