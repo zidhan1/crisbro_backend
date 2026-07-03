@@ -213,7 +213,13 @@ app.post('/api/admin/sync/locations', ...adminOnly, handleSyncLocations);
 app.post('/api/admin/sync/promos', ...adminOnly, handleSyncPromos);
 
 // ===================== START SERVER =====================
-app.listen(5000, () => {
-  console.log('Server running on port 5000');
-  startRunchiseSyncCron();
-});
+if (require.main === module) {
+  const port = process.env.PORT || 5000;
+
+  app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+    startRunchiseSyncCron();
+  });
+}
+
+module.exports = app;
