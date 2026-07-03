@@ -7,6 +7,7 @@ const cors = require('cors');
 const {
   openApiSpec,
   swaggerUi,
+  swaggerUiDistPath,
   swaggerUiOptions,
 } = require('./docs/swagger');
 
@@ -45,7 +46,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.get('/api/docs/openapi.json', (req, res) => res.json(openApiSpec));
-app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiSpec, swaggerUiOptions));
+app.use('/api/docs', express.static(swaggerUiDistPath, { index: false }));
+app.get(['/api/docs', '/api/docs/'], (req, res) => {
+  const html = swaggerUi
+    .generateHTML(openApiSpec, swaggerUiOptions)
+    .replace('<head>', '<head><base href="/api/docs/">');
+
+  res
+    .type('html')
+    .send(html);
+});
 app.use('/api', customerRoutes);
 app.use('/api', authRoutes);
 app.use('/api/rewards-catalog', rewardsCatalogRoutes);
