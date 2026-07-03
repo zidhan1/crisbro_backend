@@ -1,5 +1,5 @@
 // Load environment variables (.env)
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 // Core dependencies
 const express = require('express');
