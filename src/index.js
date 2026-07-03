@@ -6,8 +6,7 @@ const express = require('express');
 const cors = require('cors');
 const {
   openApiSpec,
-  swaggerUi,
-  swaggerUiOptions,
+  renderSwaggerHtml,
 } = require('./docs/swagger');
 
 // Prisma ORM (database client)
@@ -45,7 +44,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.get('/api/docs/openapi.json', (req, res) => res.json(openApiSpec));
-app.use('/api/docs', swaggerUi.serveFiles(openApiSpec, swaggerUiOptions), swaggerUi.setup(openApiSpec, swaggerUiOptions));
+app.get(['/api/docs', '/api/docs/'], (req, res) => {
+  res
+    .set('Cache-Control', 'no-store')
+    .type('html')
+    .send(renderSwaggerHtml());
+});
 app.use('/api', customerRoutes);
 app.use('/api', authRoutes);
 app.use('/api/rewards-catalog', rewardsCatalogRoutes);
