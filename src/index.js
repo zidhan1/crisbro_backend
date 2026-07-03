@@ -6,9 +6,8 @@ const express = require('express');
 const cors = require('cors');
 const {
   openApiSpec,
-  swaggerUi,
+  renderSwaggerHtml,
   swaggerUiDistPath,
-  swaggerUiOptions,
 } = require('./docs/swagger');
 
 // Prisma ORM (database client)
@@ -48,13 +47,9 @@ app.use(express.json());
 app.get('/api/docs/openapi.json', (req, res) => res.json(openApiSpec));
 app.use('/api/docs', express.static(swaggerUiDistPath, { index: false }));
 app.get(['/api/docs', '/api/docs/'], (req, res) => {
-  const html = swaggerUi
-    .generateHTML(openApiSpec, swaggerUiOptions)
-    .replace('<head>', '<head><base href="/api/docs/">');
-
   res
     .type('html')
-    .send(html);
+    .send(renderSwaggerHtml());
 });
 app.use('/api', customerRoutes);
 app.use('/api', authRoutes);
