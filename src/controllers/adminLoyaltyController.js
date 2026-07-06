@@ -1,6 +1,26 @@
 const prisma = require('../lib/prisma');
 const bcrypt = require('bcrypt');
 
+const DEFAULT_PB1_RATE = 0.1;
+
+function getPb1Rate() {
+  const rate = Number(process.env.PB1_RATE ?? DEFAULT_PB1_RATE);
+  return Number.isFinite(rate) && rate >= 0 ? rate : DEFAULT_PB1_RATE;
+}
+
+function addRedeemPriceBreakdown(item) {
+  const price = Number(item.menu_item?.price ?? 0);
+  const pb1Rate = getPb1Rate();
+  const pb1Amount = Math.round(price * pb1Rate);
+
+  return {
+    ...item,
+    pb1_rate: pb1Rate,
+    pb1_amount: pb1Amount,
+    price_with_pb1: Math.round(price + pb1Amount),
+  };
+}
+
 function badRequest(res, message) {
   return res.status(400).json({ message });
 }
@@ -1105,7 +1125,7 @@ async function listRedeemItems(req, res) {
       ],
     });
 
-    res.json(items);
+    res.json(items.map(addRedeemPriceBreakdown));
   } catch (error) {
     handleError(res, error);
   }
@@ -1168,7 +1188,7 @@ async function createRedeemItem(req, res) {
       },
     });
 
-    res.status(201).json(item);
+    res.status(201).json(addRedeemPriceBreakdown(item));
   } catch (error) {
     handleError(res, error);
   }
@@ -1243,7 +1263,7 @@ async function updateRedeemItem(req, res) {
       },
     });
 
-    res.json(item);
+    res.json(addRedeemPriceBreakdown(item));
   } catch (error) {
     handleError(res, error);
   }

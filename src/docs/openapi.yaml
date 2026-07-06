@@ -1376,6 +1376,12 @@ components:
           type: integer
         points_required:
           type: integer
+        pb1_rate:
+          type: number
+        pb1_amount:
+          type: number
+        price_with_pb1:
+          type: number
         is_active:
           type: boolean
         badge:
