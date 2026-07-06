@@ -3,6 +3,13 @@ const bcrypt = require('bcrypt');
 
 const DEFAULT_PB1_RATE = 0.1;
 const DEFAULT_REWARD_THRESHOLD = 2000;
+const DEFAULT_RUNCHISE_PARENT_BRAND_ID = 750;
+const DEFAULT_RUNCHISE_REDEEM_SUB_BRAND_ID = 1041;
+
+function getPositiveEnvInt(name, fallback) {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
 
 function getPb1Rate() {
   const rawRate = process.env.PB1_RATE;
@@ -34,6 +41,19 @@ function getDefaultRewardThreshold() {
   return Number.isInteger(threshold) && threshold > 0
     ? threshold
     : DEFAULT_REWARD_THRESHOLD;
+}
+
+function getRedeemCatalogConfig() {
+  return {
+    parentBrandRunchiseId: getPositiveEnvInt(
+      'RUNCHISE_PARENT_BRAND_ID',
+      DEFAULT_RUNCHISE_PARENT_BRAND_ID,
+    ),
+    redeemSubBrandRunchiseId: getPositiveEnvInt(
+      'RUNCHISE_REDEEM_SUB_BRAND_ID',
+      DEFAULT_RUNCHISE_REDEEM_SUB_BRAND_ID,
+    ),
+  };
 }
 
 function badRequest(res, message) {
@@ -1063,21 +1083,29 @@ async function listCatalogMenuItems(req, res) {
       parsePositiveInt(req.query.limit ?? 50, 'limit'),
       1000,
     );
-    const brandId = parsePositiveInt(req.query.brand_id ?? 1, 'brand_id');
+    const { parentBrandRunchiseId, redeemSubBrandRunchiseId } =
+      getRedeemCatalogConfig();
+    const redeemSubBrand = await prisma.subBrand.findFirst({
+      where: {
+        runchise_id: redeemSubBrandRunchiseId,
+        brand: { runchise_id: parentBrandRunchiseId },
+      },
+      select: { id: true },
+    });
+
+    if (!redeemSubBrand) {
+      return res.json({ categories: [], items: [] });
+    }
+
     const categoryWhere = {
-      OR: [
-        { brand_id: brandId },
-        {
-          sub_brand_links: {
-            some: {
-              sub_brand: { name: 'Crisbar' },
-            },
-          },
+      sub_brand_links: {
+        some: {
+          sub_brand_id: redeemSubBrand.id,
         },
-      ],
+      },
     };
     const itemWhere = {
-      OR: [{ brand_id: brandId }, { category: categoryWhere }],
+      category: categoryWhere,
       ...(search && {
         name: { contains: search, mode: 'insensitive' },
       }),
@@ -1087,7 +1115,11 @@ async function listCatalogMenuItems(req, res) {
       prisma.menuCategory.findMany({
         where: {
           ...categoryWhere,
-          items: { some: itemWhere },
+          items: {
+            some: search
+              ? { name: { contains: search, mode: 'insensitive' } }
+              : {},
+          },
         },
         select: { id: true, name: true, is_active: true },
         orderBy: [{ is_active: 'desc' }, { name: 'asc' }],
