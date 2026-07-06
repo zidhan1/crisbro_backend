@@ -2,6 +2,7 @@ const prisma = require('../lib/prisma');
 const bcrypt = require('bcrypt');
 
 const DEFAULT_PB1_RATE = 0.1;
+const DEFAULT_REWARD_THRESHOLD = 2000;
 
 function getPb1Rate() {
   const rawRate = process.env.PB1_RATE;
@@ -24,6 +25,15 @@ function addRedeemPriceBreakdown(item) {
     pb1_amount: pb1Amount,
     price_with_pb1: Math.round(price + pb1Amount),
   };
+}
+
+function getDefaultRewardThreshold() {
+  const threshold = Number(
+    process.env.DEFAULT_REWARD_THRESHOLD ?? DEFAULT_REWARD_THRESHOLD,
+  );
+  return Number.isInteger(threshold) && threshold > 0
+    ? threshold
+    : DEFAULT_REWARD_THRESHOLD;
 }
 
 function badRequest(res, message) {
@@ -522,10 +532,7 @@ async function createAdminCustomer(req, res) {
             create: {
               total_point,
               available_point,
-              next_reward_threshold: parsePositiveInt(
-                req.body.next_reward_threshold ?? 2000,
-                'next_reward_threshold',
-              ),
+              next_reward_threshold: getDefaultRewardThreshold(),
             },
           },
           customer_locations:
@@ -621,13 +628,6 @@ async function updateAdminCustomer(req, res) {
         'available_point',
       );
     }
-    if (req.body.next_reward_threshold !== undefined) {
-      pointData.next_reward_threshold = parsePositiveInt(
-        req.body.next_reward_threshold,
-        'next_reward_threshold',
-      );
-    }
-
     data.last_updated_by_id = req.user.id;
 
     const customer = await prisma.$transaction(async (tx) => {
@@ -657,7 +657,7 @@ async function updateAdminCustomer(req, res) {
             customer_id: id,
             total_point: pointData.total_point ?? 0,
             available_point: pointData.available_point ?? 0,
-            next_reward_threshold: pointData.next_reward_threshold ?? 2000,
+            next_reward_threshold: getDefaultRewardThreshold(),
           },
         });
       }
