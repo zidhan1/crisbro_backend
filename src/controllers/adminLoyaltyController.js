@@ -150,6 +150,17 @@ function parseOptionalNumber(value, fieldName, { min = 0 } = {}) {
   return number;
 }
 
+function parseLocationIds(value, ownerLocationId = null) {
+  const rawIds = Array.isArray(value) ? value : [];
+  const ids = rawIds
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0);
+
+  if (ownerLocationId) ids.push(ownerLocationId);
+
+  return Array.from(new Set(ids));
+}
+
 function normalizeReportName(value) {
   return String(value ?? '')
     .trim()
@@ -408,6 +419,12 @@ async function listAdminCustomers(req, res) {
           },
           brand: { select: { id: true, name: true } },
           owner_location: { select: { id: true, name: true, city: true } },
+          customer_locations: {
+            select: {
+              location_id: true,
+              location: { select: { id: true, name: true, city: true } },
+            },
+          },
           customer_point: true,
         },
         orderBy: { updated_at: 'desc' },
@@ -449,6 +466,7 @@ async function createAdminCustomer(req, res) {
       req.body.available_point ?? total_point,
       'available_point',
     );
+    const locationIds = parseLocationIds(req.body.location_ids, owner_location_id);
 
     if (!phone_number) {
       return badRequest(res, 'Nomor telepon wajib diisi');
@@ -510,6 +528,12 @@ async function createAdminCustomer(req, res) {
               ),
             },
           },
+          customer_locations:
+            locationIds.length > 0
+              ? {
+                  create: locationIds.map((location_id) => ({ location_id })),
+                }
+              : undefined,
         },
         include: {
           user: {
@@ -517,6 +541,12 @@ async function createAdminCustomer(req, res) {
           },
           brand: { select: { id: true, name: true } },
           owner_location: { select: { id: true, name: true, city: true } },
+          customer_locations: {
+            select: {
+              location_id: true,
+              location: { select: { id: true, name: true, city: true } },
+            },
+          },
           customer_point: true,
         },
       });
@@ -603,7 +633,7 @@ async function updateAdminCustomer(req, res) {
     const customer = await prisma.$transaction(async (tx) => {
       const existing = await tx.customer.findUnique({
         where: { id },
-        select: { user_id: true },
+        select: { user_id: true, owner_location_id: true },
       });
 
       if (!existing) {
@@ -619,7 +649,7 @@ async function updateAdminCustomer(req, res) {
         });
       }
 
-      if (Object.keys(pointData).length > 0) {
+    if (Object.keys(pointData).length > 0) {
         await tx.customerPoint.upsert({
           where: { customer_id: id },
           update: pointData,
@@ -632,6 +662,29 @@ async function updateAdminCustomer(req, res) {
         });
       }
 
+      if (req.body.location_ids !== undefined || data.owner_location_id !== undefined) {
+        const ownerLocationId =
+          data.owner_location_id !== undefined
+            ? data.owner_location_id
+            : existing.owner_location_id;
+        const locationIds = parseLocationIds(
+          req.body.location_ids,
+          ownerLocationId,
+        );
+
+        await tx.customerLocation.deleteMany({ where: { customer_id: id } });
+
+        if (locationIds.length > 0) {
+          await tx.customerLocation.createMany({
+            data: locationIds.map((location_id) => ({
+              customer_id: id,
+              location_id,
+            })),
+            skipDuplicates: true,
+          });
+        }
+      }
+
       return tx.customer.update({
         where: { id },
         data,
@@ -641,6 +694,12 @@ async function updateAdminCustomer(req, res) {
           },
           brand: { select: { id: true, name: true } },
           owner_location: { select: { id: true, name: true, city: true } },
+          customer_locations: {
+            select: {
+              location_id: true,
+              location: { select: { id: true, name: true, city: true } },
+            },
+          },
           customer_point: true,
         },
       });
