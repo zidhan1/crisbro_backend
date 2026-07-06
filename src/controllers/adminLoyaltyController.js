@@ -797,12 +797,18 @@ async function getSummary(req, res) {
       'redemption_to',
       true,
     );
+    const outletId = parsePositiveInt(req.query.outlet_id, 'outlet_id', {
+      required: false,
+    });
     const redemptionDateWhere = {
       redeemed_at: {
         not: null,
         ...(redemptionFrom ? { gte: redemptionFrom } : {}),
         ...(redemptionTo ? { lte: redemptionTo } : {}),
       },
+      ...(outletId
+        ? { customer: { owner_location_id: outletId } }
+        : {}),
     };
     const [
       totalMembers,

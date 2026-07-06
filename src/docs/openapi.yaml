@@ -532,7 +532,7 @@ paths:
   /api/admin/locations:
     get:
       tags: [Admin Customers]
-      summary: List active outlet locations for admin forms
+      summary: List active outlet locations for admin and marketing filters
       security:
         - bearerAuth: []
       responses:
@@ -562,6 +562,10 @@ paths:
           schema:
             type: string
             format: date
+        - in: query
+          name: outlet_id
+          schema:
+            type: integer
       responses:
         "200":
           description: Summary data

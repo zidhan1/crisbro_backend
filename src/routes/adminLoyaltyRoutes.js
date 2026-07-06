@@ -46,7 +46,7 @@ router.put('/customers/:id', adminStaffOnly, updateAdminCustomer);
 router.delete('/customers/:id', adminStaffOnly, deleteAdminCustomer);
 
 router.get('/brands', adminStaffOnly, listAdminBrands);
-router.get('/locations', adminStaffOnly, listAdminLocations);
+router.get('/locations', marketingOnly, listAdminLocations);
 
 router.get('/loyalty-summary', marketingOnly, getSummary);
 
