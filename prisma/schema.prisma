@@ -224,7 +224,6 @@ model RedeemMenuItem {
   menu_item_id       Int
   category_id        Int
   points_required    Int
-  estimated_cost     Decimal?  @db.Decimal(12, 2)
   is_active          Boolean   @default(true)
   badge              String?
   sort_order         Int       @default(0)

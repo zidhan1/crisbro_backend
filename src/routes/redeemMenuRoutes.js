@@ -15,9 +15,26 @@ router.get('/', async (req, res) => {
         OR: [{ start_at: null }, { start_at: { lte: now } }],
         AND: [{ OR: [{ end_at: null }, { end_at: { gte: now } }] }],
       },
-      include: {
-        category: true,
-        menu_item: true,
+      select: {
+        id: true,
+        points_required: true,
+        badge: true,
+        sort_order: true,
+        category: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        menu_item: {
+          select: {
+            id: true,
+            runchise_id: true,
+            name: true,
+            description: true,
+            image_url: true,
+          },
+        },
       },
       orderBy: [
         { category: { sort_order: 'asc' } },

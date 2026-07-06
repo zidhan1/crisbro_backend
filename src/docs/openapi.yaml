@@ -1311,8 +1311,6 @@ components:
           type: integer
         redemption_count:
           type: integer
-        total_estimated_redemption_cost:
-          type: number
         top_rewards:
           type: array
           items:
@@ -1378,9 +1376,6 @@ components:
           type: integer
         points_required:
           type: integer
-        estimated_cost:
-          type: number
-          nullable: true
         is_active:
           type: boolean
         badge:
@@ -1402,9 +1397,6 @@ components:
           nullable: true
         points_required:
           type: integer
-        estimated_cost:
-          type: number
-          nullable: true
         is_active:
           type: boolean
         badge:

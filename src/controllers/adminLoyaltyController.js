@@ -774,7 +774,7 @@ async function getSummary(req, res) {
     const redemptionCustomerIds = redemptionsByCustomer.map(
       (item) => item.customer_id,
     );
-    const [rewards, outlets, redemptionCustomers, redeemMenuItemsForCost] =
+    const [rewards, outlets, redemptionCustomers, redeemMenuItemsForReport] =
       await Promise.all([
         prisma.rewardsCatalog.findMany({
           where: { id: { in: rewardIds } },
@@ -793,7 +793,7 @@ async function getSummary(req, res) {
           },
         }),
         prisma.redeemMenuItem.findMany({
-          include: { menu_item: { select: { name: true, price: true } } },
+          select: { menu_item: { select: { name: true, price: true } } },
         }),
       ]);
     const rewardById = new Map(rewards.map((reward) => [reward.id, reward]));
@@ -803,16 +803,14 @@ async function getSummary(req, res) {
     );
     const outletRedemptionById = new Map();
     const redemptionTrendByDate = new Map();
-    const redeemMenuCostByName = new Map(
-      redeemMenuItemsForCost.map((item) => [
+    const redeemMenuByName = new Map(
+      redeemMenuItemsForReport.map((item) => [
         normalizeReportName(item.menu_item.name),
         {
-          estimated_cost: item.estimated_cost ? Number(item.estimated_cost) : 0,
           menu_price: Number(item.menu_item.price),
         },
       ]),
     );
-    let totalEstimatedRedemptionCost = 0;
 
     for (const redemption of redemptionsByCustomer) {
       const customer = customerById.get(redemption.customer_id);
@@ -840,16 +838,10 @@ async function getSummary(req, res) {
         date,
         redemption_count: 0,
         points_spent: 0,
-        estimated_cost: 0,
       };
-      const cost = redeemMenuCostByName.get(
-        normalizeReportName(redemption.reward.name),
-      )?.estimated_cost ?? 0;
 
       current.redemption_count += 1;
       current.points_spent += redemption.points_spent;
-      current.estimated_cost += cost;
-      totalEstimatedRedemptionCost += cost;
       redemptionTrendByDate.set(date, current);
     }
 
@@ -863,7 +855,6 @@ async function getSummary(req, res) {
       redemption_count: redemptionCount,
       pending_redemptions: pendingRedemptions,
       claimed_redemptions: claimedRedemptions,
-      total_estimated_redemption_cost: totalEstimatedRedemptionCost,
       top_rewards: topRewards.map((item) => ({
         reward_id: item.reward_id,
         reward_name: rewardById.get(item.reward_id)?.name ?? 'Reward',
@@ -891,11 +882,8 @@ async function getSummary(req, res) {
         reward_id: redemption.reward_id,
         reward_name: redemption.reward.name,
         points_spent: redemption.points_spent,
-        estimated_cost:
-          redeemMenuCostByName.get(normalizeReportName(redemption.reward.name))
-            ?.estimated_cost ?? 0,
         menu_price:
-          redeemMenuCostByName.get(normalizeReportName(redemption.reward.name))
+          redeemMenuByName.get(normalizeReportName(redemption.reward.name))
             ?.menu_price ?? null,
         outlet_id: redemption.customer.owner_location?.id ?? null,
         outlet_name:
@@ -1082,8 +1070,30 @@ async function updateRedeemCategory(req, res) {
 async function listRedeemItems(req, res) {
   try {
     const items = await prisma.redeemMenuItem.findMany({
-      include: {
-        category: true,
+      select: {
+        id: true,
+        menu_item_id: true,
+        category_id: true,
+        points_required: true,
+        is_active: true,
+        badge: true,
+        sort_order: true,
+        start_at: true,
+        end_at: true,
+        stock_limit: true,
+        daily_limit: true,
+        created_at: true,
+        updated_at: true,
+        category: {
+          select: {
+            id: true,
+            name: true,
+            sort_order: true,
+            is_active: true,
+            created_at: true,
+            updated_at: true,
+          },
+        },
         menu_item: {
           include: { category: { select: { id: true, name: true } } },
         },
@@ -1116,10 +1126,6 @@ async function createRedeemItem(req, res) {
           req.body.points_required,
           'points_required',
         ),
-        estimated_cost: parseOptionalNumber(
-          req.body.estimated_cost,
-          'estimated_cost',
-        ),
         is_active: parseBoolean(req.body.is_active ?? true, 'is_active'),
         badge: parseOptionalString(req.body.badge, 'badge', 40),
         sort_order: parseNonNegativeInt(req.body.sort_order ?? 0, 'sort_order'),
@@ -1132,8 +1138,30 @@ async function createRedeemItem(req, res) {
           required: false,
         }),
       },
-      include: {
-        category: true,
+      select: {
+        id: true,
+        menu_item_id: true,
+        category_id: true,
+        points_required: true,
+        is_active: true,
+        badge: true,
+        sort_order: true,
+        start_at: true,
+        end_at: true,
+        stock_limit: true,
+        daily_limit: true,
+        created_at: true,
+        updated_at: true,
+        category: {
+          select: {
+            id: true,
+            name: true,
+            sort_order: true,
+            is_active: true,
+            created_at: true,
+            updated_at: true,
+          },
+        },
         menu_item: {
           include: { category: { select: { id: true, name: true } } },
         },
@@ -1163,11 +1191,6 @@ async function updateRedeemItem(req, res) {
         req.body.points_required,
         'points_required',
       );
-    if (req.body.estimated_cost !== undefined)
-      data.estimated_cost = parseOptionalNumber(
-        req.body.estimated_cost,
-        'estimated_cost',
-      );
     if (req.body.is_active !== undefined)
       data.is_active = parseBoolean(req.body.is_active, 'is_active');
     if (req.body.badge !== undefined)
@@ -1190,8 +1213,30 @@ async function updateRedeemItem(req, res) {
     const item = await prisma.redeemMenuItem.update({
       where: { id },
       data,
-      include: {
-        category: true,
+      select: {
+        id: true,
+        menu_item_id: true,
+        category_id: true,
+        points_required: true,
+        is_active: true,
+        badge: true,
+        sort_order: true,
+        start_at: true,
+        end_at: true,
+        stock_limit: true,
+        daily_limit: true,
+        created_at: true,
+        updated_at: true,
+        category: {
+          select: {
+            id: true,
+            name: true,
+            sort_order: true,
+            is_active: true,
+            created_at: true,
+            updated_at: true,
+          },
+        },
         menu_item: {
           include: { category: { select: { id: true, name: true } } },
         },
