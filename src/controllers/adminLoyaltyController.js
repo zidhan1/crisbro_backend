@@ -4,8 +4,13 @@ const bcrypt = require('bcrypt');
 const DEFAULT_PB1_RATE = 0.1;
 
 function getPb1Rate() {
-  const rate = Number(process.env.PB1_RATE ?? DEFAULT_PB1_RATE);
-  return Number.isFinite(rate) && rate >= 0 ? rate : DEFAULT_PB1_RATE;
+  const rawRate = process.env.PB1_RATE;
+  if (rawRate === undefined || rawRate === '') return DEFAULT_PB1_RATE;
+
+  const rate = Number(rawRate);
+  if (!Number.isFinite(rate) || rate < 0) return DEFAULT_PB1_RATE;
+
+  return rate > 1 ? rate / 100 : rate;
 }
 
 function addRedeemPriceBreakdown(item) {
