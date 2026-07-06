@@ -1063,28 +1063,37 @@ async function listCatalogMenuItems(req, res) {
       parsePositiveInt(req.query.limit ?? 50, 'limit'),
       1000,
     );
+    const brandId = parsePositiveInt(req.query.brand_id ?? 1, 'brand_id');
     const categoryWhere = {
-      sub_brand_links: {
-        some: {
-          sub_brand: { name: 'Crisbar' },
+      OR: [
+        { brand_id: brandId },
+        {
+          sub_brand_links: {
+            some: {
+              sub_brand: { name: 'Crisbar' },
+            },
+          },
         },
-      },
+      ],
+    };
+    const itemWhere = {
+      OR: [{ brand_id: brandId }, { category: categoryWhere }],
+      ...(search && {
+        name: { contains: search, mode: 'insensitive' },
+      }),
     };
 
     const [categories, items] = await Promise.all([
       prisma.menuCategory.findMany({
-        where: categoryWhere,
+        where: {
+          ...categoryWhere,
+          items: { some: itemWhere },
+        },
         select: { id: true, name: true, is_active: true },
         orderBy: [{ is_active: 'desc' }, { name: 'asc' }],
       }),
       prisma.menuItem.findMany({
-        where: {
-          is_active: true,
-          category: categoryWhere,
-          ...(search && {
-            name: { contains: search, mode: 'insensitive' },
-          }),
-        },
+        where: itemWhere,
         include: {
           category: { select: { id: true, name: true, is_active: true } },
         },
@@ -1097,7 +1106,14 @@ async function listCatalogMenuItems(req, res) {
       }),
     ]);
 
-    res.json({ categories, items });
+    const itemCategoryIds = new Set(
+      items.map((item) => item.category?.id).filter(Boolean),
+    );
+    const visibleCategories = categories.filter((category) =>
+      itemCategoryIds.has(category.id),
+    );
+
+    res.json({ categories: visibleCategories, items });
   } catch (error) {
     handleError(res, error);
   }

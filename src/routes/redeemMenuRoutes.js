@@ -11,7 +11,6 @@ router.get('/', async (req, res) => {
       where: {
         is_active: true,
         category: { is_active: true },
-        menu_item: { is_active: true },
         OR: [{ start_at: null }, { start_at: { lte: now } }],
         AND: [{ OR: [{ end_at: null }, { end_at: { gte: now } }] }],
       },
@@ -33,6 +32,7 @@ router.get('/', async (req, res) => {
             name: true,
             description: true,
             image_url: true,
+            is_active: true,
           },
         },
       },
