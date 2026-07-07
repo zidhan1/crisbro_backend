@@ -96,26 +96,14 @@ app.get('/api/my-points', auth, async (req, res) => {
   }
 });
 
-// ===================== REDEEM DUMMY ENDPOINT =====================
+// ===================== REDEEM LEGACY ENDPOINT =====================
 
-// Endpoint sementara untuk cek reward (belum pakai logic poin)
-app.post('/redeem/:id', auth, async (req, res) => {
-  try {
-    const reward = await prisma.rewardsCatalog.findUnique({
-      where: { id: Number(req.params.id) },
-    });
-
-    if (!reward) {
-      return res.status(404).json({ message: 'Reward tidak ditemukan' });
-    }
-
-    res.json({
-      message: 'Reward ditemukan (logic points belum diaktifkan)',
-      reward,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+// Endpoint lama dipertahankan hanya untuk mencegah sukses palsu.
+// Gunakan POST /api/redeem/:rewardId.
+app.post('/redeem/:id', auth, (req, res) => {
+  return res.status(410).json({
+    message: 'Endpoint ini sudah tidak digunakan. Gunakan POST /api/redeem/:rewardId',
+  });
 });
 
 // ===================== SYNC HANDLERS (WRAPPER API) =====================
