@@ -43,6 +43,28 @@ async function redeemReward(req, res) {
 
     // 4. Menjalankan seluruh proses penukaran dalam satu transaksi database
     const result = await prisma.$transaction(async (tx) => {
+      // Kurangi poin secara atomic. Kondisi available_point menjaga agar
+      // request paralel tidak bisa sama-sama membuat saldo menjadi minus.
+      const pointUpdate = await tx.customerPoint.updateMany({
+        where: {
+          customer_id: customer.id,
+          available_point: { gte: reward.points_required },
+        },
+        data: {
+          available_point: { decrement: reward.points_required },
+        },
+      });
+
+      if (pointUpdate.count !== 1) {
+        throw Object.assign(new Error('Poin tidak cukup'), {
+          statusCode: 400,
+          payload: {
+            message: 'Poin tidak cukup',
+            points_required: reward.points_required,
+          },
+        });
+      }
+
       // Membuat data riwayat penukaran reward
       const redemption = await tx.rewardRedemption.create({
         data: {
@@ -66,12 +88,8 @@ async function redeemReward(req, res) {
         },
       });
 
-      // Mengurangi poin customer
-      const updatedPoint = await tx.customerPoint.update({
+      const updatedPoint = await tx.customerPoint.findUnique({
         where: { customer_id: customer.id },
-        data: {
-          available_point: { decrement: reward.points_required },
-        },
       });
 
       return { redemption, updatedPoint };
@@ -85,6 +103,10 @@ async function redeemReward(req, res) {
       available_point: result.updatedPoint.available_point,
     });
   } catch (error) {
+    if (error.statusCode && error.payload) {
+      return res.status(error.statusCode).json(error.payload);
+    }
+
     // Menangani error saat proses redeem
     return res.status(500).json({ error: error.message });
   }
