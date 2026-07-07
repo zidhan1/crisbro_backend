@@ -251,6 +251,17 @@ async function login(req, res) {
     const { password } = req.body;
     const phone_number = normalizePhone(req.body.phone_number);
 
+    if (
+      !phone_number ||
+      !phone_number.startsWith('8') ||
+      typeof password !== 'string' ||
+      password.trim().length === 0
+    ) {
+      return res.status(400).json({
+        message: 'Nomor telepon harus diawali 8 dan password wajib diisi',
+      });
+    }
+
     // Mencari user di database lokal
     let user = await prisma.user.findUnique({
       where: { phone_number },
