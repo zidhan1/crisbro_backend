@@ -1403,6 +1403,12 @@ async function deleteRedeemItem(req, res) {
 async function listRedemptions(req, res) {
   try {
     const status = parseOptionalString(req.query.status, 'status', 30);
+    const allowedStatus = new Set(['pending', 'claimed', 'expired']);
+
+    if (status && !allowedStatus.has(status)) {
+      return badRequest(res, 'status tidak valid');
+    }
+
     const redemptions = await prisma.rewardRedemption.findMany({
       where: status ? { status } : {},
       include: {
