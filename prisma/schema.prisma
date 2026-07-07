@@ -92,8 +92,6 @@ model Brand {
   id          Int      @id @default(autoincrement())
   runchise_id Int?
   name        String
-  tagline     String?
-  logo_url    String?
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
 
