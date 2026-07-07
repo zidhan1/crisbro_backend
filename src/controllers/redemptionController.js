@@ -1,12 +1,21 @@
 const prisma = require('../lib/prisma');
 const crypto = require('crypto'); // Mengimpor crypto untuk membuat kode redeem secara acak
 
+function parsePositiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 // Menangani proses penukaran reward oleh customer
 // POST /api/redeem/:rewardId
 async function redeemReward(req, res) {
   // Mengambil ID reward dan ID user yang sedang login
-  const rewardId = Number(req.params.rewardId);
+  const rewardId = parsePositiveInteger(req.params.rewardId);
   const userId = req.user.id;
+
+  if (rewardId === null) {
+    return res.status(400).json({ message: 'ID reward tidak valid' });
+  }
 
   try {
     // 1. Mengambil data customer beserta poinnya
