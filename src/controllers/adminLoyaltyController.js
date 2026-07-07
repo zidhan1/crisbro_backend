@@ -425,7 +425,6 @@ async function listAdminCustomers(req, res) {
       parsePositiveInt(req.query.limit ?? 20, 'limit'),
       100,
     );
-    const skip = (page - 1) * limit;
     const where = {
       ...(search && {
         OR: [
@@ -439,36 +438,38 @@ async function listAdminCustomers(req, res) {
       }),
     };
 
-    const [total, customers] = await Promise.all([
-      prisma.customer.count({ where }),
-      prisma.customer.findMany({
-        where,
-        include: {
-          user: {
-            select: { id: true, email: true, phone_number: true, role: true },
-          },
-          brand: { select: { id: true, name: true } },
-          owner_location: { select: { id: true, name: true, city: true } },
-          customer_locations: {
-            select: {
-              location_id: true,
-              location: { select: { id: true, name: true, city: true } },
-            },
-          },
-          customer_point: true,
+    const total = await prisma.customer.count({ where });
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const clampedPage = Math.min(page, totalPages);
+    const skip = (clampedPage - 1) * limit;
+
+    const customers = await prisma.customer.findMany({
+      where,
+      include: {
+        user: {
+          select: { id: true, email: true, phone_number: true, role: true },
         },
-        orderBy: { updated_at: 'desc' },
-        skip,
-        take: limit,
-      }),
-    ]);
+        brand: { select: { id: true, name: true } },
+        owner_location: { select: { id: true, name: true, city: true } },
+        customer_locations: {
+          select: {
+            location_id: true,
+            location: { select: { id: true, name: true, city: true } },
+          },
+        },
+        customer_point: true,
+      },
+      orderBy: { updated_at: 'desc' },
+      skip,
+      take: limit,
+    });
 
     res.json({
       items: customers,
-      page,
+      page: clampedPage,
       limit,
       total,
-      total_pages: Math.max(1, Math.ceil(total / limit)),
+      total_pages: totalPages,
     });
   } catch (error) {
     handleError(res, error);
