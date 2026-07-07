@@ -57,19 +57,18 @@ router.get('/', async (req, res) => {
     }
 
     if (usePaginatedResponse) {
-      const [total, promos] = await prisma.$transaction([
-        prisma.promo.count({ where }),
-        prisma.promo.findMany({
-          where,
-          orderBy: [{ start_at: 'desc' }, { id: 'desc' }],
-          skip: (page - 1) * limit,
-          take: limit,
-        }),
-      ]);
+      const total = await prisma.promo.count({ where });
       const totalPages = Math.max(Math.ceil(total / limit), 1);
+      const clampedPage = Math.min(page, totalPages);
+      const promos = await prisma.promo.findMany({
+        where,
+        orderBy: [{ start_at: 'desc' }, { id: 'desc' }],
+        skip: (clampedPage - 1) * limit,
+        take: limit,
+      });
       const result = {
         items: promos.map(mapPromo),
-        page,
+        page: clampedPage,
         limit,
         total,
         total_pages: totalPages,
