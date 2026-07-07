@@ -43,9 +43,16 @@ router.get('/', async (req, res) => {
     const status = typeof req.query.status === 'string' ? req.query.status : '';
     const usePaginatedResponse =
       req.query.page !== undefined || req.query.limit !== undefined || req.query.status !== undefined;
+
+    if (status && !ALLOWED_STATUSES.has(status)) {
+      return res.status(400).json({
+        error: `Status promo tidak valid. Gunakan salah satu: ${Array.from(ALLOWED_STATUSES).join(', ')}`,
+      });
+    }
+
     const where = {
       is_visible: true,
-      ...(ALLOWED_STATUSES.has(status) ? { status } : {}),
+      ...(status ? { status } : {}),
     };
     const cacheKey = usePaginatedResponse
       ? `promos:visible:page=${page}:limit=${limit}:status=${status || 'all'}`
