@@ -270,6 +270,19 @@ async function run() {
       body: redeem.body,
     });
 
+    const legacyRedeem = await requestJson(baseUrl, '/api/redeem/1', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${login.body.token}` },
+    });
+    assertCondition(
+      legacyRedeem.response.status === 410,
+      'Redeem reward legacy customer harus dinonaktifkan',
+      {
+        status: legacyRedeem.response.status,
+        body: legacyRedeem.body,
+      },
+    );
+
     const [updatedPoint, redemption, pointHistory] = await Promise.all([
       prisma.customerPoint.findUnique({
         where: { customer_id: seeded.user.customer.id },

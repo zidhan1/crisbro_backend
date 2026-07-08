@@ -5,11 +5,8 @@ const router = express.Router();
 // Middleware autentikasi (JWT)
 const auth = require('../middleware/auth');
 
-// Mengimpor controller untuk fitur redeem reward
-const {
-  redeemReward,
-  getMyRedemptions,
-} = require('../controllers/redemptionController');
+// Mengimpor controller untuk fitur riwayat redeem lama
+const { getMyRedemptions } = require('../controllers/redemptionController');
 
 // ===================== RIWAYAT REDEEM =====================
 
@@ -28,7 +25,12 @@ router.post('/menu/:redeemMenuItemId', auth, (req, res) => {
 
 // ===================== REDEEM REWARD =====================
 
-// Endpoint untuk menukar reward berdasarkan rewardId (harus login)
-router.post('/:rewardId', auth, redeemReward);
+// Penukaran reward dilakukan melalui POS Runchise/kasir, bukan aplikasi Crisbro.
+router.post('/:rewardId', auth, (req, res) => {
+  return res.status(410).json({
+    message:
+      'Penukaran reward dilakukan melalui kasir/POS Runchise. Aplikasi Crisbro tidak memproses redeem langsung.',
+  });
+});
 
 module.exports = router;
