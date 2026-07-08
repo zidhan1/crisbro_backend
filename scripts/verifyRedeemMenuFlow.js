@@ -265,68 +265,51 @@ async function run() {
         headers: { Authorization: `Bearer ${login.body.token}` },
       },
     );
-    assertCondition(redeem.response.status === 201, 'Redeem menu gagal', {
+    assertCondition(redeem.response.status === 410, 'Redeem menu customer harus dinonaktifkan', {
       status: redeem.response.status,
       body: redeem.body,
     });
-    assertCondition(
-      Number.isInteger(redeem.body?.redemption_id) &&
-        typeof redeem.body?.redemption_code === 'string' &&
-        redeem.body.redemption_code.length > 0,
-      'Response redeem tidak berisi redemption_id/redemption_code valid',
-      { body: redeem.body },
-    );
-    assertCondition(
-      redeem.body.available_point === POINTS_BEFORE - POINTS_REQUIRED,
-      'Saldo poin response tidak sesuai',
-      { body: redeem.body },
-    );
 
     const [updatedPoint, redemption, pointHistory] = await Promise.all([
       prisma.customerPoint.findUnique({
         where: { customer_id: seeded.user.customer.id },
       }),
-      prisma.rewardRedemption.findUnique({
-        where: { id: redeem.body.redemption_id },
+      prisma.rewardRedemption.findFirst({
+        where: { customer_id: seeded.user.customer.id },
       }),
       prisma.pointHistory.findFirst({
         where: {
           customer_id: seeded.user.customer.id,
-          reward_redemption_id: redeem.body.redemption_id,
           type: 'redeem',
         },
       }),
     ]);
 
     assertCondition(
-      updatedPoint?.available_point === POINTS_BEFORE - POINTS_REQUIRED,
-      'CustomerPoint.available_point tidak berkurang sesuai poin redeem',
+      updatedPoint?.available_point === POINTS_BEFORE,
+      'CustomerPoint.available_point tidak boleh berkurang dari estimasi customer',
       { updatedPoint },
     );
     assertCondition(
-      redemption?.points_spent === POINTS_REQUIRED &&
-        redemption.status === 'pending' &&
-        redemption.redemption_code === redeem.body.redemption_code,
-      'RewardRedemption tidak tersimpan sesuai response redeem',
+      redemption === null,
+      'Aplikasi customer tidak boleh membuat RewardRedemption',
       { redemption },
     );
     assertCondition(
-      pointHistory?.points_change === -POINTS_REQUIRED,
-      'PointHistory redeem tidak tersimpan dengan points_change negatif',
+      pointHistory === null,
+      'Aplikasi customer tidak boleh membuat PointHistory redeem',
       { pointHistory },
     );
 
-    console.log('BUG-001 E2E verification passed');
+    console.log('Redeem menu estimation flow verification passed');
     console.log({
       baseUrl,
       testPhone: TEST_PHONE,
       testPassword: TEST_PASSWORD,
       redeemMenuItemId: seeded.redeemMenuItem.id,
-      redemptionId: redeem.body.redemption_id,
-      redemptionCode: redeem.body.redemption_code,
       pointsBefore: POINTS_BEFORE,
-      pointsSpent: POINTS_REQUIRED,
-      pointsAfter: updatedPoint.available_point,
+      estimatedPointsSpent: POINTS_REQUIRED,
+      pointsAfterApiAttempt: updatedPoint.available_point,
     });
   } finally {
     await new Promise((resolve, reject) => {

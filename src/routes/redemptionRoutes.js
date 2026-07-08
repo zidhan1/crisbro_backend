@@ -8,7 +8,6 @@ const auth = require('../middleware/auth');
 // Mengimpor controller untuk fitur redeem reward
 const {
   redeemReward,
-  redeemMenuItem,
   getMyRedemptions,
 } = require('../controllers/redemptionController');
 
@@ -19,8 +18,13 @@ router.get('/my', auth, getMyRedemptions);
 
 // ===================== REDEEM MENU =====================
 
-// Endpoint untuk menukar item menu redeem berdasarkan RedeemMenuItem.id
-router.post('/menu/:redeemMenuItemId', auth, redeemMenuItem);
+// Penukaran menu reward dilakukan melalui kasir, bukan dari aplikasi customer.
+router.post('/menu/:redeemMenuItemId', auth, (req, res) => {
+  return res.status(410).json({
+    message:
+      'Penukaran menu reward dilakukan melalui kasir. Aplikasi customer hanya menampilkan estimasi penukaran.',
+  });
+});
 
 // ===================== REDEEM REWARD =====================
 
