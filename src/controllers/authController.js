@@ -30,6 +30,35 @@ function phoneVariants(normalizedPhone) {
   );
 }
 
+function serializeAuthUser(user) {
+  if (!user) return user;
+
+  const { password_hash, ...safeUser } = user;
+  const serializedUser = {
+    ...safeUser,
+  };
+
+  if (serializedUser.email === null) {
+    delete serializedUser.email;
+  }
+
+  if (serializedUser.phone_number === null) {
+    delete serializedUser.phone_number;
+  }
+
+  if (!serializedUser.customer) {
+    return serializedUser;
+  }
+
+  return {
+    ...serializedUser,
+    customer: {
+      ...serializedUser.customer,
+      balance: Number(serializedUser.customer.balance ?? 0),
+    },
+  };
+}
+
 // ===================== REGISTER =====================
 // Menangani proses registrasi customer
 async function register(req, res) {
@@ -187,9 +216,7 @@ async function register(req, res) {
         return updatedUser;
       });
 
-      // Menghapus password sebelum dikirim ke frontend
-      const { password_hash, ...safeUser } = user;
-      return res.status(200).json(safeUser);
+      return res.status(200).json(serializeAuthUser(user));
     }
 
     // Jika user belum ada, buat akun baru
@@ -234,9 +261,7 @@ async function register(req, res) {
       },
     });
 
-    // Menghapus password sebelum response
-    const { password_hash, ...safeUser } = user;
-    return res.status(201).json(safeUser);
+    return res.status(201).json(serializeAuthUser(user));
   } catch (error) {
     // Menangani error yang tidak terduga
     return res.status(500).json({ error: error.message });
@@ -299,14 +324,11 @@ async function login(req, res) {
       expiresIn: JWT_EXPIRES_IN,
     });
 
-    // Menghapus password sebelum dikirim ke frontend
-    const { password_hash, ...safeUser } = user;
-
     // Mengirim token dan data user
     res.json({
       token,
       expiresIn: JWT_EXPIRES_IN,
-      user: safeUser,
+      user: serializeAuthUser(user),
     });
   } catch (error) {
     // Menangani error konfigurasi JWT
@@ -342,9 +364,7 @@ async function profile(req, res) {
       return res.status(404).json({ message: 'User tidak ditemukan' });
     }
 
-    // Menghapus password sebelum dikirim ke frontend
-    const { password_hash, ...safeUser } = user;
-    res.json(safeUser);
+    res.json(serializeAuthUser(user));
   } catch (error) {
     // Menangani error
     res.status(500).json({ error: error.message });
