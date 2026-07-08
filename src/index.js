@@ -4,10 +4,7 @@ require('dotenv').config({ quiet: true });
 // Core dependencies
 const express = require('express');
 const cors = require('cors');
-const {
-  openApiSpec,
-  renderSwaggerHtml,
-} = require('./docs/swagger');
+const { openApiSpec, renderSwaggerHtml } = require('./docs/swagger');
 
 // Prisma ORM (database client)
 const prisma = require('./lib/prisma');
@@ -26,6 +23,7 @@ const productCatalogRoutes = require('./routes/productCatalogRoutes');
 const redeemMenuRoutes = require('./routes/redeemMenuRoutes');
 const promoRoutes = require('./routes/promoRoutes');
 const adminLoyaltyRoutes = require('./routes/adminLoyaltyRoutes');
+const pointRoutes = require('./routes/pointRoutes');
 
 // Sync services (ETL dari Runchise → DB lokal)
 const {
@@ -45,10 +43,7 @@ app.use(cors());
 app.use(express.json());
 app.get('/api/docs/openapi.json', (req, res) => res.json(openApiSpec));
 app.get(['/api/docs', '/api/docs/'], (req, res) => {
-  res
-    .set('Cache-Control', 'no-store')
-    .type('html')
-    .send(renderSwaggerHtml());
+  res.set('Cache-Control', 'no-store').type('html').send(renderSwaggerHtml());
 });
 app.use('/api', customerRoutes);
 app.use('/api', authRoutes);
@@ -58,6 +53,7 @@ app.use('/api/locations', locationRoutes);
 app.use('/api/catalog/redeem-menu', redeemMenuRoutes);
 app.use('/api/catalog/products', productCatalogRoutes);
 app.use('/api/promos', promoRoutes);
+app.use('/api/points', pointRoutes);
 app.use('/api/admin', adminLoyaltyRoutes);
 
 // ===================== HEALTH CHECK =====================
@@ -72,7 +68,7 @@ app.get('/rewards', async (req, res) => {
   try {
     // Diubah dari .reward menjadi .rewardsCatalog sesuai skema baru
     const rewards = await prisma.rewardsCatalog.findMany({
-      where: { is_active: true } // Hanya tampilkan katalog yang aktif
+      where: { is_active: true }, // Hanya tampilkan katalog yang aktif
     });
     res.json(rewards);
   } catch (error) {
@@ -89,7 +85,8 @@ app.get('/api/my-points', auth, async (req, res) => {
       where: { user_id: req.user.id },
       include: { customer_point: true },
     });
-    if (!customer) return res.status(404).json({ message: 'Customer tidak ditemukan' });
+    if (!customer)
+      return res.status(404).json({ message: 'Customer tidak ditemukan' });
     res.json(customer.customer_point ?? { available_point: 0, total_point: 0 });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -102,7 +99,8 @@ app.get('/api/my-points', auth, async (req, res) => {
 // Gunakan POST /api/redeem/:rewardId.
 app.post('/redeem/:id', auth, (req, res) => {
   return res.status(410).json({
-    message: 'Endpoint ini sudah tidak digunakan. Gunakan POST /api/redeem/:rewardId',
+    message:
+      'Endpoint ini sudah tidak digunakan. Gunakan POST /api/redeem/:rewardId',
   });
 });
 

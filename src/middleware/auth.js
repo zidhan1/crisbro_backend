@@ -1,9 +1,10 @@
 // Mengimpor library JWT dan fungsi untuk mengambil JWT_SECRET
 const jwt = require('jsonwebtoken');
 const getJwtSecret = require('../lib/jwtSecret');
+const prisma = require('../lib/prisma');
 
 // Middleware untuk memverifikasi token JWT pada setiap request
-module.exports = (req, res, next) => {
+module.exports = async (req, res, next) => {
   const header = req.headers.authorization;
 
   // Jika header tidak ada, akses ditolak
@@ -26,6 +27,17 @@ module.exports = (req, res, next) => {
   try {
     // Memverifikasi token menggunakan JWT_SECRET
     const decoded = jwt.verify(token, getJwtSecret());
+
+    const session = await prisma.session.findUnique({
+      where: { token },
+      select: { user_id: true, expires_at: true },
+    });
+
+    if (!session || session.user_id !== decoded.id || session.expires_at <= new Date()) {
+      return res.status(401).json({
+        message: 'Session tidak valid atau sudah berakhir',
+      });
+    }
 
     // Menyimpan data hasil decode ke request agar dapat digunakan di controller
     req.user = decoded;

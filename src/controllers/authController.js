@@ -323,6 +323,19 @@ async function login(req, res) {
     const token = jwt.sign({ id: user.id, role: user.role }, getJwtSecret(), {
       expiresIn: JWT_EXPIRES_IN,
     });
+    const decodedToken = jwt.decode(token);
+    const expiresAt =
+      decodedToken && typeof decodedToken.exp === 'number'
+        ? new Date(decodedToken.exp * 1000)
+        : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    await prisma.session.create({
+      data: {
+        user_id: user.id,
+        token,
+        expires_at: expiresAt,
+      },
+    });
 
     // Mengirim token dan data user
     res.json({

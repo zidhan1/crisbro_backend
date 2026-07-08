@@ -5,6 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+    "verify:redeem-menu": "node scripts/verifyRedeemMenuFlow.js --confirm-db-write",
+    "cleanup:redeem-menu-test": "node scripts/verifyRedeemMenuFlow.js --cleanup --confirm-db-write",
     "dev": "nodemon src/index.js",
     "build": "prisma generate",
     "vercel-build": "prisma generate",
