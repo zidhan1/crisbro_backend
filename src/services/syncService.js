@@ -235,7 +235,8 @@ async function syncCustomerPoints(locationId = 1) {
     const localId = runchiseToLocal.get(c.id);
     if (!localId) continue;
 
-    // Upsert poin customer
+    // Runchise/POS adalah source of truth poin. Karena API riwayat poin
+    // Runchise belum tersedia, saldo lokal hanya menjadi mirror nilai terbaru.
     ops.push(
       prisma.customerPoint.upsert({
         where: { customer_id: localId },
