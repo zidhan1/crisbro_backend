@@ -8,9 +8,9 @@
     "verify:redeem-menu": "node scripts/verifyRedeemMenuFlow.js --confirm-db-write",
     "cleanup:redeem-menu-test": "node scripts/verifyRedeemMenuFlow.js --cleanup --confirm-db-write",
     "dev": "nodemon src/index.js",
-    "build": "prisma generate",
-    "vercel-build": "prisma generate",
-    "postinstall": "prisma generate",
+    "build": "node scripts/prismaGenerate.js",
+    "vercel-build": "node scripts/prismaGenerate.js",
+    "postinstall": "node scripts/prismaGenerate.js",
     "create-admin": "node scripts/createAdmin.js"
   },
   "keywords": [],
