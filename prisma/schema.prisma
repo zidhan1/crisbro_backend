@@ -90,7 +90,7 @@ model Customer {
 
 model Brand {
   id          Int      @id @default(autoincrement())
-  runchise_id Int?
+  runchise_id Int?     @unique
   name        String
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt

@@ -623,6 +623,7 @@ async function syncBrands() {
 
   let synced = 0;
   const seenParentBrandIds = new Set();
+  const localBrandByRunchiseId = new Map();
 
   for (const sb of subBrandsArray) {
     if (!sb.brand?.id || !sb.brand?.name) {
@@ -633,47 +634,48 @@ async function syncBrands() {
     const parentBrandId = sb.brand.id;
     const parentBrandName = sb.brand.name;
 
-    // 1. Upsert parent brand (hanya sekali per brand unik)
-    // Simpan sebagai runchise_id, bukan overwrite id lokal kamu
-    if (!seenParentBrandIds.has(parentBrandId)) {
-      seenParentBrandIds.add(parentBrandId);
+    let localBrand = localBrandByRunchiseId.get(parentBrandId);
 
+    if (!localBrand) {
       try {
-        // Cari apakah brand dengan runchise_id ini sudah ada
-        const existingBrand = await prisma.brand.findFirst({
-          where: { runchise_id: parentBrandId },
-        });
-
-        if (!existingBrand) {
-          await prisma.brand.create({
+        try {
+          await prisma.brand.updateMany({
+            where: { id: parentBrandId, runchise_id: null },
             data: {
               runchise_id: parentBrandId,
               name: parentBrandName || `Brand ${parentBrandId}`,
             },
           });
+        } catch (error) {
+          if (error.code !== 'P2002') throw error;
+        }
+
+        localBrand = await prisma.brand.upsert({
+          where: { runchise_id: parentBrandId },
+          update: {
+            name: parentBrandName || `Brand ${parentBrandId}`,
+          },
+          create: {
+            runchise_id: parentBrandId,
+            name: parentBrandName || `Brand ${parentBrandId}`,
+          },
+        });
+
+        localBrandByRunchiseId.set(parentBrandId, localBrand);
+
+        if (!seenParentBrandIds.has(parentBrandId)) {
+          seenParentBrandIds.add(parentBrandId);
           console.log(
-            `Parent brand dibuat: runchise_id=${parentBrandId}, name=${parentBrandName}`,
+            `Parent brand synced: runchise_id=${parentBrandId}, name=${localBrand.name}`,
           );
         }
       } catch (error) {
         console.error(
-          `Gagal menyimpan parent brand runchise_id=${parentBrandId}:`,
+          `Gagal upsert parent brand runchise_id=${parentBrandId}:`,
           error.message,
         );
         continue;
       }
-    }
-
-    // Ambil local brand id berdasarkan runchise_id
-    const localBrand = await prisma.brand.findFirst({
-      where: { runchise_id: parentBrandId },
-    });
-
-    if (!localBrand) {
-      console.warn(
-        `Local brand untuk runchise_id=${parentBrandId} tidak ditemukan, skip sub_brand id=${sb.id}`,
-      );
-      continue;
     }
 
     // 2. Upsert sub_brand
