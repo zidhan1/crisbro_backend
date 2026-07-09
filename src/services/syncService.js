@@ -37,6 +37,14 @@ function normalizePhone(raw) {
   return digits;
 }
 
+function phoneVariants(normalizedPhone) {
+  if (!normalizedPhone) return [];
+
+  return Array.from(
+    new Set([normalizedPhone, `0${normalizedPhone}`, `62${normalizedPhone}`]),
+  );
+}
+
 function isPosChannel(channel) {
   return normalizeChannel(channel) === POS_CHANNEL;
 }
@@ -128,6 +136,7 @@ async function syncCustomers(locationId = 1) {
       ? numericLocationId
       : null;
   let synced = 0;
+  let skippedConflicts = 0;
 
   for (const c of customers) {
     // Pastikan brand sudah ada di database
@@ -159,16 +168,14 @@ async function syncCustomers(locationId = 1) {
       });
     }
 
-    // Cek apakah customer sudah ada (berdasarkan runchise_id)
-    const existing = await prisma.customer.findFirst({
-      where: { runchise_id: c.id },
-    });
+    const normalizedPhone = normalizePhone(c.phone_number);
+    const phoneNumberVariants = phoneVariants(normalizedPhone);
 
     // Mapping data customer dari Runchise ke format lokal
     const payload = {
       runchise_id: c.id,
       name: c.name,
-      phone_number: normalizePhone(c.phone_number),
+      phone_number: normalizedPhone,
       phone_number_country_code: c.phone_number_country_code ?? 62,
       address: c.address ?? null,
       province: c.province ?? null,
@@ -182,6 +189,76 @@ async function syncCustomers(locationId = 1) {
       brand_id: c.brand_id,
       owner_location_id: ownerLocationId,
     };
+
+    const [
+      existingByRunchiseId,
+      existingCustomerByPhone,
+      existingUserByPhone,
+    ] = await Promise.all([
+      prisma.customer.findFirst({
+        where: { runchise_id: c.id },
+        include: {
+          user: { select: { id: true, phone_number: true, role: true } },
+        },
+      }),
+      phoneNumberVariants.length > 0
+        ? prisma.customer.findFirst({
+            where: {
+              OR: [
+                { phone_number: { in: phoneNumberVariants } },
+                { user: { phone_number: { in: phoneNumberVariants } } },
+              ],
+            },
+          })
+        : null,
+      phoneNumberVariants.length > 0
+        ? prisma.user.findFirst({
+            where: { phone_number: { in: phoneNumberVariants } },
+            include: { customer: true },
+          })
+        : null,
+    ]);
+
+    const existingByPhone =
+      existingCustomerByPhone || existingUserByPhone?.customer || null;
+
+    if (
+      existingUserByPhone &&
+      (!existingUserByPhone.customer ||
+        existingUserByPhone.customer.id !== existingByPhone?.id)
+    ) {
+      skippedConflicts++;
+      console.warn(
+        `Sync customer skipped: phone=${normalizedPhone} sudah dipakai user_id=${existingUserByPhone.id} role=${existingUserByPhone.role} yang tidak cocok dengan customer Runchise.`,
+      );
+      continue;
+    }
+
+    if (
+      existingByRunchiseId &&
+      existingByPhone &&
+      existingByRunchiseId.id !== existingByPhone.id
+    ) {
+      skippedConflicts++;
+      console.warn(
+        `Sync customer skipped: runchise_id=${c.id} cocok dengan customer_id=${existingByRunchiseId.id}, tetapi phone cocok dengan customer_id=${existingByPhone.id}.`,
+      );
+      continue;
+    }
+
+    if (
+      existingByPhone &&
+      existingByPhone.runchise_id !== null &&
+      existingByPhone.runchise_id !== c.id
+    ) {
+      skippedConflicts++;
+      console.warn(
+        `Sync customer skipped: phone=${normalizedPhone} sudah terhubung ke runchise_id=${existingByPhone.runchise_id}, bukan ${c.id}.`,
+      );
+      continue;
+    }
+
+    const existing = existingByRunchiseId || existingByPhone;
 
     // Update jika sudah ada, create jika belum
     if (existing) {
@@ -198,7 +275,7 @@ async function syncCustomers(locationId = 1) {
     } else {
       await prisma.user.create({
         data: {
-          phone_number: normalizePhone(c.phone_number),
+          phone_number: normalizedPhone,
           password_hash: '',
           role: 'customer',
           customer: { create: payload },
@@ -208,7 +285,11 @@ async function syncCustomers(locationId = 1) {
     synced++;
   }
 
-  return { synced, total: customers.length };
+  return {
+    synced,
+    total: customers.length,
+    skipped_conflicts: skippedConflicts,
+  };
 }
 
 // ===================== SYNC CUSTOMER POINTS =====================
