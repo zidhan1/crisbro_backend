@@ -1038,10 +1038,16 @@ components:
         city:
           type: string
           nullable: true
-        phone:
+        province:
           type: string
           nullable: true
-        hours:
+        latitude:
+          type: number
+          nullable: true
+        longitude:
+          type: number
+          nullable: true
+        maps_url:
           type: string
 
     Promo:

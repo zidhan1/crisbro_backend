@@ -2,29 +2,54 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
 
+function decimalToNumber(value) {
+  if (value === null || value === undefined) return null;
+
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function buildMapsUrl(location) {
+  const latitude = decimalToNumber(location.latitude);
+  const longitude = decimalToNumber(location.longitude);
+
+  if (latitude !== null && longitude !== null) {
+    return `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+  }
+
+  const query = [location.name, location.address, location.city, location.province]
+    .filter(Boolean)
+    .join(', ');
+
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+
 // Endpoint untuk mengambil daftar lokasi outlet aktif
 router.get('/', async (req, res) => {
   try {
-    // Mengambil data lokasi yang aktif dan berstatus outlet
     const locations = await prisma.location.findMany({
       where: { is_active: true, is_outlet: true },
       orderBy: [{ city: 'asc' }, { name: 'asc' }],
     });
 
-    // Memformat data sebelum dikirim ke frontend
-    const result = locations.map((loc) => ({
-      id: loc.id,
-      name: loc.name,
-      address: loc.address,
-      city: loc.city,
-      phone: loc.phone ?? null,
-      hours: '10.00 – 22.00', // jam operasional statis
-    }));
+    const result = locations.map((loc) => {
+      const latitude = decimalToNumber(loc.latitude);
+      const longitude = decimalToNumber(loc.longitude);
 
-    // Mengirim hasil ke client
+      return {
+        id: loc.id,
+        name: loc.name,
+        address: loc.address,
+        city: loc.city,
+        province: loc.province,
+        latitude,
+        longitude,
+        maps_url: buildMapsUrl(loc),
+      };
+    });
+
     res.json(result);
   } catch (error) {
-    // Menangani error server
     res.status(500).json({ error: error.message });
   }
 });
