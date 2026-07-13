@@ -3,13 +3,19 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
 const getJwtSecret = require('../lib/jwtSecret');
+const {
+  hashActivationToken,
+} = require('../services/accountActivationService');
 
 // Konfigurasi masa berlaku token login
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 // Mengecek apakah user hasil sinkronisasi dan belum memiliki password
 function isSyncedPlaceholderUser(user) {
-  return user && user.password_hash === '';
+  return (
+    user &&
+    (user.password_hash === '' || user.activation_status === 'pending_activation')
+  );
 }
 
 // Mengubah nomor telepon menjadi format standar (8xxxxxxxx)
@@ -156,6 +162,8 @@ async function register(req, res) {
             email,
             phone_number,
             password_hash: hashedPassword,
+            activation_status: 'active',
+            activated_at: new Date(),
             customer: existingUser.customer
               ? {
                   update: {
@@ -225,6 +233,8 @@ async function register(req, res) {
         email,
         phone_number,
         password_hash: hashedPassword,
+        activation_status: 'active',
+        activated_at: new Date(),
         role: 'customer',
         customer: {
           create: {
@@ -309,7 +319,7 @@ async function login(req, res) {
     if (isSyncedPlaceholderUser(user)) {
       return res.status(409).json({
         message:
-          'Akun sudah terdaftar dari pusat, silahkan lakukan Registrasi untuk membuat password',
+          'Akun belum aktif. Silakan buka link aktivasi untuk membuat password.',
       });
     }
 
@@ -356,6 +366,112 @@ async function login(req, res) {
   }
 }
 
+// ===================== ACTIVATION =====================
+// Validasi token aktivasi sebelum halaman membuat password ditampilkan
+async function validateActivationToken(req, res) {
+  try {
+    const token =
+      typeof req.query.token === 'string' ? req.query.token.trim() : '';
+
+    if (!token) {
+      return res.status(400).json({ message: 'Token aktivasi wajib diisi' });
+    }
+
+    const tokenHash = hashActivationToken(token);
+    const activationToken = await prisma.accountActivationToken.findUnique({
+      where: { token_hash: tokenHash },
+      include: {
+        user: {
+          select: {
+            id: true,
+            activation_status: true,
+            customer: { select: { name: true } },
+          },
+        },
+      },
+    });
+
+    if (
+      !activationToken ||
+      activationToken.used_at ||
+      activationToken.expires_at <= new Date() ||
+      activationToken.user.activation_status !== 'pending_activation'
+    ) {
+      return res.status(400).json({
+        message: 'Link aktivasi tidak valid atau sudah kedaluwarsa',
+      });
+    }
+
+    return res.json({
+      valid: true,
+      customer_name: activationToken.user.customer?.name ?? null,
+      expires_at: activationToken.expires_at,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+}
+
+// Mengaktifkan akun dan menyimpan password hash
+async function activateAccount(req, res) {
+  try {
+    const token = typeof req.body.token === 'string' ? req.body.token.trim() : '';
+    const password =
+      typeof req.body.password === 'string' ? req.body.password : '';
+
+    if (!token || password.trim().length < 8) {
+      return res.status(400).json({
+        message: 'Token wajib diisi dan password minimal 8 karakter',
+      });
+    }
+
+    const tokenHash = hashActivationToken(token);
+    const now = new Date();
+
+    const activationToken = await prisma.accountActivationToken.findUnique({
+      where: { token_hash: tokenHash },
+      include: { user: true },
+    });
+
+    if (
+      !activationToken ||
+      activationToken.used_at ||
+      activationToken.expires_at <= now ||
+      activationToken.user.activation_status !== 'pending_activation'
+    ) {
+      return res.status(400).json({
+        message: 'Link aktivasi tidak valid atau sudah kedaluwarsa',
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: activationToken.user_id },
+        data: {
+          password_hash: hashedPassword,
+          activation_status: 'active',
+          activated_at: now,
+        },
+      }),
+      prisma.accountActivationToken.update({
+        where: { id: activationToken.id },
+        data: { used_at: now },
+      }),
+      prisma.session.deleteMany({
+        where: { user_id: activationToken.user_id },
+      }),
+    ]);
+
+    return res.json({
+      message: 'Akun berhasil diaktifkan. Silakan login.',
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+}
+
 // ===================== PROFILE =====================
 // Mengambil profil user yang sedang login
 async function profile(req, res) {
@@ -384,9 +500,85 @@ async function profile(req, res) {
   }
 }
 
+// ===================== CHANGE PASSWORD =====================
+// Mengganti password user yang sedang login
+async function changePassword(req, res) {
+  try {
+    const currentPassword =
+      typeof req.body.current_password === 'string'
+        ? req.body.current_password
+        : '';
+    const newPassword =
+      typeof req.body.new_password === 'string' ? req.body.new_password : '';
+
+    if (!currentPassword || newPassword.trim().length < 8) {
+      return res.status(400).json({
+        message: 'Password lama wajib diisi dan password baru minimal 8 karakter',
+      });
+    }
+
+    if (currentPassword === newPassword) {
+      return res.status(400).json({
+        message: 'Password baru harus berbeda dari password lama',
+      });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: {
+        id: true,
+        password_hash: true,
+        activation_status: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: 'User tidak ditemukan' });
+    }
+
+    if (isSyncedPlaceholderUser(user)) {
+      return res.status(409).json({
+        message: 'Akun belum aktif. Silakan aktivasi akun terlebih dahulu.',
+      });
+    }
+
+    const validPassword = await bcrypt.compare(
+      currentPassword,
+      user.password_hash,
+    );
+
+    if (!validPassword) {
+      return res.status(401).json({ message: 'Password lama salah' });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    const token = req.headers.authorization?.split(' ')[1];
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: user.id },
+        data: { password_hash: hashedPassword },
+      }),
+      prisma.session.deleteMany({
+        where: {
+          user_id: user.id,
+          ...(token ? { token: { not: token } } : {}),
+        },
+      }),
+    ]);
+
+    return res.json({ message: 'Password berhasil diganti' });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+}
+
 // Mengekspor fungsi agar dapat digunakan oleh file route
 module.exports = {
   register,
   login,
   profile,
+  validateActivationToken,
+  activateAccount,
+  changePassword,
 };

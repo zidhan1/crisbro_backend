@@ -21,10 +21,13 @@ model User {
   password_hash String
   phone_number  String? @unique // Di DBML: boleh null, unique
   role          String // admin | staff | customer
+  activation_status String @default("active") // pending_activation | active
+  activated_at  DateTime?
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 
   sessions          Session[]
+  activation_tokens AccountActivationToken[]
   customer          Customer?  @relation("UserToCustomer")
   created_customers Customer[] @relation("CreatedBy")
   updated_customers Customer[] @relation("LastUpdatedBy")
@@ -38,6 +41,22 @@ model Session {
   created_at DateTime @default(now())
 
   user User @relation(fields: [user_id], references: [id])
+}
+
+model AccountActivationToken {
+  id         Int       @id @default(autoincrement())
+  user_id    Int
+  token_hash String    @unique
+  purpose    String    @default("activation") // activation | reset_password
+  expires_at DateTime
+  used_at    DateTime?
+  created_at DateTime  @default(now())
+
+  user User @relation(fields: [user_id], references: [id])
+
+  @@index([user_id])
+  @@index([expires_at])
+  @@index([purpose])
 }
 
 // ───────────────────────────────────────────────

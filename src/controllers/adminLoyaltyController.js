@@ -1,5 +1,10 @@
 const prisma = require('../lib/prisma');
 const bcrypt = require('bcrypt');
+const {
+  createAccountActivationToken,
+  invalidatePendingActivationTokens,
+} = require('../services/accountActivationService');
+const { sendActivationEmail } = require('../services/emailService');
 
 const DEFAULT_PB1_RATE = 0.1;
 const DEFAULT_REWARD_THRESHOLD = 2000;
@@ -41,6 +46,32 @@ function getDefaultRewardThreshold() {
   return Number.isInteger(threshold) && threshold > 0
     ? threshold
     : DEFAULT_REWARD_THRESHOLD;
+}
+
+async function sendCustomerActivationLink(customer) {
+  const email = customer?.user?.email;
+
+  if (!email) {
+    return {
+      sent: false,
+      skipped: true,
+      reason: 'Customer tidak memiliki email',
+    };
+  }
+
+  await invalidatePendingActivationTokens(customer.user.id, 'activation');
+
+  const { activationUrl, expiresAt } = await createAccountActivationToken(
+    customer.user.id,
+    'activation',
+  );
+
+  return sendActivationEmail({
+    to: email,
+    customerName: customer.name,
+    activationUrl,
+    expiresAt,
+  });
 }
 
 function getRedeemCatalogConfig() {
@@ -447,7 +478,14 @@ async function listAdminCustomers(req, res) {
       where,
       include: {
         user: {
-          select: { id: true, email: true, phone_number: true, role: true },
+          select: {
+            id: true,
+            email: true,
+            phone_number: true,
+            role: true,
+            activation_status: true,
+            activated_at: true,
+          },
         },
         brand: { select: { id: true, name: true } },
         owner_location: { select: { id: true, name: true, city: true } },
@@ -515,6 +553,8 @@ async function createAdminCustomer(req, res) {
           email,
           phone_number,
           password_hash: '',
+          activation_status: 'pending_activation',
+          activated_at: null,
           role: 'customer',
         },
       });
@@ -565,7 +605,14 @@ async function createAdminCustomer(req, res) {
         },
         include: {
           user: {
-            select: { id: true, email: true, phone_number: true, role: true },
+            select: {
+              id: true,
+              email: true,
+              phone_number: true,
+              role: true,
+              activation_status: true,
+              activated_at: true,
+            },
           },
           brand: { select: { id: true, name: true } },
           owner_location: { select: { id: true, name: true, city: true } },
@@ -580,7 +627,18 @@ async function createAdminCustomer(req, res) {
       });
     });
 
-    res.status(201).json(customer);
+    let activationEmail = null;
+    try {
+      activationEmail = await sendCustomerActivationLink(customer);
+    } catch (emailError) {
+      activationEmail = {
+        sent: false,
+        skipped: false,
+        error: emailError.message,
+      };
+    }
+
+    res.status(201).json({ ...customer, activation_email: activationEmail });
   } catch (error) {
     handleError(res, error);
   }
@@ -711,7 +769,14 @@ async function updateAdminCustomer(req, res) {
         data,
         include: {
           user: {
-            select: { id: true, email: true, phone_number: true, role: true },
+            select: {
+              id: true,
+              email: true,
+              phone_number: true,
+              role: true,
+              activation_status: true,
+              activated_at: true,
+            },
           },
           brand: { select: { id: true, name: true } },
           owner_location: { select: { id: true, name: true, city: true } },
@@ -727,6 +792,48 @@ async function updateAdminCustomer(req, res) {
     });
 
     res.json(customer);
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+async function resendCustomerActivation(req, res) {
+  try {
+    const id = parsePositiveInt(req.params.id, 'id');
+    const customer = await prisma.customer.findUnique({
+      where: { id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            phone_number: true,
+            role: true,
+            activation_status: true,
+            activated_at: true,
+          },
+        },
+      },
+    });
+
+    if (!customer) {
+      return res.status(404).json({ message: 'Customer tidak ditemukan' });
+    }
+
+    if (customer.user.activation_status !== 'pending_activation') {
+      return res.status(400).json({
+        message: 'Akun customer sudah aktif atau tidak membutuhkan aktivasi',
+      });
+    }
+
+    const activationEmail = await sendCustomerActivationLink(customer);
+
+    res.json({
+      message: activationEmail.sent
+        ? 'Email aktivasi berhasil dikirim'
+        : 'Email aktivasi belum terkirim',
+      activation_email: activationEmail,
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -1468,6 +1575,7 @@ module.exports = {
   listAdminCustomers,
   createAdminCustomer,
   updateAdminCustomer,
+  resendCustomerActivation,
   deleteAdminCustomer,
   listAdminBrands,
   listAdminLocations,

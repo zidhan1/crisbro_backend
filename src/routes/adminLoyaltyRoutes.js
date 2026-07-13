@@ -9,6 +9,7 @@ const {
   listAdminCustomers,
   createAdminCustomer,
   updateAdminCustomer,
+  resendCustomerActivation,
   deleteAdminCustomer,
   listAdminBrands,
   listAdminLocations,
@@ -43,6 +44,7 @@ router.delete('/users/:id', superAdminOnly, deleteAdminUser);
 router.get('/customers', adminStaffOnly, listAdminCustomers);
 router.post('/customers', adminStaffOnly, createAdminCustomer);
 router.put('/customers/:id', adminStaffOnly, updateAdminCustomer);
+router.post('/customers/:id/activation', adminStaffOnly, resendCustomerActivation);
 router.delete('/customers/:id', adminStaffOnly, deleteAdminCustomer);
 
 router.get('/brands', adminStaffOnly, listAdminBrands);

@@ -277,6 +277,7 @@ async function syncCustomers(locationId = 1) {
         data: {
           phone_number: normalizedPhone,
           password_hash: '',
+          activation_status: 'pending_activation',
           role: 'customer',
           customer: { create: payload },
         },
