@@ -41,13 +41,13 @@ router.post('/users', superAdminOnly, createAdminUser);
 router.put('/users/:id', superAdminOnly, updateAdminUser);
 router.delete('/users/:id', superAdminOnly, deleteAdminUser);
 
-router.get('/customers', adminStaffOnly, listAdminCustomers);
-router.post('/customers', adminStaffOnly, createAdminCustomer);
-router.put('/customers/:id', adminStaffOnly, updateAdminCustomer);
-router.post('/customers/:id/activation', adminStaffOnly, resendCustomerActivation);
-router.delete('/customers/:id', adminStaffOnly, deleteAdminCustomer);
+router.get('/customers', marketingOnly, listAdminCustomers);
+router.post('/customers', marketingOnly, createAdminCustomer);
+router.put('/customers/:id', marketingOnly, updateAdminCustomer);
+router.post('/customers/:id/activation', marketingOnly, resendCustomerActivation);
+router.delete('/customers/:id', marketingOnly, deleteAdminCustomer);
 
-router.get('/brands', adminStaffOnly, listAdminBrands);
+router.get('/brands', marketingOnly, listAdminBrands);
 router.get('/locations', marketingOnly, listAdminLocations);
 
 router.get('/loyalty-summary', marketingOnly, getSummary);
