@@ -69,6 +69,7 @@ async function sendCustomerActivationLink(customer) {
   return sendActivationEmail({
     to: email,
     customerName: customer.name,
+    phoneNumber: customer.phone_number,
     activationUrl,
     expiresAt,
   });

@@ -552,22 +552,19 @@ async function changePassword(req, res) {
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    const token = req.headers.authorization?.split(' ')[1];
-
     await prisma.$transaction([
       prisma.user.update({
         where: { id: user.id },
         data: { password_hash: hashedPassword },
       }),
       prisma.session.deleteMany({
-        where: {
-          user_id: user.id,
-          ...(token ? { token: { not: token } } : {}),
-        },
+        where: { user_id: user.id },
       }),
     ]);
 
-    return res.json({ message: 'Password berhasil diganti' });
+    return res.json({
+      message: 'Password berhasil diganti. Silakan login ulang.',
+    });
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
