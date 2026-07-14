@@ -15,6 +15,8 @@ const EXCLUDED_CRISBAR_CATEGORY_NAMES = new Set([
   'Komplimen Customer',
   'Option',
   'MERCHANDISE',
+  'Landing Page Kampus',
+  'Raos Pisan',
 ]);
 
 module.exports = { CRISBAR_SUB_BRAND_NAME, EXCLUDED_CRISBAR_CATEGORY_NAMES };
