@@ -5,6 +5,9 @@ const {
   invalidatePendingActivationTokens,
 } = require('../services/accountActivationService');
 const { sendActivationEmail } = require('../services/emailService');
+const {
+  EXCLUDED_CRISBAR_CATEGORY_NAMES,
+} = require('../constants/categoryMapping');
 
 const DEFAULT_PB1_RATE = 0.1;
 const DEFAULT_REWARD_THRESHOLD = 2000;
@@ -1213,6 +1216,7 @@ async function listCatalogMenuItems(req, res) {
     }
 
     const categoryWhere = {
+      name: { notIn: Array.from(EXCLUDED_CRISBAR_CATEGORY_NAMES) },
       sub_brand_links: {
         some: {
           sub_brand_id: redeemSubBrand.id,
