@@ -919,7 +919,9 @@ async function resendCustomerActivation(req, res) {
 async function retryCustomerRunchiseSync(req, res) {
   try {
     const id = parsePositiveInt(req.params.id, 'id');
-    const runchiseSync = await syncCustomerToRunchise(id);
+    const runchiseSync = await syncCustomerToRunchise(id, {
+      allowCreate: false,
+    });
     const customer = await prisma.customer.findUnique({
       where: { id },
       include: getAdminCustomerInclude(),

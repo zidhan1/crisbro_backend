@@ -2,6 +2,7 @@ const prisma = require('../lib/prisma');
 const {
   createCustomer,
   findCustomerByPhone,
+  findCustomerByPhoneAcrossLocations,
   normalizeIndonesianPhone,
   updateCustomer,
 } = require('./runchiseService');
@@ -46,6 +47,16 @@ function buildRunchiseCustomerInput(customer, runchiseLocationId) {
     gender: customer.gender,
     email: customer.user?.email,
     owner_location_id: runchiseLocationId,
+  };
+}
+
+function buildBlockedCreateResult(error, reason, extra = {}) {
+  return {
+    status: SYNC_STATUS.FAILED,
+    error,
+    reason,
+    blocked_create: true,
+    ...extra,
   };
 }
 
@@ -98,7 +109,8 @@ async function updateSyncStatus(customerId, data) {
   }
 }
 
-async function syncCustomerToRunchise(customerId) {
+async function syncCustomerToRunchise(customerId, options = {}) {
+  const { allowCreate = true } = options;
   const customer = await prisma.customer.findUnique({
     where: { id: customerId },
     include: {
@@ -188,9 +200,38 @@ async function syncCustomerToRunchise(customerId) {
       runchiseLocationId,
       customer.phone_number,
     );
+    const existingInOtherLocation = !existingByPhone
+      ? await findCustomerByPhoneAcrossLocations(
+          customer.phone_number,
+          runchiseLocationId,
+        )
+      : null;
     let matchedExisting = false;
     let usedPatch = false;
     let runchiseCustomer = null;
+
+    const blockCreate = async (message, reason, extra = {}) => {
+      await updateSyncStatus(customer.id, {
+        runchise_sync_status: SYNC_STATUS.FAILED,
+        runchise_sync_error: message,
+        runchise_synced_at: null,
+        normalized_phone_number: normalizedPhone,
+      });
+
+      return buildBlockedCreateResult(message, reason, extra);
+    };
+
+    if (existingInOtherLocation?.customer?.id) {
+      return blockCreate(
+        `Nomor customer sudah terdaftar di Runchise pada outlet/location ${existingInOtherLocation.location_id}. Periksa owner outlet sebelum sync agar tidak membuat duplikat.`,
+        'existing_phone_in_other_location',
+        {
+          matched_existing: true,
+          matched_location_id: existingInOtherLocation.location_id,
+          runchise_customer_id: Number(existingInOtherLocation.customer.id),
+        },
+      );
+    }
 
     if (customer.runchise_id) {
       if (
@@ -236,6 +277,13 @@ async function syncCustomerToRunchise(customerId) {
           matchedExisting = true;
           usedPatch = true;
         } else {
+          if (!allowCreate) {
+            return blockCreate(
+              'Retry sync tidak membuat customer baru di Runchise. Customer belum ditemukan di outlet Runchise yang dipilih; periksa nomor dan owner outlet terlebih dulu.',
+              'create_disabled_for_retry',
+            );
+          }
+
           runchiseCustomer = (
             await createCustomer(runchiseLocationId, customerInput)
           )?.customer;
@@ -254,6 +302,13 @@ async function syncCustomerToRunchise(customerId) {
         matchedExisting = true;
         usedPatch = true;
       } else {
+        if (!allowCreate) {
+          return blockCreate(
+            'Retry sync tidak membuat customer baru di Runchise. Customer belum ditemukan di outlet Runchise yang dipilih; periksa nomor dan owner outlet terlebih dulu.',
+            'create_disabled_for_retry',
+          );
+        }
+
         runchiseCustomer = (
           await createCustomer(runchiseLocationId, customerInput)
         )?.customer;

@@ -162,6 +162,27 @@ async function findCustomerByPhone(locationId, phoneNumber) {
   );
 }
 
+async function findCustomerByPhoneAcrossLocations(phoneNumber, excludedLocationId = null) {
+  const normalizedPhone = normalizeIndonesianPhone(phoneNumber);
+  if (!normalizedPhone) return null;
+
+  const excludedId = Number(excludedLocationId);
+  const locations = await fetchAllLocations();
+
+  for (const location of locations) {
+    const locationId = Number(location.id);
+    if (!Number.isInteger(locationId) || locationId <= 0) continue;
+    if (Number.isInteger(excludedId) && locationId === excludedId) continue;
+
+    const customer = await findCustomerByPhone(locationId, normalizedPhone);
+    if (customer) {
+      return { customer, location_id: locationId };
+    }
+  }
+
+  return null;
+}
+
 // ===================== PRODUCTS =====================
 
 // Mengambil semua produk dari Runchise (pagination otomatis)
@@ -315,6 +336,7 @@ async function updateCustomer(locationId, customerId, customerData) {
 module.exports = {
   fetchAllCustomers,
   findCustomerByPhone,
+  findCustomerByPhoneAcrossLocations,
   normalizeIndonesianPhone,
   fetchAllProducts,
   fetchAllSubBrands,
