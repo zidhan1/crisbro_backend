@@ -179,6 +179,18 @@ function parseOptionalString(value, fieldName, maxLength = 255) {
   return trimmed || null;
 }
 
+function parseOptionalEmail(value, fieldName = 'email', maxLength = 255) {
+  const email = parseOptionalString(value, fieldName, maxLength);
+  if (!email) return email;
+
+  const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailPattern.test(email)) {
+    throw new Error(`${fieldName} harus berupa email valid`);
+  }
+
+  return email.toLowerCase();
+}
+
 function parseRequiredString(value, fieldName, maxLength = 255) {
   const parsed = parseOptionalString(value, fieldName, maxLength);
   if (!parsed) throw new Error(`${fieldName} wajib diisi`);
@@ -417,7 +429,7 @@ async function listAdminUsers(req, res) {
 
 async function createAdminUser(req, res) {
   try {
-    const email = parseOptionalString(req.body.email, 'email', 255);
+    const email = parseOptionalEmail(req.body.email);
     const phone_number = normalizePhone(req.body.phone_number);
     const password = parseRequiredString(req.body.password, 'password', 255);
     const role = parseAdminUserRole(req.body.role);
@@ -461,7 +473,7 @@ async function updateAdminUser(req, res) {
     const data = {};
 
     if (req.body.email !== undefined)
-      data.email = parseOptionalString(req.body.email, 'email', 255);
+      data.email = parseOptionalEmail(req.body.email);
     if (req.body.phone_number !== undefined)
       data.phone_number = normalizePhone(req.body.phone_number);
     if (req.body.role !== undefined)
@@ -609,7 +621,7 @@ async function createAdminCustomer(req, res) {
   try {
     const name = parseRequiredString(req.body.name, 'name', 120);
     const phone_number = normalizePhone(req.body.phone_number);
-    const email = parseOptionalString(req.body.email, 'email', 255);
+    const email = parseOptionalEmail(req.body.email);
     const brand_id = parsePositiveInt(req.body.brand_id ?? 1, 'brand_id');
     const owner_location_id = parsePositiveInt(
       req.body.owner_location_id,
@@ -737,7 +749,7 @@ async function updateAdminCustomer(req, res) {
       userData.phone_number = data.phone_number;
     }
     if (req.body.email !== undefined)
-      userData.email = parseOptionalString(req.body.email, 'email', 255);
+      userData.email = parseOptionalEmail(req.body.email);
     if (req.body.phone_number_country_code !== undefined) {
       data.phone_number_country_code = parsePositiveInt(
         req.body.phone_number_country_code,
