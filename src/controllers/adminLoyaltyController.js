@@ -710,13 +710,25 @@ async function createAdminCustomer(req, res) {
     const runchiseSync = await syncCustomerToRunchise(customer.id);
 
     let activationEmail = null;
-    try {
-      activationEmail = await sendCustomerActivationLink(customer);
-    } catch (emailError) {
+    if (runchiseSync.status === 'synced') {
+      try {
+        activationEmail = await sendCustomerActivationLink(customer);
+      } catch (emailError) {
+        activationEmail = {
+          sent: false,
+          skipped: false,
+          error: emailError.message,
+        };
+      }
+    } else {
       activationEmail = {
         sent: false,
-        skipped: false,
-        error: emailError.message,
+        skipped: true,
+        reason: 'runchise_sync_not_synced',
+        error:
+          runchiseSync.error ||
+          runchiseSync.reason ||
+          'Customer belum tersinkron ke Runchise',
       };
     }
 
