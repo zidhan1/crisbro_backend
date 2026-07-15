@@ -31,9 +31,9 @@ const {
 } = require('../controllers/adminLoyaltyController');
 
 const router = express.Router();
-const adminStaffOnly = requireRole('admin', 'staff');
+const adminOnly = requireRole('admin');
 const superAdminOnly = requireRole('admin');
-const marketingOnly = requireRole('admin', 'staff', 'marketing');
+const marketingOnly = requireRole('admin', 'marketing');
 
 router.use(auth);
 
@@ -54,9 +54,9 @@ router.get('/locations', marketingOnly, listAdminLocations);
 
 router.get('/loyalty-summary', marketingOnly, getSummary);
 
-router.get('/rewards', adminStaffOnly, listRewards);
-router.post('/rewards', adminStaffOnly, createReward);
-router.put('/rewards/:id', adminStaffOnly, updateReward);
+router.get('/rewards', adminOnly, listRewards);
+router.post('/rewards', adminOnly, createReward);
+router.put('/rewards/:id', adminOnly, updateReward);
 
 router.get('/catalog/menu-items', marketingOnly, listCatalogMenuItems);
 
@@ -69,7 +69,7 @@ router.post('/redeem-menu/items', marketingOnly, createRedeemItem);
 router.put('/redeem-menu/items/:id', marketingOnly, updateRedeemItem);
 router.delete('/redeem-menu/items/:id', marketingOnly, deleteRedeemItem);
 
-router.get('/redemptions', adminStaffOnly, listRedemptions);
-router.put('/redemptions/:id/status', adminStaffOnly, updateRedemptionStatus);
+router.get('/redemptions', adminOnly, listRedemptions);
+router.put('/redemptions/:id/status', adminOnly, updateRedemptionStatus);
 
 module.exports = router;

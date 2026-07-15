@@ -401,7 +401,7 @@ async function listAdminUsers(req, res) {
 
     const users = await prisma.user.findMany({
       where: {
-        role: { in: ['admin', 'staff', 'marketing'] },
+        role: { in: ['admin', 'marketing'] },
         ...(search && {
           OR: [
             { email: { contains: search, mode: 'insensitive' } },
