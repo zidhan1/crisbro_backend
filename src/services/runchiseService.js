@@ -4,6 +4,7 @@ const axios = require('axios');
 // Membuat instance axios khusus untuk API Runchise
 const runchiseClient = axios.create({
   baseURL: 'https://api.runchise.com/api/public',
+  timeout: Number(process.env.RUNCHISE_API_TIMEOUT_MS || 30000),
   headers: {
     Accept: 'application/json',
     Authorization: process.env.RUNCHISE_API_KEY,
@@ -12,6 +13,54 @@ const runchiseClient = axios.create({
 });
 
 // ===================== UTIL =====================
+
+const TRANSIENT_NETWORK_CODES = new Set([
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'ECONNABORTED',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+]);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientRunchiseError(error) {
+  const status = error.response?.status;
+
+  return (
+    TRANSIENT_NETWORK_CODES.has(error.code) ||
+    status === 408 ||
+    status === 425 ||
+    status === 429 ||
+    (status >= 500 && status <= 599)
+  );
+}
+
+async function requestWithRetry(label, request, { retries = 2 } = {}) {
+  let lastError;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await request();
+    } catch (error) {
+      lastError = error;
+
+      if (!isTransientRunchiseError(error) || attempt === retries) {
+        break;
+      }
+
+      const delayMs = 500 * 2 ** attempt;
+      console.warn(
+        `${label} gagal sementara (${error.code || error.response?.status || error.message}), retry ${attempt + 1}/${retries}`,
+      );
+      await sleep(delayMs);
+    }
+  }
+
+  throw lastError;
+}
 
 // Normalisasi nomor HP Indonesia (hapus 0 / 62 / karakter non-digit)
 function normalizeIndonesianPhone(raw) {
@@ -82,11 +131,12 @@ async function fetchAllCustomers(locationId) {
   let hasMore = true;
 
   while (hasMore) {
-    const { data } = await runchiseClient.get(
-      `/locations/${locationId}/customers`,
-      {
-        params: { page, item_per_page: 100 },
-      },
+    const { data } = await requestWithRetry(
+      `Fetch customers Runchise page ${page}`,
+      () =>
+        runchiseClient.get(`/locations/${locationId}/customers`, {
+          params: { page, item_per_page: 100 },
+        }),
     );
 
     allCustomers = allCustomers.concat(data.customers);
@@ -121,9 +171,13 @@ async function fetchAllProducts() {
   let hasMore = true;
 
   while (hasMore) {
-    const { data } = await runchiseClient.get('/products', {
-      params: { page, item_per_page: 100, status: 'activated' },
-    });
+    const { data } = await requestWithRetry(
+      `Fetch products Runchise page ${page}`,
+      () =>
+        runchiseClient.get('/products', {
+          params: { page, item_per_page: 100, status: 'activated' },
+        }),
+    );
 
     allProducts = allProducts.concat(data.products);
     hasMore = data.paging.next_page !== null;
@@ -142,12 +196,16 @@ async function fetchAllSubBrands() {
   let hasMore = true;
 
   while (hasMore) {
-    const { data } = await runchiseClient.get('/sub_brands', {
-      params: {
-        page,
-        item_per_page: 100,
-      },
-    });
+    const { data } = await requestWithRetry(
+      `Fetch sub brands Runchise page ${page}`,
+      () =>
+        runchiseClient.get('/sub_brands', {
+          params: {
+            page,
+            item_per_page: 100,
+          },
+        }),
+    );
 
     // Gabungkan data sub-brand
     allSubBrands = allSubBrands.concat(data.sub_brands);
@@ -169,9 +227,13 @@ async function fetchAllLocations() {
   let hasMore = true;
 
   while (hasMore) {
-    const { data } = await runchiseClient.get('/locations', {
-      params: { page, item_per_page: 100 },
-    });
+    const { data } = await requestWithRetry(
+      `Fetch locations Runchise page ${page}`,
+      () =>
+        runchiseClient.get('/locations', {
+          params: { page, item_per_page: 100 },
+        }),
+    );
 
     allLocations = allLocations.concat(data.locations);
 
@@ -193,9 +255,13 @@ async function fetchAllPromos() {
   let hasMore = true;
 
   while (hasMore) {
-    const { data } = await runchiseClient.get('/promos', {
-      params: { page, item_per_page: 100 },
-    });
+    const { data } = await requestWithRetry(
+      `Fetch promos Runchise page ${page}`,
+      () =>
+        runchiseClient.get('/promos', {
+          params: { page, item_per_page: 100 },
+        }),
+    );
 
     allPromos = allPromos.concat(data.promos);
     hasMore = data.paging.next_page !== null;
@@ -227,9 +293,13 @@ async function createCustomer(locationId, customerData) {
 
 async function updateCustomer(locationId, customerId, customerData) {
   try {
-    const { data } = await runchiseClient.patch(
-      `/locations/${locationId}/customers/${customerId}`,
-      buildCustomerPayload(locationId, customerData),
+    const { data } = await requestWithRetry(
+      `Update customer Runchise ${customerId}`,
+      () =>
+        runchiseClient.patch(
+          `/locations/${locationId}/customers/${customerId}`,
+          buildCustomerPayload(locationId, customerData),
+        ),
     );
     return data;
   } catch (error) {

@@ -195,12 +195,18 @@ async function syncCustomers(locationId = 1) {
 
     const normalizedPhone = normalizePhone(c.phone_number);
     const phoneNumberVariants = phoneVariants(normalizedPhone);
+    const syncedAt = new Date();
 
     // Mapping data customer dari Runchise ke format lokal
     const payload = {
-      runchise_id: c.id,
+      runchise_id: Number(c.id),
+      runchise_location_id: ownerLocationId,
+      runchise_sync_status: 'synced',
+      runchise_sync_error: null,
+      runchise_synced_at: syncedAt,
       name: c.name,
       phone_number: normalizedPhone,
+      normalized_phone_number: normalizedPhone,
       phone_number_country_code: c.phone_number_country_code ?? 62,
       address: c.address ?? null,
       province: c.province ?? null,
