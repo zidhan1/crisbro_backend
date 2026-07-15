@@ -185,6 +185,60 @@ function parseRequiredString(value, fieldName, maxLength = 255) {
   return parsed;
 }
 
+function parseSortOrder(value, fallback = 'asc') {
+  return value === 'desc' ? 'desc' : fallback;
+}
+
+function buildAdminUserOrderBy(sortBy, sortOrder) {
+  const order = parseSortOrder(sortOrder, sortBy === 'created_at' ? 'desc' : 'asc');
+  const map = {
+    email: [{ email: order }, { id: 'asc' }],
+    phone_number: [{ phone_number: order }, { id: 'asc' }],
+    role: [{ role: order }, { created_at: 'desc' }, { id: 'desc' }],
+    created_at: [{ created_at: order }, { id: order }],
+  };
+
+  return map[sortBy] ?? [{ role: 'asc' }, { created_at: 'desc' }, { id: 'desc' }];
+}
+
+function buildAdminCustomerOrderBy(sortBy, sortOrder) {
+  const order = parseSortOrder(sortOrder, sortBy === 'created_at' ? 'desc' : 'asc');
+  const map = {
+    name: [{ name: order }, { id: 'desc' }],
+    email: [{ user: { email: order } }, { id: 'desc' }],
+    phone_number: [{ phone_number: order }, { id: 'desc' }],
+    outlet: [{ owner_location: { name: order } }, { name: 'asc' }, { id: 'desc' }],
+    points: [{ customer_point: { available_point: order } }, { id: 'desc' }],
+    status: [{ status: order }, { id: 'desc' }],
+    activation_status: [{ user: { activation_status: order } }, { id: 'desc' }],
+    runchise_sync_status: [{ runchise_sync_status: order }, { id: 'desc' }],
+    created_at: [{ created_at: order }, { id: order }],
+    updated_at: [{ updated_at: order }, { id: order }],
+  };
+
+  return map[sortBy] ?? [{ created_at: 'desc' }, { id: 'desc' }];
+}
+
+function buildRedeemItemOrderBy(sortBy, sortOrder) {
+  const order = parseSortOrder(sortOrder, sortBy === 'created_at' ? 'desc' : 'asc');
+  const map = {
+    menu: [{ menu_item: { name: order } }, { id: 'asc' }],
+    price: [{ menu_item: { price: order } }, { id: 'asc' }],
+    points: [{ points_required: order }, { id: 'asc' }],
+    status: [{ is_active: order }, { sort_order: 'asc' }, { id: 'asc' }],
+    sort_order: [{ category: { sort_order: order } }, { sort_order: order }, { id: 'asc' }],
+    created_at: [{ created_at: order }, { id: order }],
+  };
+
+  return (
+    map[sortBy] ?? [
+      { category: { sort_order: 'asc' } },
+      { sort_order: 'asc' },
+      { id: 'asc' },
+    ]
+  );
+}
+
 function normalizePhone(raw) {
   const phone = parseOptionalString(raw, 'phone_number', 30);
   if (!phone) return null;
@@ -330,6 +384,8 @@ function handleError(res, error) {
 async function listAdminUsers(req, res) {
   try {
     const search = parseOptionalString(req.query.search, 'search', 100);
+    const sortBy = parseOptionalString(req.query.sort_by, 'sort_by', 50);
+    const sortOrder = parseOptionalString(req.query.sort_order, 'sort_order', 10);
 
     const users = await prisma.user.findMany({
       where: {
@@ -350,7 +406,7 @@ async function listAdminUsers(req, res) {
         created_at: true,
         updated_at: true,
       },
-      orderBy: [{ role: 'asc' }, { created_at: 'desc' }],
+      orderBy: buildAdminUserOrderBy(sortBy, sortOrder),
     });
 
     res.json(users);
@@ -484,6 +540,8 @@ async function deleteAdminUser(req, res) {
 async function listAdminCustomers(req, res) {
   try {
     const search = parseOptionalString(req.query.search, 'search', 100);
+    const sortBy = parseOptionalString(req.query.sort_by, 'sort_by', 50);
+    const sortOrder = parseOptionalString(req.query.sort_order, 'sort_order', 10);
     const page = parsePositiveInt(req.query.page ?? 1, 'page');
     const limit = Math.min(
       parsePositiveInt(req.query.limit ?? 20, 'limit'),
@@ -530,7 +588,7 @@ async function listAdminCustomers(req, res) {
         },
         customer_point: true,
       },
-      orderBy: { updated_at: 'desc' },
+      orderBy: buildAdminCustomerOrderBy(sortBy, sortOrder),
       skip,
       take: limit,
     });
@@ -1353,6 +1411,8 @@ async function updateRedeemCategory(req, res) {
 
 async function listRedeemItems(req, res) {
   try {
+    const sortBy = parseOptionalString(req.query.sort_by, 'sort_by', 50);
+    const sortOrder = parseOptionalString(req.query.sort_order, 'sort_order', 10);
     const items = await prisma.redeemMenuItem.findMany({
       select: {
         id: true,
@@ -1382,11 +1442,7 @@ async function listRedeemItems(req, res) {
           include: { category: { select: { id: true, name: true } } },
         },
       },
-      orderBy: [
-        { category: { sort_order: 'asc' } },
-        { sort_order: 'asc' },
-        { id: 'asc' },
-      ],
+      orderBy: buildRedeemItemOrderBy(sortBy, sortOrder),
     });
 
     res.json(items.map(addRedeemPriceBreakdown));
