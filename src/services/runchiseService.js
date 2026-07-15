@@ -124,6 +124,20 @@ function buildCustomerPayload(locationId, customerData) {
 
 // ===================== CUSTOMERS =====================
 
+const RUNCHISE_PAGE_SIZE = 100;
+
+async function fetchCustomersPage(locationId, page) {
+  const { data } = await requestWithRetry(
+    `Fetch customers Runchise page ${page}`,
+    () =>
+      runchiseClient.get(`/locations/${locationId}/customers`, {
+        params: { page, item_per_page: RUNCHISE_PAGE_SIZE },
+      }),
+  );
+
+  return data;
+}
+
 // Mengambil semua customer dari Runchise (pagination otomatis)
 async function fetchAllCustomers(locationId) {
   let allCustomers = [];
@@ -131,13 +145,7 @@ async function fetchAllCustomers(locationId) {
   let hasMore = true;
 
   while (hasMore) {
-    const { data } = await requestWithRetry(
-      `Fetch customers Runchise page ${page}`,
-      () =>
-        runchiseClient.get(`/locations/${locationId}/customers`, {
-          params: { page, item_per_page: 100 },
-        }),
-    );
+    const data = await fetchCustomersPage(locationId, page);
 
     allCustomers = allCustomers.concat(data.customers);
     hasMore = data.paging.next_page !== null;
@@ -152,14 +160,23 @@ async function findCustomerByPhone(locationId, phoneNumber) {
   const normalizedPhone = normalizeIndonesianPhone(phoneNumber);
   if (!normalizedPhone) return null;
 
-  const customers = await fetchAllCustomers(locationId);
+  let page = 1;
+  let hasMore = true;
 
-  return (
-    customers.find(
+  while (hasMore) {
+    const data = await fetchCustomersPage(locationId, page);
+    const customer = data.customers.find(
       (customer) =>
         normalizeIndonesianPhone(customer.phone_number) === normalizedPhone,
-    ) || null
-  );
+    );
+
+    if (customer) return customer;
+
+    hasMore = data.paging.next_page !== null;
+    page++;
+  }
+
+  return null;
 }
 
 async function findCustomerByPhoneAcrossLocations(phoneNumber, excludedLocationId = null) {
