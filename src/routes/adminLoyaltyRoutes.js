@@ -10,6 +10,7 @@ const {
   createAdminCustomer,
   updateAdminCustomer,
   resendCustomerActivation,
+  retryCustomerRunchiseSync,
   deleteAdminCustomer,
   listAdminBrands,
   listAdminLocations,
@@ -45,6 +46,7 @@ router.get('/customers', marketingOnly, listAdminCustomers);
 router.post('/customers', marketingOnly, createAdminCustomer);
 router.put('/customers/:id', marketingOnly, updateAdminCustomer);
 router.post('/customers/:id/activation', marketingOnly, resendCustomerActivation);
+router.post('/customers/:id/runchise-sync', marketingOnly, retryCustomerRunchiseSync);
 router.delete('/customers/:id', marketingOnly, deleteAdminCustomer);
 
 router.get('/brands', marketingOnly, listAdminBrands);

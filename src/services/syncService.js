@@ -37,6 +37,31 @@ function normalizePhone(raw) {
   return digits;
 }
 
+function normalizeLocationName(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function mapRunchiseLocationToLocalData(loc, brandId) {
+  return {
+    brand_id: brandId,
+    runchise_id: Number(loc.id),
+    name: loc.name,
+    address: loc.shipping_address ?? loc.address ?? null,
+    city: loc.city ?? null,
+    province: loc.province ?? null,
+    phone: loc.contact_number
+      ? `+62${String(loc.contact_number).replace(/^0/, '')}`
+      : null,
+    latitude: loc.latitude ? parseFloat(loc.latitude) : null,
+    longitude: loc.longitude ? parseFloat(loc.longitude) : null,
+    is_active: loc.status ? loc.status === 'activated' : true,
+    is_outlet: true,
+  };
+}
+
 function phoneVariants(normalizedPhone) {
   if (!normalizedPhone) return [];
 
@@ -762,6 +787,11 @@ async function syncLocations(brandId = 1) {
   let synced = 0;
 
   for (const loc of locations) {
+    const runchiseLocationId = Number(loc.id);
+    if (!Number.isInteger(runchiseLocationId) || runchiseLocationId <= 0) {
+      continue;
+    }
+
     // Pastikan brand ada dulu
     await prisma.brand.upsert({
       where: { id: brandId },
@@ -769,44 +799,66 @@ async function syncLocations(brandId = 1) {
       create: { id: brandId, name: `Brand ${brandId}` },
     });
 
-    await prisma.location.upsert({
-      where: { id: Number(loc.id) },
-      update: {
-        name: loc.name,
-        address: loc.shipping_address ?? null,
-        city: loc.city ?? null,
-        province: loc.province ?? null,
-        phone: loc.contact_number
-          ? `+62${loc.contact_number.replace(/^0/, '')}`
-          : null,
-        latitude: loc.latitude ? parseFloat(loc.latitude) : null,
-        longitude: loc.longitude ? parseFloat(loc.longitude) : null,
-        is_active: loc.status === 'activated',
-        brand_id: brandId,
-        runchise_id: loc.is_franchise ? loc.id : null,
-      },
-      create: {
-        id: Number(loc.id),
-        brand_id: brandId,
-        runchise_id: loc.is_franchise ? Number(loc.id) : null,
-        name: loc.name,
-        address: loc.shipping_address ?? null,
-        city: loc.city ?? null,
-        province: loc.province ?? null,
-        phone: loc.contact_number
-          ? `+62${loc.contact_number.replace(/^0/, '')}`
-          : null,
-        latitude: loc.latitude ? parseFloat(loc.latitude) : null,
-        longitude: loc.longitude ? parseFloat(loc.longitude) : null,
-        is_active: loc.status === 'activated',
-        is_outlet: true,
+    const data = mapRunchiseLocationToLocalData(loc, brandId);
+    const existing = await prisma.location.findFirst({
+      where: {
+        OR: [
+          { runchise_id: runchiseLocationId },
+          { id: runchiseLocationId },
+          { name: { equals: loc.name, mode: 'insensitive' } },
+        ],
       },
     });
+
+    if (existing) {
+      await prisma.location.update({
+        where: { id: existing.id },
+        data,
+      });
+    } else {
+      await prisma.location.create({
+        data: {
+          id: runchiseLocationId,
+          ...data,
+        },
+      });
+    }
 
     synced++;
   }
 
   return { synced, total: locations.length };
+}
+
+async function ensureLocalLocationRunchiseMapping(localLocationId, brandId = 1) {
+  if (!localLocationId) return null;
+
+  const localLocation = await prisma.location.findUnique({
+    where: { id: Number(localLocationId) },
+  });
+
+  if (!localLocation) return null;
+  if (localLocation.runchise_id) return localLocation;
+
+  const locations = await fetchAllLocations();
+  const normalizedLocalName = normalizeLocationName(localLocation.name);
+  const matchedLocation = locations.find((loc) => {
+    const runchiseLocationId = Number(loc.id);
+
+    return (
+      runchiseLocationId === localLocation.id ||
+      normalizeLocationName(loc.name) === normalizedLocalName
+    );
+  });
+
+  if (!matchedLocation) return localLocation;
+
+  const data = mapRunchiseLocationToLocalData(matchedLocation, brandId);
+
+  return prisma.location.update({
+    where: { id: localLocation.id },
+    data,
+  });
 }
 
 // ===================== SYNC PROMOS =====================
@@ -912,5 +964,6 @@ module.exports = {
   syncCustomerPoints,
   syncBrands,
   syncLocations,
+  ensureLocalLocationRunchiseMapping,
   syncPromos,
 };

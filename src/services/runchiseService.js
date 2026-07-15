@@ -23,6 +23,56 @@ function normalizeIndonesianPhone(raw) {
   return digits;
 }
 
+function formatRunchisePhone(raw, countryCode = 62) {
+  const normalizedPhone = normalizeIndonesianPhone(raw);
+  if (!normalizedPhone) return null;
+
+  return normalizedPhone;
+}
+
+function formatRunchiseDate(value) {
+  if (!value) return null;
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return date.toISOString().slice(0, 10);
+}
+
+function getRunchiseErrorMessage(error) {
+  const errorData = error.response?.data;
+
+  if (errorData?.errors) {
+    return JSON.stringify(errorData.errors);
+  }
+
+  return errorData?.message || error.message || 'Gagal menghubungi Runchise';
+}
+
+function buildCustomerPayload(locationId, customerData) {
+  const phoneNumberCountryCode = Number(
+    customerData.phone_number_country_code ?? 62,
+  );
+
+  return {
+    name: customerData.name,
+    phone_number: formatRunchisePhone(
+      customerData.phone_number,
+      phoneNumberCountryCode,
+    ),
+    address: customerData.address || '',
+    phone_number_country_code: phoneNumberCountryCode,
+    city: customerData.city || '',
+    gender: customerData.gender || 'unknown',
+    dob: formatRunchiseDate(customerData.dob),
+    email: customerData.email || null,
+    province: customerData.province || '',
+    country: customerData.country || 'Indonesia',
+    postal_code: customerData.postal_code || '',
+    owner_location_id: Number(customerData.owner_location_id ?? locationId),
+  };
+}
+
 // ===================== CUSTOMERS =====================
 
 // Mengambil semua customer dari Runchise (pagination otomatis)
@@ -160,42 +210,47 @@ async function fetchAllPromos() {
 // Membuat customer baru di Runchise
 async function createCustomer(locationId, customerData) {
   try {
-    // Sesuai dokumentasi/kebutuhan API Runchise kamu biasanya dikirim ke endpoint lokasinya
     const { data } = await runchiseClient.post(
       `/locations/${locationId}/customers`,
-      {
-        name: customerData.name,
-        phone_number: customerData.phone_number,
-        email: customerData.email || null,
-        status: 'active',
-        phone_number_country_code: 62,
-      },
+      buildCustomerPayload(locationId, customerData),
     );
     return data;
   } catch (error) {
-    // Mengambil pesan error dari server Runchise dengan aman
-    const errorData = error.response?.data;
     console.error(
       'Gagal membuat customer di Runchise:',
-      errorData || error.message,
+      getRunchiseErrorMessage(error),
     );
 
-    // Jika Runchise mengirimkan pesan error spesifik (seperti nomor sudah terdaftar)
-    if (errorData && errorData.errors) {
-      throw new Error(JSON.stringify(errorData.errors));
-    }
+    throw new Error(getRunchiseErrorMessage(error));
+  }
+}
 
-    throw new Error(errorData?.message || error.message);
+async function updateCustomer(locationId, customerId, customerData) {
+  try {
+    const { data } = await runchiseClient.patch(
+      `/locations/${locationId}/customers/${customerId}`,
+      buildCustomerPayload(locationId, customerData),
+    );
+    return data;
+  } catch (error) {
+    console.error(
+      'Gagal mengupdate customer di Runchise:',
+      getRunchiseErrorMessage(error),
+    );
+
+    throw new Error(getRunchiseErrorMessage(error));
   }
 }
 
 module.exports = {
   fetchAllCustomers,
   findCustomerByPhone,
+  normalizeIndonesianPhone,
   fetchAllProducts,
   fetchAllSubBrands,
   fetchAllLocations,
   fetchAllPromos,
   createCustomer,
+  updateCustomer,
   runchiseClient,
 };

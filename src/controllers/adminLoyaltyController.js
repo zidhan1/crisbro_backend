@@ -8,6 +8,9 @@ const { sendActivationEmail } = require('../services/emailService');
 const {
   EXCLUDED_CRISBAR_CATEGORY_NAMES,
 } = require('../constants/categoryMapping');
+const {
+  syncCustomerToRunchise,
+} = require('../services/runchiseCustomerSyncService');
 
 const DEFAULT_PB1_RATE = 0.1;
 const DEFAULT_REWARD_THRESHOLD = 2000;
@@ -88,6 +91,32 @@ function getRedeemCatalogConfig() {
       'RUNCHISE_REDEEM_SUB_BRAND_ID',
       DEFAULT_RUNCHISE_REDEEM_SUB_BRAND_ID,
     ),
+  };
+}
+
+function getAdminCustomerInclude() {
+  return {
+    user: {
+      select: {
+        id: true,
+        email: true,
+        phone_number: true,
+        role: true,
+        activation_status: true,
+        activated_at: true,
+      },
+    },
+    brand: { select: { id: true, name: true } },
+    owner_location: {
+      select: { id: true, name: true, city: true, runchise_id: true },
+    },
+    customer_locations: {
+      select: {
+        location_id: true,
+        location: { select: { id: true, name: true, city: true } },
+      },
+    },
+    customer_point: true,
   };
 }
 
@@ -527,9 +556,6 @@ async function createAdminCustomer(req, res) {
     const owner_location_id = parsePositiveInt(
       req.body.owner_location_id,
       'owner_location_id',
-      {
-        required: false,
-      },
     );
     const total_point = parseNonNegativeInt(
       req.body.total_point ?? 0,
@@ -607,29 +633,11 @@ async function createAdminCustomer(req, res) {
                 }
               : undefined,
         },
-        include: {
-          user: {
-            select: {
-              id: true,
-              email: true,
-              phone_number: true,
-              role: true,
-              activation_status: true,
-              activated_at: true,
-            },
-          },
-          brand: { select: { id: true, name: true } },
-          owner_location: { select: { id: true, name: true, city: true } },
-          customer_locations: {
-            select: {
-              location_id: true,
-              location: { select: { id: true, name: true, city: true } },
-            },
-          },
-          customer_point: true,
-        },
+        include: getAdminCustomerInclude(),
       });
     });
+
+    const runchiseSync = await syncCustomerToRunchise(customer.id);
 
     let activationEmail = null;
     try {
@@ -642,7 +650,16 @@ async function createAdminCustomer(req, res) {
       };
     }
 
-    res.status(201).json({ ...customer, activation_email: activationEmail });
+    const syncedCustomer = await prisma.customer.findUnique({
+      where: { id: customer.id },
+      include: getAdminCustomerInclude(),
+    });
+
+    res.status(201).json({
+      ...syncedCustomer,
+      runchise_sync: runchiseSync,
+      activation_email: activationEmail,
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -694,10 +711,10 @@ async function updateAdminCustomer(req, res) {
     if (req.body.brand_id !== undefined)
       data.brand_id = parsePositiveInt(req.body.brand_id, 'brand_id');
     if (req.body.owner_location_id !== undefined) {
-      data.owner_location_id =
-        parsePositiveInt(req.body.owner_location_id, 'owner_location_id', {
-          required: false,
-        }) ?? null;
+      data.owner_location_id = parsePositiveInt(
+        req.body.owner_location_id,
+        'owner_location_id',
+      );
     }
     if (req.body.total_point !== undefined) {
       pointData.total_point = parseNonNegativeInt(
@@ -723,6 +740,15 @@ async function updateAdminCustomer(req, res) {
         throw Object.assign(new Error('Customer tidak ditemukan'), {
           code: 'P2025',
         });
+      }
+
+      const effectiveOwnerLocationId =
+        data.owner_location_id !== undefined
+          ? data.owner_location_id
+          : existing.owner_location_id;
+
+      if (!effectiveOwnerLocationId) {
+        throw new Error('owner_location_id wajib diisi');
       }
 
       if (Object.keys(userData).length > 0) {
@@ -771,31 +797,20 @@ async function updateAdminCustomer(req, res) {
       return tx.customer.update({
         where: { id },
         data,
-        include: {
-          user: {
-            select: {
-              id: true,
-              email: true,
-              phone_number: true,
-              role: true,
-              activation_status: true,
-              activated_at: true,
-            },
-          },
-          brand: { select: { id: true, name: true } },
-          owner_location: { select: { id: true, name: true, city: true } },
-          customer_locations: {
-            select: {
-              location_id: true,
-              location: { select: { id: true, name: true, city: true } },
-            },
-          },
-          customer_point: true,
-        },
+        include: getAdminCustomerInclude(),
       });
     });
 
-    res.json(customer);
+    const runchiseSync = await syncCustomerToRunchise(customer.id);
+    const syncedCustomer = await prisma.customer.findUnique({
+      where: { id: customer.id },
+      include: getAdminCustomerInclude(),
+    });
+
+    res.json({
+      ...syncedCustomer,
+      runchise_sync: runchiseSync,
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -837,6 +852,24 @@ async function resendCustomerActivation(req, res) {
         ? 'Email aktivasi berhasil dikirim'
         : 'Email aktivasi belum terkirim',
       activation_email: activationEmail,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+async function retryCustomerRunchiseSync(req, res) {
+  try {
+    const id = parsePositiveInt(req.params.id, 'id');
+    const runchiseSync = await syncCustomerToRunchise(id);
+    const customer = await prisma.customer.findUnique({
+      where: { id },
+      include: getAdminCustomerInclude(),
+    });
+
+    res.json({
+      ...customer,
+      runchise_sync: runchiseSync,
     });
   } catch (error) {
     handleError(res, error);
@@ -1581,6 +1614,7 @@ module.exports = {
   createAdminCustomer,
   updateAdminCustomer,
   resendCustomerActivation,
+  retryCustomerRunchiseSync,
   deleteAdminCustomer,
   listAdminBrands,
   listAdminLocations,
