@@ -66,7 +66,7 @@ model AccountActivationToken {
 model Customer {
   id                        Int       @id @default(autoincrement())
   user_id                   Int       @unique
-  runchise_id               Int?
+  runchise_id               Int?      @unique
   runchise_location_id      Int?
   runchise_sync_status      String    @default("pending") // pending | synced | failed | skipped
   runchise_sync_error       String?   @db.Text
@@ -106,7 +106,6 @@ model Customer {
 
   @@index([phone_number])
   @@index([normalized_phone_number])
-  @@index([runchise_id])
   @@index([runchise_location_id])
   @@index([runchise_sync_status])
 }
