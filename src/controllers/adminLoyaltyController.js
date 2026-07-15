@@ -252,10 +252,10 @@ function normalizePhone(raw) {
 
 function parseAdminUserRole(value) {
   const role = parseRequiredString(value ?? 'marketing', 'role', 30);
-  const allowedRoles = new Set(['admin', 'staff', 'marketing']);
+  const allowedRoles = new Set(['admin', 'marketing']);
 
   if (!allowedRoles.has(role)) {
-    throw new Error('role harus admin, staff, atau marketing');
+    throw new Error('role harus admin atau marketing');
   }
 
   return role;
