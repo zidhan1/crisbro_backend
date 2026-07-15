@@ -60,6 +60,16 @@ function buildBlockedCreateResult(error, reason, extra = {}) {
   };
 }
 
+function buildBlockedRelinkResult(error, reason, extra = {}) {
+  return {
+    status: SYNC_STATUS.FAILED,
+    error,
+    reason,
+    blocked_relink: true,
+    ...extra,
+  };
+}
+
 async function updateSyncStatus(customerId, data) {
   const coreData = {};
   const syncColumnMap = {
@@ -221,6 +231,17 @@ async function syncCustomerToRunchise(customerId, options = {}) {
       return buildBlockedCreateResult(message, reason, extra);
     };
 
+    const blockRelink = async (message, reason, extra = {}) => {
+      await updateSyncStatus(customer.id, {
+        runchise_sync_status: SYNC_STATUS.FAILED,
+        runchise_sync_error: message,
+        runchise_synced_at: null,
+        normalized_phone_number: normalizedPhone,
+      });
+
+      return buildBlockedRelinkResult(message, reason, extra);
+    };
+
     if (existingInOtherLocation?.customer?.id) {
       return blockCreate(
         `Nomor customer sudah terdaftar di Runchise pada outlet/location ${existingInOtherLocation.location_id}. Periksa owner outlet sebelum sync agar tidak membuat duplikat.`,
@@ -238,22 +259,17 @@ async function syncCustomerToRunchise(customerId, options = {}) {
         existingByPhone?.id &&
         Number(existingByPhone.id) !== Number(customer.runchise_id)
       ) {
-        await updateSyncStatus(customer.id, {
-          runchise_id: Number(existingByPhone.id),
-          runchise_location_id: runchiseLocationId,
-          runchise_sync_status: SYNC_STATUS.SYNCED,
-          runchise_sync_error: null,
-          runchise_synced_at: new Date(),
-          normalized_phone_number: normalizedPhone,
-        });
-
-        return {
-          status: SYNC_STATUS.SYNCED,
-          runchise_customer_id: Number(existingByPhone.id),
-          matched_existing: true,
-          relinked_existing: true,
-          updated_existing: false,
-        };
+        return blockRelink(
+          `Nomor customer sudah dipakai customer Runchise lain (#${existingByPhone.id}). Sync diblokir agar customer lokal tidak tersambung ke identitas Runchise yang salah.`,
+          'phone_matches_different_runchise_customer',
+          {
+            current_runchise_customer_id: Number(customer.runchise_id),
+            matched_existing: true,
+            matched_location_id: runchiseLocationId,
+            matched_runchise_customer_id: Number(existingByPhone.id),
+            runchise_customer_id: Number(existingByPhone.id),
+          },
+        );
       }
 
       try {
