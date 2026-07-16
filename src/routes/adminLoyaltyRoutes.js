@@ -33,7 +33,7 @@ const {
 const router = express.Router();
 const adminOnly = requireRole('admin');
 const superAdminOnly = requireRole('admin');
-const marketingOnly = requireRole('admin', 'marketing');
+const adminOrMarketing = requireRole('admin', 'marketing');
 
 router.use(auth);
 
@@ -42,32 +42,34 @@ router.post('/users', superAdminOnly, createAdminUser);
 router.put('/users/:id', superAdminOnly, updateAdminUser);
 router.delete('/users/:id', superAdminOnly, deleteAdminUser);
 
-router.get('/customers', marketingOnly, listAdminCustomers);
-router.post('/customers', marketingOnly, createAdminCustomer);
-router.put('/customers/:id', marketingOnly, updateAdminCustomer);
-router.post('/customers/:id/activation', marketingOnly, resendCustomerActivation);
-router.post('/customers/:id/runchise-sync', marketingOnly, retryCustomerRunchiseSync);
-router.delete('/customers/:id', marketingOnly, deleteAdminCustomer);
+// Marketing intentionally has the same customer and redeem-menu permissions as admin.
+// User management remains admin-only through the /users routes above.
+router.get('/customers', adminOrMarketing, listAdminCustomers);
+router.post('/customers', adminOrMarketing, createAdminCustomer);
+router.put('/customers/:id', adminOrMarketing, updateAdminCustomer);
+router.post('/customers/:id/activation', adminOrMarketing, resendCustomerActivation);
+router.post('/customers/:id/runchise-sync', adminOrMarketing, retryCustomerRunchiseSync);
+router.delete('/customers/:id', adminOrMarketing, deleteAdminCustomer);
 
-router.get('/brands', marketingOnly, listAdminBrands);
-router.get('/locations', marketingOnly, listAdminLocations);
+router.get('/brands', adminOrMarketing, listAdminBrands);
+router.get('/locations', adminOrMarketing, listAdminLocations);
 
-router.get('/loyalty-summary', marketingOnly, getSummary);
+router.get('/loyalty-summary', adminOrMarketing, getSummary);
 
 router.get('/rewards', adminOnly, listRewards);
 router.post('/rewards', adminOnly, createReward);
 router.put('/rewards/:id', adminOnly, updateReward);
 
-router.get('/catalog/menu-items', marketingOnly, listCatalogMenuItems);
+router.get('/catalog/menu-items', adminOrMarketing, listCatalogMenuItems);
 
-router.get('/redeem-menu/categories', marketingOnly, listRedeemCategories);
-router.post('/redeem-menu/categories', marketingOnly, createRedeemCategory);
-router.put('/redeem-menu/categories/:id', marketingOnly, updateRedeemCategory);
+router.get('/redeem-menu/categories', adminOrMarketing, listRedeemCategories);
+router.post('/redeem-menu/categories', adminOrMarketing, createRedeemCategory);
+router.put('/redeem-menu/categories/:id', adminOrMarketing, updateRedeemCategory);
 
-router.get('/redeem-menu/items', marketingOnly, listRedeemItems);
-router.post('/redeem-menu/items', marketingOnly, createRedeemItem);
-router.put('/redeem-menu/items/:id', marketingOnly, updateRedeemItem);
-router.delete('/redeem-menu/items/:id', marketingOnly, deleteRedeemItem);
+router.get('/redeem-menu/items', adminOrMarketing, listRedeemItems);
+router.post('/redeem-menu/items', adminOrMarketing, createRedeemItem);
+router.put('/redeem-menu/items/:id', adminOrMarketing, updateRedeemItem);
+router.delete('/redeem-menu/items/:id', adminOrMarketing, deleteRedeemItem);
 
 router.get('/redemptions', adminOnly, listRedemptions);
 router.put('/redemptions/:id/status', adminOnly, updateRedemptionStatus);
