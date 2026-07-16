@@ -81,10 +81,9 @@ async function register(req, res) {
 
     const phoneNumberVariants = phoneVariants(phone_number);
 
-    const syncedCustomer = await prisma.customer.findFirst({
+    const registeredCustomer = await prisma.customer.findFirst({
       where: {
         phone_number: { in: phoneNumberVariants },
-        runchise_id: { not: null },
       },
       include: {
         user: true,
@@ -92,13 +91,13 @@ async function register(req, res) {
       },
     });
 
-    // Jika customer belum tersinkron dari Runchise maka registrasi ditolak
-    if (!syncedCustomer) {
+    // Jika customer belum ada di database lokal maka registrasi ditolak
+    if (!registeredCustomer) {
       return res.status(404).json({
         message:
-          'Nomor telepon belum terdaftar di data Runchise. Silakan hubungi Admin untuk melakukan pendaftaran.',
+          'Nomor telepon belum terdaftar. Silakan hubungi Admin untuk melakukan pendaftaran.',
         whatsappUrl:
-          'https://wa.me/6282121214145?text=Halo%20Admin,%20nomor%20telepon%20saya%20belum%20terdaftar%20di%20data%20Runchise.%20Mohon%20bantuannya.',
+          'https://wa.me/6282121214145?text=Halo%20Admin,%20nomor%20telepon%20saya%20belum%20terdaftar.%20Mohon%20bantuannya.',
       });
     }
 
@@ -113,37 +112,64 @@ async function register(req, res) {
     });
 
     // Mencari user berdasarkan ID Runchise
-    const existingUserByRunchiseId = await prisma.user.findFirst({
-      where: {
-        customer: {
-          runchise_id: syncedCustomer.runchise_id,
-        },
-      },
-      include: {
-        customer: {
-          include: { customer_point: true },
-        },
-      },
-    });
+    const existingUserByRunchiseId = registeredCustomer.runchise_id
+      ? await prisma.user.findFirst({
+          where: {
+            customer: {
+              runchise_id: registeredCustomer.runchise_id,
+            },
+          },
+          include: {
+            customer: {
+              include: { customer_point: true },
+            },
+          },
+        })
+      : null;
+
+    const existingUser = existingUserByPhone || existingUserByRunchiseId;
+
+    if (
+      registeredCustomer.user &&
+      existingUser &&
+      registeredCustomer.user.id !== existingUser.id
+    ) {
+      return res.status(409).json({
+        message:
+          'Nomor telepon sudah terhubung ke akun lain. Silakan hubungi Admin.',
+      });
+    }
 
     // Mengecek apakah akun sudah pernah melakukan registrasi
     const registeredExistingUser = [
       existingUserByPhone,
       existingUserByRunchiseId,
+      registeredCustomer.user,
     ].find((user) => user && !isSyncedPlaceholderUser(user));
 
     if (registeredExistingUser) {
       return res.status(400).json({ message: 'Nomor telepon sudah terdaftar' });
     }
 
-    const existingUser = existingUserByPhone || existingUserByRunchiseId;
+    const userToActivate = existingUser || registeredCustomer.user;
+
+    if (!userToActivate) {
+      return res.status(404).json({
+        message:
+          'Nomor telepon belum terdaftar. Silakan hubungi Admin untuk melakukan pendaftaran.',
+        whatsappUrl:
+          'https://wa.me/6282121214145?text=Halo%20Admin,%20nomor%20telepon%20saya%20belum%20terdaftar.%20Mohon%20bantuannya.',
+      });
+    }
+
+    const sourceCustomer = userToActivate.customer || registeredCustomer;
 
     // Mengenkripsi password sebelum disimpan
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Menentukan brand customer
     const brandId =
-      syncedCustomer.brand_id ?? existingUser?.customer?.brand_id ?? 1;
+      sourceCustomer.brand_id ?? userToActivate.customer?.brand_id ?? 1;
 
     // Membuat data brand jika belum tersedia
     await prisma.brand.upsert({
@@ -152,126 +178,77 @@ async function register(req, res) {
       create: { id: brandId, name: `Brand ${brandId}` },
     });
 
-    // Jika user sudah ada, lakukan update data
-    if (existingUser) {
-      // Update user dan customer dalam satu transaksi database
-      const user = await prisma.$transaction(async (tx) => {
-        const updatedUser = await tx.user.update({
-          where: { id: existingUser.id },
-          data: {
-            email,
-            phone_number,
-            password_hash: hashedPassword,
-            activation_status: 'active',
-            activated_at: new Date(),
-            customer: existingUser.customer
-              ? {
-                  update: {
-                    name,
-                    phone_number,
-                    status: 'active',
-                  },
-                }
-              : {
-                  create: {
-                    runchise_id: syncedCustomer.runchise_id,
-                    name,
-                    phone_number,
-                    phone_number_country_code:
-                      syncedCustomer.phone_number_country_code,
-                    address: syncedCustomer.address,
-                    province: syncedCustomer.province,
-                    city: syncedCustomer.city,
-                    country: syncedCustomer.country,
-                    postal_code: syncedCustomer.postal_code,
-                    dob: syncedCustomer.dob,
-                    gender: syncedCustomer.gender,
-                    status: 'active',
-                    balance: syncedCustomer.balance,
-                    brand_id: brandId,
-                    owner_location_id: syncedCustomer.owner_location_id,
-                  },
+    // Aktifkan user placeholder yang dibuat dari admin atau sync Runchise.
+    const user = await prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.user.update({
+        where: { id: userToActivate.id },
+        data: {
+          email,
+          phone_number,
+          password_hash: hashedPassword,
+          activation_status: 'active',
+          activated_at: new Date(),
+          customer: userToActivate.customer
+            ? {
+                update: {
+                  name,
+                  phone_number,
+                  status: 'active',
                 },
+              }
+            : {
+                create: {
+                  runchise_id: sourceCustomer.runchise_id,
+                  name,
+                  phone_number,
+                  phone_number_country_code:
+                    sourceCustomer.phone_number_country_code,
+                  address: sourceCustomer.address,
+                  province: sourceCustomer.province,
+                  city: sourceCustomer.city,
+                  country: sourceCustomer.country,
+                  postal_code: sourceCustomer.postal_code,
+                  dob: sourceCustomer.dob,
+                  gender: sourceCustomer.gender,
+                  status: 'active',
+                  balance: sourceCustomer.balance,
+                  brand_id: brandId,
+                  owner_location_id: sourceCustomer.owner_location_id,
+                },
+              },
+        },
+        include: {
+          customer: {
+            include: { customer_point: true },
           },
+        },
+      });
+
+      if (!updatedUser.customer.customer_point) {
+        await tx.customerPoint.create({
+          data: {
+            customer_id: updatedUser.customer.id,
+            total_point: sourceCustomer.customer_point?.total_point ?? 0,
+            available_point:
+              sourceCustomer.customer_point?.available_point ?? 0,
+            next_reward_threshold: 2000,
+          },
+        });
+
+        return tx.user.findUnique({
+          where: { id: updatedUser.id },
           include: {
             customer: {
               include: { customer_point: true },
             },
           },
         });
+      }
 
-        if (!updatedUser.customer.customer_point) {
-          await tx.customerPoint.create({
-            data: {
-              customer_id: updatedUser.customer.id,
-              total_point: syncedCustomer.customer_point?.total_point ?? 0,
-              available_point:
-                syncedCustomer.customer_point?.available_point ?? 0,
-              next_reward_threshold: 2000,
-            },
-          });
-
-          return tx.user.findUnique({
-            where: { id: updatedUser.id },
-            include: {
-              customer: {
-                include: { customer_point: true },
-              },
-            },
-          });
-        }
-
-        return updatedUser;
-      });
-
-      return res.status(200).json(serializeAuthUser(user));
-    }
-
-    // Jika user belum ada, buat akun baru
-    const user = await prisma.user.create({
-      data: {
-        email,
-        phone_number,
-        password_hash: hashedPassword,
-        activation_status: 'active',
-        activated_at: new Date(),
-        role: 'customer',
-        customer: {
-          create: {
-            runchise_id: syncedCustomer.runchise_id,
-            name,
-            phone_number,
-            phone_number_country_code: syncedCustomer.phone_number_country_code,
-            address: syncedCustomer.address,
-            province: syncedCustomer.province,
-            city: syncedCustomer.city,
-            country: syncedCustomer.country,
-            postal_code: syncedCustomer.postal_code,
-            dob: syncedCustomer.dob,
-            gender: syncedCustomer.gender,
-            status: 'active',
-            balance: syncedCustomer.balance,
-            brand_id: brandId,
-            owner_location_id: syncedCustomer.owner_location_id,
-            customer_point: {
-              create: {
-                total_point: syncedCustomer.customer_point?.total_point ?? 0,
-                available_point:
-                  syncedCustomer.customer_point?.available_point ?? 0,
-                next_reward_threshold: 2000,
-              },
-            },
-          },
-        },
-      },
-      include: {
-        customer: {
-          include: { customer_point: true },
-        },
-      },
+      return updatedUser;
     });
 
-    return res.status(201).json(serializeAuthUser(user));
+    return res.status(200).json(serializeAuthUser(user));
   } catch (error) {
     // Menangani error yang tidak terduga
     return res.status(500).json({ error: error.message });
