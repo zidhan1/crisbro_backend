@@ -423,15 +423,23 @@ async function syncCustomerPoints(locationId = 1) {
 
 // ===================== SYNC SALES TRANSACTION REPORT =====================
 
-function buildSalesTransactionParams({ locationId, from, to } = {}) {
+function buildSalesTransactionParams({
+  locationId,
+  startDate,
+  endDate,
+  status,
+  paymentMethodIds,
+} = {}) {
   const params = {};
   const numericLocationId = Number(locationId);
 
   if (Number.isInteger(numericLocationId) && numericLocationId > 0) {
     params.location_id = numericLocationId;
   }
-  if (from) params.from = from;
-  if (to) params.to = to;
+  if (startDate) params.start_date = startDate;
+  if (endDate) params.end_date = endDate;
+  if (status) params.status = status;
+  if (paymentMethodIds) params.payment_method_ids = paymentMethodIds;
 
   return params;
 }
@@ -485,8 +493,10 @@ function mapSalesTransactionReportData(sale, runchiseCustomer, localCustomer) {
 async function syncSalesTransactionReports(locationId = 1, options = {}) {
   const params = buildSalesTransactionParams({
     locationId,
-    from: options.from,
-    to: options.to,
+    startDate: options.startDate ?? options.start_date ?? options.from,
+    endDate: options.endDate ?? options.end_date ?? options.to,
+    status: options.status,
+    paymentMethodIds: options.paymentMethodIds ?? options.payment_method_ids,
   });
   const [salesTransactions, runchiseCustomers] = await Promise.all([
     fetchAllSalesTransactions(params),

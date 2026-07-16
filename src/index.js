@@ -187,6 +187,10 @@ async function handleSyncSalesTransactions(req, res) {
   try {
     const locationId = req.query.location_id || process.env.RUNCHISE_SYNC_LOCATION_ID || 1;
     const result = await syncSalesTransactionReports(locationId, {
+      start_date: req.query.start_date,
+      end_date: req.query.end_date,
+      status: req.query.status,
+      payment_method_ids: req.query.payment_method_ids,
       from: req.query.from,
       to: req.query.to,
     });

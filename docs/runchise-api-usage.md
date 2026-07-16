@@ -54,6 +54,7 @@ Content-Type: application/json
 - Change master-data schedule: `RUNCHISE_MASTER_SYNC_CRON="0 1,13 * * *"`
 - Legacy master-data override still supported: `RUNCHISE_SYNC_CRON="0 1,13 * * *"`
 - Change customer-points schedule: `RUNCHISE_POINTS_SYNC_CRON="*/15 * * * *"`
+- Sales transaction sync uses Runchise params: `start_date`, `end_date`, `location_id`, `payment_method_ids`, `status`
 - Override sales transaction endpoint path if needed: `RUNCHISE_SALES_TRANSACTIONS_PATH="/sale_transactions"`
 - Disable initial boot sync: `RUNCHISE_SYNC_ON_START=false`
 - Product/catalog response cache TTL: `CATALOG_RESPONSE_CACHE_TTL_MS=300000`
