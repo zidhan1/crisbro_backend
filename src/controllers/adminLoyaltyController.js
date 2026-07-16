@@ -812,10 +812,21 @@ async function updateAdminCustomer(req, res) {
     }
     data.last_updated_by_id = req.user.id;
 
+    let shouldSendActivationEmail = false;
+
     const customer = await prisma.$transaction(async (tx) => {
       const existing = await tx.customer.findUnique({
         where: { id },
-        select: { user_id: true, owner_location_id: true },
+        select: {
+          user_id: true,
+          owner_location_id: true,
+          user: {
+            select: {
+              email: true,
+              activation_status: true,
+            },
+          },
+        },
       });
 
       if (!existing) {
@@ -838,9 +849,18 @@ async function updateAdminCustomer(req, res) {
           where: { id: existing.user_id },
           data: userData,
         });
+
+        if (
+          Object.prototype.hasOwnProperty.call(userData, 'email') &&
+          userData.email &&
+          userData.email !== existing.user?.email &&
+          existing.user?.activation_status === 'pending_activation'
+        ) {
+          shouldSendActivationEmail = true;
+        }
       }
 
-    if (Object.keys(pointData).length > 0) {
+      if (Object.keys(pointData).length > 0) {
         await tx.customerPoint.upsert({
           where: { customer_id: id },
           update: pointData,
@@ -853,7 +873,10 @@ async function updateAdminCustomer(req, res) {
         });
       }
 
-      if (req.body.location_ids !== undefined || data.owner_location_id !== undefined) {
+      if (
+        req.body.location_ids !== undefined ||
+        data.owner_location_id !== undefined
+      ) {
         const ownerLocationId =
           data.owner_location_id !== undefined
             ? data.owner_location_id
@@ -889,9 +912,23 @@ async function updateAdminCustomer(req, res) {
       include: getAdminCustomerInclude(),
     });
 
+    let activationEmail = null;
+    if (shouldSendActivationEmail) {
+      try {
+        activationEmail = await sendCustomerActivationLink(syncedCustomer);
+      } catch (emailError) {
+        activationEmail = {
+          sent: false,
+          skipped: false,
+          error: emailError.message,
+        };
+      }
+    }
+
     res.json({
       ...syncedCustomer,
       runchise_sync: runchiseSync,
+      activation_email: activationEmail,
     });
   } catch (error) {
     handleError(res, error);
