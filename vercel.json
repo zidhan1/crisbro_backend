@@ -11,5 +11,15 @@
       "src": "/(.*)",
       "dest": "/api/index.js"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/runchise-sync/master",
+      "schedule": "0 12,18 * * *"
+    },
+    {
+      "path": "/api/cron/runchise-sync/points",
+      "schedule": "*/30 * * * *"
+    }
   ]
 }

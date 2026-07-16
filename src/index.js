@@ -4,6 +4,7 @@ require('dotenv').config({ quiet: true });
 // Core dependencies
 const express = require('express');
 const cors = require('cors');
+const crypto = require('crypto');
 const { openApiSpec, renderSwaggerHtml } = require('./docs/swagger');
 
 // Prisma ORM (database client)
@@ -35,7 +36,11 @@ const {
   syncLocations,
   syncPromos,
 } = require('./services/syncService');
-const { startRunchiseSyncCron } = require('./jobs/runchiseSyncCron');
+const {
+  startRunchiseSyncCron,
+  runRunchiseMasterSyncJob,
+  runCustomerPointsSyncJob,
+} = require('./jobs/runchiseSyncCron');
 
 // ===================== APP SETUP =====================
 const app = express();
@@ -201,6 +206,93 @@ app.post('/api/admin/sync/points', ...adminOnly, handleSyncPoints);
 app.post('/api/admin/sync/brands', ...adminOnly, handleSyncBrands);
 app.post('/api/admin/sync/locations', ...adminOnly, handleSyncLocations);
 app.post('/api/admin/sync/promos', ...adminOnly, handleSyncPromos);
+
+// ===================== VERCEL CRON SYNC ROUTES =====================
+
+function safeStringEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ''));
+  const rightBuffer = Buffer.from(String(right || ''));
+
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    crypto.timingSafeEqual(leftBuffer, rightBuffer)
+  );
+}
+
+function requireCronSecret(req, res, next) {
+  const secret = process.env.CRON_SECRET || process.env.RUNCHISE_SYNC_CRON_SECRET;
+
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(503).json({
+        message: 'CRON_SECRET belum dikonfigurasi',
+      });
+    }
+
+    return next();
+  }
+
+  const authorization = req.get('authorization') || '';
+  const bearerToken = authorization.startsWith('Bearer ')
+    ? authorization.slice('Bearer '.length)
+    : '';
+  const headerToken = req.get('x-cron-secret') || '';
+
+  if (
+    safeStringEqual(bearerToken, secret) ||
+    safeStringEqual(headerToken, secret)
+  ) {
+    return next();
+  }
+
+  return res.status(401).json({ message: 'Unauthorized cron request' });
+}
+
+function createCronSyncHandler(jobName, job) {
+  return async (req, res) => {
+    const startedAt = new Date();
+
+    try {
+      const result = await job();
+
+      res.json({
+        message: `Cron sync ${jobName} selesai`,
+        job: jobName,
+        started_at: startedAt,
+        finished_at: new Date(),
+        result,
+      });
+    } catch (error) {
+      console.error(`[cron:${jobName}] failed:`, error);
+      res.status(500).json({
+        message: `Cron sync ${jobName} gagal`,
+        job: jobName,
+        error: error.message,
+      });
+    }
+  };
+}
+
+app.get(
+  '/api/cron/runchise-sync/master',
+  requireCronSecret,
+  createCronSyncHandler('runchise-master', runRunchiseMasterSyncJob),
+);
+app.post(
+  '/api/cron/runchise-sync/master',
+  requireCronSecret,
+  createCronSyncHandler('runchise-master', runRunchiseMasterSyncJob),
+);
+app.get(
+  '/api/cron/runchise-sync/points',
+  requireCronSecret,
+  createCronSyncHandler('runchise-points', runCustomerPointsSyncJob),
+);
+app.post(
+  '/api/cron/runchise-sync/points',
+  requireCronSecret,
+  createCronSyncHandler('runchise-points', runCustomerPointsSyncJob),
+);
 
 // ===================== START SERVER =====================
 if (require.main === module) {
