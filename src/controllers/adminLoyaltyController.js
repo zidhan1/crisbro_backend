@@ -11,6 +11,7 @@ const {
 const {
   syncCustomerToRunchise,
 } = require('../services/runchiseCustomerSyncService');
+const { recordAdminActivity } = require('../services/adminActivityLogService');
 
 const DEFAULT_PB1_RATE = 0.1;
 const DEFAULT_REWARD_THRESHOLD = 2000;
@@ -118,6 +119,83 @@ function getAdminCustomerInclude() {
     },
     customer_point: true,
   };
+}
+
+async function getCustomerAuditSnapshot(id, tx = prisma) {
+  return tx.customer.findUnique({
+    where: { id },
+    include: getAdminCustomerInclude(),
+  });
+}
+
+function comparableAuditValue(value) {
+  if (value instanceof Date) return value.toISOString();
+  if (
+    value &&
+    typeof value === 'object' &&
+    value.constructor?.name === 'Decimal'
+  ) {
+    return value.toString();
+  }
+  return value ?? null;
+}
+
+function auditValuesEqual(before, after) {
+  return (
+    JSON.stringify(comparableAuditValue(before)) ===
+    JSON.stringify(comparableAuditValue(after))
+  );
+}
+
+function sortedLocationIds(customer) {
+  return (customer?.customer_locations ?? [])
+    .map((location) => Number(location.location_id))
+    .filter((locationId) => Number.isInteger(locationId))
+    .sort((a, b) => a - b);
+}
+
+function getActualCustomerChangedFields({
+  before,
+  after,
+  customerFields = [],
+  userFields = [],
+  pointFields = [],
+  locationIdsTouched = false,
+}) {
+  const changedFields = [];
+
+  for (const field of customerFields) {
+    if (field === 'last_updated_by_id') continue;
+    if (!auditValuesEqual(before?.[field], after?.[field])) {
+      changedFields.push(field);
+    }
+  }
+
+  for (const field of userFields) {
+    if (!auditValuesEqual(before?.user?.[field], after?.user?.[field])) {
+      changedFields.push(`user.${field}`);
+    }
+  }
+
+  for (const field of pointFields) {
+    if (
+      !auditValuesEqual(
+        before?.customer_point?.[field],
+        after?.customer_point?.[field],
+      )
+    ) {
+      changedFields.push(`point.${field}`);
+    }
+  }
+
+  if (
+    locationIdsTouched &&
+    !auditValuesEqual(sortedLocationIds(before), sortedLocationIds(after))
+  ) {
+    changedFields.push('location_ids');
+  }
+
+  return changedFields;
 }
 
 function badRequest(res, message) {
@@ -427,6 +505,82 @@ async function listAdminUsers(req, res) {
   }
 }
 
+async function listAdminActivityLogs(req, res) {
+  try {
+    const search = parseOptionalString(req.query.search, 'search', 100);
+    const action = parseOptionalString(req.query.action, 'action', 80);
+    const entityType = parseOptionalString(
+      req.query.entity_type,
+      'entity_type',
+      80,
+    );
+    const actorId = parsePositiveInt(req.query.actor_user_id, 'actor_user_id', {
+      required: false,
+    });
+    const from = parseDateBoundary(req.query.from, 'from');
+    const to = parseDateBoundary(req.query.to, 'to', true);
+    const page = parsePositiveInt(req.query.page ?? 1, 'page');
+    const limit = Math.min(
+      parsePositiveInt(req.query.limit ?? 50, 'limit'),
+      100,
+    );
+    const where = {
+      ...(action ? { action } : {}),
+      ...(entityType ? { entity_type: entityType } : {}),
+      ...(actorId ? { actor_user_id: actorId } : {}),
+      ...(from || to
+        ? {
+            created_at: {
+              ...(from ? { gte: from } : {}),
+              ...(to ? { lte: to } : {}),
+            },
+          }
+        : {}),
+      ...(search
+        ? {
+            OR: [
+              { action: { contains: search, mode: 'insensitive' } },
+              { entity_type: { contains: search, mode: 'insensitive' } },
+              { actor_role: { contains: search, mode: 'insensitive' } },
+              { actor: { email: { contains: search, mode: 'insensitive' } } },
+              { actor: { phone_number: { contains: search } } },
+            ],
+          }
+        : {}),
+    };
+
+    const total = await prisma.adminActivityLog.count({ where });
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const clampedPage = Math.min(page, totalPages);
+    const logs = await prisma.adminActivityLog.findMany({
+      where,
+      include: {
+        actor: {
+          select: {
+            id: true,
+            email: true,
+            phone_number: true,
+            role: true,
+          },
+        },
+      },
+      orderBy: { created_at: 'desc' },
+      skip: (clampedPage - 1) * limit,
+      take: limit,
+    });
+
+    res.json({
+      items: logs,
+      page: clampedPage,
+      limit,
+      total,
+      total_pages: totalPages,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
 async function createAdminUser(req, res) {
   try {
     const email = parseOptionalEmail(req.body.email);
@@ -459,6 +613,15 @@ async function createAdminUser(req, res) {
         created_at: true,
         updated_at: true,
       },
+    });
+
+    await recordAdminActivity({
+      req,
+      action: 'create_admin_user',
+      entityType: 'user',
+      entityId: user.id,
+      after: user,
+      metadata: { role },
     });
 
     res.status(201).json(user);
@@ -495,6 +658,18 @@ async function updateAdminUser(req, res) {
       return badRequest(res, 'Admin tidak dapat mengubah role akun sendiri');
     }
 
+    const before = await prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        email: true,
+        phone_number: true,
+        role: true,
+        created_at: true,
+        updated_at: true,
+      },
+    });
+
     const user = await prisma.user.update({
       where: { id },
       data,
@@ -506,6 +681,16 @@ async function updateAdminUser(req, res) {
         created_at: true,
         updated_at: true,
       },
+    });
+
+    await recordAdminActivity({
+      req,
+      action: 'update_admin_user',
+      entityType: 'user',
+      entityId: user.id,
+      before,
+      after: user,
+      metadata: { changed_fields: Object.keys(data) },
     });
 
     res.json(user);
@@ -542,6 +727,14 @@ async function deleteAdminUser(req, res) {
       prisma.session.deleteMany({ where: { user_id: id } }),
       prisma.user.delete({ where: { id } }),
     ]);
+
+    await recordAdminActivity({
+      req,
+      action: 'delete_admin_user',
+      entityType: 'user',
+      entityId: id,
+      before: user,
+    });
 
     res.json({ message: 'User berhasil dihapus' });
   } catch (error) {
@@ -737,6 +930,18 @@ async function createAdminCustomer(req, res) {
       include: getAdminCustomerInclude(),
     });
 
+    await recordAdminActivity({
+      req,
+      action: 'create_customer',
+      entityType: 'customer',
+      entityId: syncedCustomer.id,
+      after: syncedCustomer,
+      metadata: {
+        runchise_sync: runchiseSync,
+        activation_email: activationEmail,
+      },
+    });
+
     res.status(201).json({
       ...syncedCustomer,
       runchise_sync: runchiseSync,
@@ -750,6 +955,7 @@ async function createAdminCustomer(req, res) {
 async function updateAdminCustomer(req, res) {
   try {
     const id = parsePositiveInt(req.params.id, 'id');
+    const beforeCustomer = await getCustomerAuditSnapshot(id);
     const data = {};
     const userData = {};
     const pointData = {};
@@ -906,6 +1112,15 @@ async function updateAdminCustomer(req, res) {
       });
     });
 
+    const changedFields = getActualCustomerChangedFields({
+      before: beforeCustomer,
+      after: customer,
+      customerFields: Object.keys(data),
+      userFields: Object.keys(userData),
+      pointFields: Object.keys(pointData),
+      locationIdsTouched: req.body.location_ids !== undefined,
+    });
+
     const runchiseSync = await syncCustomerToRunchise(customer.id);
     const syncedCustomer = await prisma.customer.findUnique({
       where: { id: customer.id },
@@ -924,6 +1139,20 @@ async function updateAdminCustomer(req, res) {
         };
       }
     }
+
+    await recordAdminActivity({
+      req,
+      action: 'update_customer',
+      entityType: 'customer',
+      entityId: syncedCustomer.id,
+      before: beforeCustomer,
+      after: syncedCustomer,
+      metadata: {
+        changed_fields: changedFields,
+        runchise_sync: runchiseSync,
+        activation_email: activationEmail,
+      },
+    });
 
     res.json({
       ...syncedCustomer,
@@ -966,6 +1195,15 @@ async function resendCustomerActivation(req, res) {
 
     const activationEmail = await sendCustomerActivationLink(customer);
 
+    await recordAdminActivity({
+      req,
+      action: 'resend_customer_activation',
+      entityType: 'customer',
+      entityId: customer.id,
+      after: customer,
+      metadata: { activation_email: activationEmail },
+    });
+
     res.json({
       message: activationEmail.sent
         ? 'Email aktivasi berhasil dikirim'
@@ -988,6 +1226,15 @@ async function retryCustomerRunchiseSync(req, res) {
       include: getAdminCustomerInclude(),
     });
 
+    await recordAdminActivity({
+      req,
+      action: 'retry_customer_runchise_sync',
+      entityType: 'customer',
+      entityId: id,
+      after: customer,
+      metadata: { runchise_sync: runchiseSync },
+    });
+
     res.json({
       ...customer,
       runchise_sync: runchiseSync,
@@ -1000,6 +1247,7 @@ async function retryCustomerRunchiseSync(req, res) {
 async function deleteAdminCustomer(req, res) {
   try {
     const id = parsePositiveInt(req.params.id, 'id');
+    const beforeCustomer = await getCustomerAuditSnapshot(id);
     const customer = await prisma.customer.findUnique({
       where: { id },
       select: { user_id: true },
@@ -1018,6 +1266,14 @@ async function deleteAdminCustomer(req, res) {
       prisma.session.deleteMany({ where: { user_id: customer.user_id } }),
       prisma.user.delete({ where: { id: customer.user_id } }),
     ]);
+
+    await recordAdminActivity({
+      req,
+      action: 'delete_customer',
+      entityType: 'customer',
+      entityId: id,
+      before: beforeCustomer,
+    });
 
     res.json({ message: 'Customer berhasil dihapus' });
   } catch (error) {
@@ -1444,6 +1700,13 @@ async function createRedeemCategory(req, res) {
         is_active: parseBoolean(req.body.is_active ?? true, 'is_active'),
       },
     });
+    await recordAdminActivity({
+      req,
+      action: 'create_redeem_category',
+      entityType: 'redeem_category',
+      entityId: category.id,
+      after: category,
+    });
     res.status(201).json(category);
   } catch (error) {
     handleError(res, error);
@@ -1462,9 +1725,19 @@ async function updateRedeemCategory(req, res) {
     if (req.body.is_active !== undefined)
       data.is_active = parseBoolean(req.body.is_active, 'is_active');
 
+    const before = await prisma.redeemMenuCategory.findUnique({ where: { id } });
     const category = await prisma.redeemMenuCategory.update({
       where: { id },
       data,
+    });
+    await recordAdminActivity({
+      req,
+      action: 'update_redeem_category',
+      entityType: 'redeem_category',
+      entityId: category.id,
+      before,
+      after: category,
+      metadata: { changed_fields: Object.keys(data) },
     });
     res.json(category);
   } catch (error) {
@@ -1571,7 +1844,16 @@ async function createRedeemItem(req, res) {
       },
     });
 
-    res.status(201).json(addRedeemPriceBreakdown(item));
+    const responseItem = addRedeemPriceBreakdown(item);
+    await recordAdminActivity({
+      req,
+      action: 'create_redeem_item',
+      entityType: 'redeem_item',
+      entityId: item.id,
+      after: responseItem,
+    });
+
+    res.status(201).json(responseItem);
   } catch (error) {
     handleError(res, error);
   }
@@ -1613,6 +1895,13 @@ async function updateRedeemItem(req, res) {
         required: false,
       });
 
+    const before = await prisma.redeemMenuItem.findUnique({
+      where: { id },
+      include: {
+        category: true,
+        menu_item: { include: { category: true } },
+      },
+    });
     const item = await prisma.redeemMenuItem.update({
       where: { id },
       data,
@@ -1646,7 +1935,18 @@ async function updateRedeemItem(req, res) {
       },
     });
 
-    res.json(addRedeemPriceBreakdown(item));
+    const responseItem = addRedeemPriceBreakdown(item);
+    await recordAdminActivity({
+      req,
+      action: 'update_redeem_item',
+      entityType: 'redeem_item',
+      entityId: item.id,
+      before,
+      after: responseItem,
+      metadata: { changed_fields: Object.keys(data) },
+    });
+
+    res.json(responseItem);
   } catch (error) {
     handleError(res, error);
   }
@@ -1655,8 +1955,23 @@ async function updateRedeemItem(req, res) {
 async function deleteRedeemItem(req, res) {
   try {
     const id = parsePositiveInt(req.params.id, 'id');
+    const before = await prisma.redeemMenuItem.findUnique({
+      where: { id },
+      include: {
+        category: true,
+        menu_item: { include: { category: true } },
+      },
+    });
 
     await prisma.redeemMenuItem.delete({ where: { id } });
+
+    await recordAdminActivity({
+      req,
+      action: 'delete_redeem_item',
+      entityType: 'redeem_item',
+      entityId: id,
+      before,
+    });
 
     res.json({ message: 'Item redeem berhasil dihapus' });
   } catch (error) {
@@ -1726,6 +2041,7 @@ async function updateRedemptionStatus(req, res) {
 
 module.exports = {
   listAdminUsers,
+  listAdminActivityLogs,
   createAdminUser,
   updateAdminUser,
   deleteAdminUser,

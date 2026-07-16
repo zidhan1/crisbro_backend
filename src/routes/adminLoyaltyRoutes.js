@@ -3,6 +3,7 @@ const auth = require('../middleware/auth');
 const requireRole = require('../middleware/requireRole');
 const {
   listAdminUsers,
+  listAdminActivityLogs,
   createAdminUser,
   updateAdminUser,
   deleteAdminUser,
@@ -36,6 +37,8 @@ const superAdminOnly = requireRole('admin');
 const adminOrMarketing = requireRole('admin', 'marketing');
 
 router.use(auth);
+
+router.get('/activity-logs', adminOrMarketing, listAdminActivityLogs);
 
 router.get('/users', superAdminOnly, listAdminUsers);
 router.post('/users', superAdminOnly, createAdminUser);

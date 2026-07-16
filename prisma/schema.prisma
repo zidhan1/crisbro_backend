@@ -31,6 +31,29 @@ model User {
   customer          Customer?  @relation("UserToCustomer")
   created_customers Customer[] @relation("CreatedBy")
   updated_customers Customer[] @relation("LastUpdatedBy")
+  admin_activity_logs AdminActivityLog[]
+}
+
+model AdminActivityLog {
+  id            Int      @id @default(autoincrement())
+  actor_user_id Int?
+  actor_role    String?
+  action        String
+  entity_type   String
+  entity_id     Int?
+  before        Json?
+  after         Json?
+  metadata      Json?
+  ip_address    String?
+  user_agent    String?
+  created_at    DateTime @default(now())
+
+  actor User? @relation(fields: [actor_user_id], references: [id])
+
+  @@index([actor_user_id])
+  @@index([action])
+  @@index([entity_type, entity_id])
+  @@index([created_at])
 }
 
 model Session {
