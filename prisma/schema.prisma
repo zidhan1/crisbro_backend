@@ -126,6 +126,7 @@ model Customer {
   customer_point     CustomerPoint?
   point_histories    PointHistory[]
   redemptions        RewardRedemption[]
+  sales_transaction_reports CustomerSalesTransactionReport[]
 
   @@index([phone_number])
   @@index([normalized_phone_number])
@@ -360,6 +361,36 @@ model Promo {
   @@index([is_visible])
   @@index([start_at])
   @@index([is_visible, start_at])
+}
+
+model CustomerSalesTransactionReport {
+  id                            Int      @id @default(autoincrement())
+  runchise_sales_transaction_id Int      @unique
+  runchise_customer_id          Int?
+  customer_id                   Int?
+  runchise_location_id          Int?
+  nama_pelanggan                String?
+  no_telepon                    String?
+  lokasi_dibuat                 String?
+  pelanggan_sejak              DateTime?
+  poin_pelanggan                Int      @default(0)
+  tanggal_transaksi            DateTime?
+  nama_outlet                  String?
+  tipe_order                   String?
+  pembelian_per_order          Decimal  @default(0.0) @db.Decimal(12, 2)
+  penambahan_poin              Int      @default(0)
+  penggunaan_poin              Decimal  @default(0.0) @db.Decimal(12, 2)
+  raw                          Json?
+  created_at                   DateTime @default(now())
+  updated_at                   DateTime @updatedAt
+
+  customer Customer? @relation(fields: [customer_id], references: [id])
+
+  @@index([customer_id])
+  @@index([runchise_customer_id])
+  @@index([runchise_location_id])
+  @@index([tanggal_transaksi])
+  @@index([nama_outlet])
 }
 
 model RewardRedemption {

@@ -39,6 +39,7 @@ Content-Type: application/json
 | Runchise endpoint | Method | Local sync target |
 | --- | --- | --- |
 | `/locations/{locationId}/customers` | GET | `User`, `Customer`, `CustomerPoint` |
+| `/sale_transactions` | GET | `CustomerSalesTransactionReport` |
 | `/products` | GET | `MenuItem`, `MenuCategory` |
 | `/sub_brands` | GET | `Brand`, `SubBrand`, `SubBrandProductCategory` |
 | `/locations` | GET | `Location` |
@@ -53,6 +54,7 @@ Content-Type: application/json
 - Change master-data schedule: `RUNCHISE_MASTER_SYNC_CRON="0 1,13 * * *"`
 - Legacy master-data override still supported: `RUNCHISE_SYNC_CRON="0 1,13 * * *"`
 - Change customer-points schedule: `RUNCHISE_POINTS_SYNC_CRON="*/15 * * * *"`
+- Override sales transaction endpoint path if needed: `RUNCHISE_SALES_TRANSACTIONS_PATH="/sale_transactions"`
 - Disable initial boot sync: `RUNCHISE_SYNC_ON_START=false`
 - Product/catalog response cache TTL: `CATALOG_RESPONSE_CACHE_TTL_MS=300000`
 - Promo response cache TTL: `PROMO_RESPONSE_CACHE_TTL_MS=300000`
@@ -64,6 +66,7 @@ Content-Type: application/json
   - `POST /api/admin/sync/brands`
   - `POST /api/admin/sync/locations`
   - `POST /api/admin/sync/promos`
+  - `POST /api/admin/sync/sales-transactions`
 
 ## Current direct Runchise callers
 

@@ -4,6 +4,7 @@ const prisma = require('../lib/prisma');
 // Mengimpor service Runchise (API eksternal)
 const {
   fetchAllCustomers,
+  fetchAllSalesTransactions,
   fetchAllProducts,
   fetchAllSubBrands,
   fetchAllLocations,
@@ -324,6 +325,54 @@ async function syncCustomers(locationId = 1) {
   };
 }
 
+function parseIsoDate(value) {
+  if (!value) return null;
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function parseNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function parseInteger(value, fallback = 0) {
+  const number = parseNumber(value, fallback);
+  return Number.isInteger(number) ? number : Math.trunc(number);
+}
+
+function formatPhoneWithCountryCode(phoneNumber, countryCode = 62) {
+  if (!phoneNumber) return null;
+
+  const digits = String(phoneNumber).replace(/\D/g, '');
+  if (!digits) return null;
+
+  const code = String(countryCode || 62).replace(/\D/g, '') || '62';
+  if (digits.startsWith(code)) return `+${digits}`;
+  if (digits.startsWith('0')) return `+${code}${digits.slice(1)}`;
+
+  return `+${code}${digits}`;
+}
+
+function getOrderPurchaseAmount(sale) {
+  const payments = Array.isArray(sale.payments) ? sale.payments : [];
+  if (payments.length > 0) {
+    return payments.reduce(
+      (total, payment) => total + parseNumber(payment.amount_receive),
+      0,
+    );
+  }
+
+  return parseNumber(
+    sale.net_sales_after_tax ??
+      sale.amount_receive ??
+      sale.net_sales ??
+      sale.subtotal ??
+      sale.gross_sales,
+  );
+}
+
 // ===================== SYNC CUSTOMER POINTS =====================
 
 // Sync poin customer dari Runchise ke database lokal
@@ -370,6 +419,136 @@ async function syncCustomerPoints(locationId = 1) {
   await prisma.$transaction(ops);
 
   return { synced: ops.length, total: runchiseCustomers.length };
+}
+
+// ===================== SYNC SALES TRANSACTION REPORT =====================
+
+function buildSalesTransactionParams({ locationId, from, to } = {}) {
+  const params = {};
+  const numericLocationId = Number(locationId);
+
+  if (Number.isInteger(numericLocationId) && numericLocationId > 0) {
+    params.location_id = numericLocationId;
+  }
+  if (from) params.from = from;
+  if (to) params.to = to;
+
+  return params;
+}
+
+function mapSalesTransactionReportData(sale, runchiseCustomer, localCustomer) {
+  const metadata = sale.metadata || {};
+  const customerPoint = localCustomer?.customer_point;
+  const ownerLocation = localCustomer?.owner_location;
+  const phoneCountryCode =
+    sale.customer_phone_number_country_code ??
+    runchiseCustomer?.phone_number_country_code ??
+    localCustomer?.phone_number_country_code ??
+    62;
+  const phoneNumber =
+    sale.customer_phone_number ??
+    runchiseCustomer?.phone_number ??
+    localCustomer?.phone_number;
+
+  return {
+    runchise_sales_transaction_id: Number(sale.id),
+    runchise_customer_id: sale.customer_id ? Number(sale.customer_id) : null,
+    customer_id: localCustomer?.id ?? null,
+    runchise_location_id: sale.location_id ? Number(sale.location_id) : null,
+    nama_pelanggan:
+      sale.customer_name ?? runchiseCustomer?.name ?? localCustomer?.name ?? null,
+    no_telepon: formatPhoneWithCountryCode(phoneNumber, phoneCountryCode),
+    lokasi_dibuat:
+      runchiseCustomer?.owner_location?.name ?? ownerLocation?.name ?? null,
+    pelanggan_sejak:
+      parseIsoDate(runchiseCustomer?.created_at) ??
+      localCustomer?.member_since ??
+      null,
+    poin_pelanggan: parseInteger(
+      runchiseCustomer?.available_point ??
+        customerPoint?.available_point ??
+        metadata.available_point ??
+        metadata.total_point,
+    ),
+    tanggal_transaksi: parseIsoDate(
+      sale.sales_time ?? sale.sales_time_date ?? sale.created_at,
+    ),
+    nama_outlet: sale.location_name ?? sale.location?.name ?? null,
+    tipe_order: sale.order_type_name ?? null,
+    pembelian_per_order: getOrderPurchaseAmount(sale),
+    penambahan_poin: parseInteger(metadata.earned_point),
+    penggunaan_poin: parseNumber(metadata.redeemed_point),
+    raw: sale,
+  };
+}
+
+async function syncSalesTransactionReports(locationId = 1, options = {}) {
+  const params = buildSalesTransactionParams({
+    locationId,
+    from: options.from,
+    to: options.to,
+  });
+  const [salesTransactions, runchiseCustomers] = await Promise.all([
+    fetchAllSalesTransactions(params),
+    fetchAllCustomers(locationId),
+  ]);
+  const runchiseCustomerById = new Map(
+    runchiseCustomers.map((customer) => [Number(customer.id), customer]),
+  );
+  const runchiseCustomerIds = Array.from(
+    new Set(
+      salesTransactions
+        .map((sale) => Number(sale.customer_id))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  );
+  const localCustomers =
+    runchiseCustomerIds.length > 0
+      ? await prisma.customer.findMany({
+          where: { runchise_id: { in: runchiseCustomerIds } },
+          include: {
+            owner_location: { select: { id: true, name: true, city: true } },
+            customer_point: true,
+          },
+        })
+      : [];
+  const localCustomerByRunchiseId = new Map(
+    localCustomers.map((customer) => [Number(customer.runchise_id), customer]),
+  );
+
+  let synced = 0;
+  let skipped = 0;
+
+  for (const sale of salesTransactions) {
+    const saleId = Number(sale.id);
+    if (!Number.isInteger(saleId) || saleId <= 0) {
+      skipped++;
+      continue;
+    }
+
+    const runchiseCustomerId = Number(sale.customer_id);
+    const runchiseCustomer = runchiseCustomerById.get(runchiseCustomerId);
+    const localCustomer = localCustomerByRunchiseId.get(runchiseCustomerId);
+    const data = mapSalesTransactionReportData(
+      sale,
+      runchiseCustomer,
+      localCustomer,
+    );
+
+    await prisma.customerSalesTransactionReport.upsert({
+      where: { runchise_sales_transaction_id: saleId },
+      update: data,
+      create: data,
+    });
+
+    synced++;
+  }
+
+  return {
+    synced,
+    total: salesTransactions.length,
+    skipped,
+  };
 }
 
 // ===================== SYNC PRODUCTS =====================
@@ -968,6 +1147,7 @@ module.exports = {
   syncProductsAndRedeemMenu,
   syncCrisbroRedeemMenu,
   syncCustomerPoints,
+  syncSalesTransactionReports,
   syncBrands,
   syncLocations,
   ensureLocalLocationRunchiseMapping,

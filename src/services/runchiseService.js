@@ -125,6 +125,8 @@ function buildCustomerPayload(locationId, customerData) {
 // ===================== CUSTOMERS =====================
 
 const RUNCHISE_PAGE_SIZE = 100;
+const RUNCHISE_SALES_TRANSACTIONS_PATH =
+  process.env.RUNCHISE_SALES_TRANSACTIONS_PATH || '/sale_transactions';
 
 async function fetchCustomersPage(locationId, page) {
   const { data } = await requestWithRetry(
@@ -177,6 +179,61 @@ async function findCustomerByPhone(locationId, phoneNumber) {
   }
 
   return null;
+}
+
+// ===================== SALES TRANSACTIONS =====================
+
+function extractSalesTransactions(data) {
+  if (Array.isArray(data)) return data;
+
+  return (
+    data.sales_transactions ||
+    data.sale_transactions ||
+    data.transactions ||
+    data.data ||
+    []
+  );
+}
+
+async function fetchSalesTransactionsPage(page, params = {}) {
+  const { data } = await requestWithRetry(
+    `Fetch sales transactions Runchise page ${page}`,
+    () =>
+      runchiseClient.get(RUNCHISE_SALES_TRANSACTIONS_PATH, {
+        params: {
+          page,
+          item_per_page: RUNCHISE_PAGE_SIZE,
+          ...params,
+        },
+      }),
+  );
+
+  return data;
+}
+
+async function fetchAllSalesTransactions(params = {}) {
+  let allTransactions = [];
+  let page = 1;
+  let hasMore = true;
+
+  while (hasMore) {
+    const data = await fetchSalesTransactionsPage(page, params);
+    const pageTransactions = extractSalesTransactions(data);
+
+    allTransactions = allTransactions.concat(pageTransactions);
+
+    if (data.paging?.next_page !== undefined) {
+      hasMore = data.paging.next_page !== null;
+    } else if (data.paging?.total_item !== undefined) {
+      hasMore = allTransactions.length < data.paging.total_item;
+    } else {
+      hasMore = pageTransactions.length === RUNCHISE_PAGE_SIZE;
+    }
+
+    page++;
+  }
+
+  return allTransactions;
 }
 
 async function findCustomerByPhoneAcrossLocations(phoneNumber, excludedLocationId = null) {
@@ -352,6 +409,7 @@ async function updateCustomer(locationId, customerId, customerData) {
 
 module.exports = {
   fetchAllCustomers,
+  fetchAllSalesTransactions,
   findCustomerByPhone,
   findCustomerByPhoneAcrossLocations,
   normalizeIndonesianPhone,

@@ -32,6 +32,7 @@ const {
   syncProducts,
   syncCrisbroRedeemMenu,
   syncCustomerPoints,
+  syncSalesTransactionReports,
   syncBrands,
   syncLocations,
   syncPromos,
@@ -182,6 +183,19 @@ async function handleSyncPromos(req, res) {
   }
 }
 
+async function handleSyncSalesTransactions(req, res) {
+  try {
+    const locationId = req.query.location_id || process.env.RUNCHISE_SYNC_LOCATION_ID || 1;
+    const result = await syncSalesTransactionReports(locationId, {
+      from: req.query.from,
+      to: req.query.to,
+    });
+    res.json({ message: 'Sync sales transactions selesai', ...result });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
 // ===================== ADMIN MIDDLEWARE =====================
 
 // Middleware gabungan: login + role check
@@ -197,6 +211,7 @@ app.post('/admin/sync/points', ...adminOnly, handleSyncPoints);
 app.post('/admin/sync/brands', ...adminOnly, handleSyncBrands);
 app.post('/admin/sync/locations', ...adminOnly, handleSyncLocations);
 app.post('/admin/sync/promos', ...adminOnly, handleSyncPromos);
+app.post('/admin/sync/sales-transactions', ...adminOnly, handleSyncSalesTransactions);
 
 // Endpoint sync (dengan prefix /api)
 app.post('/api/admin/sync/customers', ...adminOnly, handleSyncCustomers);
@@ -206,6 +221,7 @@ app.post('/api/admin/sync/points', ...adminOnly, handleSyncPoints);
 app.post('/api/admin/sync/brands', ...adminOnly, handleSyncBrands);
 app.post('/api/admin/sync/locations', ...adminOnly, handleSyncLocations);
 app.post('/api/admin/sync/promos', ...adminOnly, handleSyncPromos);
+app.post('/api/admin/sync/sales-transactions', ...adminOnly, handleSyncSalesTransactions);
 
 // ===================== VERCEL CRON SYNC ROUTES =====================
 

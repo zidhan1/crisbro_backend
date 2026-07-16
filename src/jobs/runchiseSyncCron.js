@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const {
   syncCustomers,
   syncCustomerPoints,
+  syncSalesTransactionReports,
   syncProductsAndRedeemMenu,
   syncBrands,
   syncLocations,
@@ -39,6 +40,7 @@ async function runRunchiseMasterSyncJob() {
     results.brands = await syncBrands();
     Object.assign(results, await syncProductsAndRedeemMenu(brandId));
     results.customers = await syncCustomers(locationId);
+    results.salesTransactionReports = await syncSalesTransactionReports(locationId);
     results.promos = await syncPromos();
 
     console.log('[runchise-sync:master] finished', results);
