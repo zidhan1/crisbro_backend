@@ -38,7 +38,7 @@ const adminOrMarketing = requireRole('admin', 'marketing');
 
 router.use(auth);
 
-router.get('/activity-logs', adminOrMarketing, listAdminActivityLogs);
+router.get('/activity-logs', adminOnly, listAdminActivityLogs);
 
 router.get('/users', superAdminOnly, listAdminUsers);
 router.post('/users', superAdminOnly, createAdminUser);
