@@ -173,6 +173,8 @@ model CustomerLocation {
 
   customer Customer @relation(fields: [customer_id], references: [id])
   location Location @relation(fields: [location_id], references: [id])
+
+  @@unique([customer_id, location_id])
 }
 
 // ───────────────────────────────────────────────
