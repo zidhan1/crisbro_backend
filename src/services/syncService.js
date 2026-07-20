@@ -45,7 +45,32 @@ function normalizeLocationName(value) {
     .replace(/\s+/g, ' ');
 }
 
+function isTruthyApiFlag(value) {
+  return (
+    value === true ||
+    value === 1 ||
+    String(value).trim().toLowerCase() === 'true'
+  );
+}
+
+function classifyRunchiseLocation(loc) {
+  const branchType = String(loc?.branch_type ?? '')
+    .trim()
+    .toLowerCase();
+  const status = String(loc?.status ?? '')
+    .trim()
+    .toLowerCase();
+  const isDeleted = isTruthyApiFlag(loc?.deleted);
+
+  return {
+    is_active: status === 'activated' && !isDeleted,
+    is_outlet: branchType === 'outlet',
+  };
+}
+
 function mapRunchiseLocationToLocalData(loc, brandId) {
+  const visibility = classifyRunchiseLocation(loc);
+
   return {
     brand_id: brandId,
     runchise_id: Number(loc.id),
@@ -58,8 +83,7 @@ function mapRunchiseLocationToLocalData(loc, brandId) {
       : null,
     latitude: loc.latitude ? parseFloat(loc.latitude) : null,
     longitude: loc.longitude ? parseFloat(loc.longitude) : null,
-    is_active: loc.status ? loc.status === 'activated' : true,
-    is_outlet: true,
+    ...visibility,
   };
 }
 
@@ -181,7 +205,6 @@ async function syncCustomers(locationId = 1) {
         update: {
           name: ownerLocationName,
           brand_id: c.brand_id,
-          is_outlet: true,
         },
         create: {
           id: ownerLocationId,
