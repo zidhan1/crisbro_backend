@@ -132,6 +132,7 @@ model Customer {
   @@index([normalized_phone_number])
   @@index([runchise_location_id])
   @@index([runchise_sync_status])
+  @@index([created_at])
 }
 
 // ───────────────────────────────────────────────

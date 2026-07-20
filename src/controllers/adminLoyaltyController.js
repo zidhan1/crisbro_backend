@@ -747,6 +747,11 @@ async function listAdminCustomers(req, res) {
     const search = parseOptionalString(req.query.search, 'search', 100);
     const sortBy = parseOptionalString(req.query.sort_by, 'sort_by', 50);
     const sortOrder = parseOptionalString(req.query.sort_order, 'sort_order', 10);
+    const from = parseDateBoundary(req.query.from, 'from');
+    const to = parseDateBoundary(req.query.to, 'to', true);
+    if (from && to && from > to) {
+      return badRequest(res, 'from tidak boleh melebihi to');
+    }
     const page = parsePositiveInt(req.query.page ?? 1, 'page');
     const limit = Math.min(
       parsePositiveInt(req.query.limit ?? 20, 'limit'),
@@ -763,9 +768,22 @@ async function listAdminCustomers(req, res) {
           },
         ],
       }),
+      ...((from || to) && {
+        created_at: {
+          ...(from && { gte: from }),
+          ...(to && { lte: to }),
+        },
+      }),
     };
 
-    const total = await prisma.customer.count({ where });
+    const [total, registrationRange] = await Promise.all([
+      prisma.customer.count({ where }),
+      prisma.customer.aggregate({
+        where,
+        _min: { created_at: true },
+        _max: { created_at: true },
+      }),
+    ]);
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const clampedPage = Math.min(page, totalPages);
     const skip = (clampedPage - 1) * limit;
@@ -804,6 +822,10 @@ async function listAdminCustomers(req, res) {
       limit,
       total,
       total_pages: totalPages,
+      registration_range: {
+        earliest: registrationRange._min.created_at,
+        latest: registrationRange._max.created_at,
+      },
     });
   } catch (error) {
     handleError(res, error);
