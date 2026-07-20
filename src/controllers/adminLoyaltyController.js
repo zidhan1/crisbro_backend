@@ -952,6 +952,74 @@ async function createAdminCustomer(req, res) {
   }
 }
 
+async function listCustomerSalesTransactionReports(req, res) {
+  try {
+    const search = parseOptionalString(req.query.search, 'search', 100);
+    const outlet = parseOptionalString(req.query.outlet, 'outlet', 120);
+    const from = parseDateBoundary(req.query.from, 'from');
+    const to = parseDateBoundary(req.query.to, 'to', true);
+    if (from && to && from > to) {
+      return badRequest(res, 'from tidak boleh melebihi to');
+    }
+    const page = parsePositiveInt(req.query.page ?? 1, 'page');
+    const limit = Math.min(
+      parsePositiveInt(req.query.limit ?? 20, 'limit'),
+      100,
+    );
+    const where = {
+      ...(outlet
+        ? { nama_outlet: { equals: outlet, mode: 'insensitive' } }
+        : {}),
+      ...(from || to
+        ? {
+            tanggal_transaksi: {
+              ...(from ? { gte: from } : {}),
+              ...(to ? { lte: to } : {}),
+            },
+          }
+        : {}),
+      ...(search
+        ? {
+            OR: [
+              { nama_pelanggan: { contains: search, mode: 'insensitive' } },
+              { no_telepon: { contains: search } },
+              { nama_outlet: { contains: search, mode: 'insensitive' } },
+              { tipe_order: { contains: search, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+
+    const total = await prisma.customerSalesTransactionReport.count({ where });
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const clampedPage = Math.min(page, totalPages);
+    const [reports, outletRows] = await prisma.$transaction([
+      prisma.customerSalesTransactionReport.findMany({
+        where,
+        orderBy: [{ tanggal_transaksi: 'desc' }, { id: 'desc' }],
+        skip: (clampedPage - 1) * limit,
+        take: limit,
+      }),
+      prisma.customerSalesTransactionReport.findMany({
+        where: { nama_outlet: { not: null } },
+        distinct: ['nama_outlet'],
+        select: { nama_outlet: true },
+        orderBy: { nama_outlet: 'asc' },
+      }),
+    ]);
+    res.json({
+      items: reports,
+      page: clampedPage,
+      limit,
+      total,
+      total_pages: totalPages,
+      outlets: outletRows.map((row) => row.nama_outlet).filter(Boolean),
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
 async function updateAdminCustomer(req, res) {
   try {
     const id = parsePositiveInt(req.params.id, 'id');
@@ -2046,6 +2114,7 @@ module.exports = {
   updateAdminUser,
   deleteAdminUser,
   listAdminCustomers,
+  listCustomerSalesTransactionReports,
   createAdminCustomer,
   updateAdminCustomer,
   resendCustomerActivation,

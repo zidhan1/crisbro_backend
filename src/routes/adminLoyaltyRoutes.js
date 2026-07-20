@@ -8,6 +8,7 @@ const {
   updateAdminUser,
   deleteAdminUser,
   listAdminCustomers,
+  listCustomerSalesTransactionReports,
   createAdminCustomer,
   updateAdminCustomer,
   resendCustomerActivation,
@@ -48,6 +49,11 @@ router.delete('/users/:id', superAdminOnly, deleteAdminUser);
 // Marketing intentionally has the same customer and redeem-menu permissions as admin.
 // User management remains admin-only through the /users routes above.
 router.get('/customers', adminOrMarketing, listAdminCustomers);
+router.get(
+  '/customer-sales-transaction-reports',
+  adminOrMarketing,
+  listCustomerSalesTransactionReports,
+);
 router.post('/customers', adminOrMarketing, createAdminCustomer);
 router.put('/customers/:id', adminOrMarketing, updateAdminCustomer);
 router.post('/customers/:id/activation', adminOrMarketing, resendCustomerActivation);
