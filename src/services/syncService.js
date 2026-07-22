@@ -4,6 +4,7 @@ const prisma = require('../lib/prisma');
 // Mengimpor service Runchise (API eksternal)
 const {
   fetchAllCustomers,
+  fetchAllCustomersAcrossLocations,
   fetchAllSalesTransactions,
   fetchAllProducts,
   fetchAllSubBrands,
@@ -179,7 +180,7 @@ function detectPromoSubBrand(promo, categoryIdToSubBrand) {
 
 // Sync customer dari Runchise → database lokal
 async function syncCustomers(locationId = 1) {
-  const customers = await fetchAllCustomers(locationId);
+  const customers = await fetchAllCustomersAcrossLocations();
   const numericLocationId = Number(locationId);
   const fallbackLocationId =
     Number.isInteger(numericLocationId) && numericLocationId > 0
@@ -198,19 +199,29 @@ async function syncCustomers(locationId = 1) {
 
     const ownerLocationId = Number(c.owner_location_id) || fallbackLocationId;
     const ownerLocationName = c.owner_location?.name ?? `Outlet ${ownerLocationId}`;
+    const locationIds = [
+      ...new Set([
+        ...(c.location_ids ?? []),
+        ...(ownerLocationId ? [ownerLocationId] : []),
+      ].map(Number).filter((id) => Number.isInteger(id) && id > 0)),
+    ];
 
-    if (ownerLocationId) {
+    for (const locationId of locationIds) {
       await prisma.location.upsert({
-        where: { id: ownerLocationId },
+        where: { id: locationId },
         update: {
-          name: ownerLocationName,
+          ...(locationId === ownerLocationId && { name: ownerLocationName }),
           brand_id: c.brand_id,
+          runchise_id: locationId,
         },
         create: {
-          id: ownerLocationId,
+          id: locationId,
           brand_id: c.brand_id,
-          runchise_id: ownerLocationId,
-          name: ownerLocationName,
+          runchise_id: locationId,
+          name:
+            locationId === ownerLocationId
+              ? ownerLocationName
+              : `Outlet ${locationId}`,
           is_active: true,
           is_outlet: true,
         },
@@ -228,6 +239,8 @@ async function syncCustomers(locationId = 1) {
       runchise_sync_status: 'synced',
       runchise_sync_error: null,
       runchise_synced_at: syncedAt,
+      runchise_created_at: parseIsoDate(c.created_at),
+      runchise_updated_at: parseIsoDate(c.updated_at),
       name: c.name,
       phone_number: normalizedPhone,
       normalized_phone_number: normalizedPhone,
@@ -317,7 +330,7 @@ async function syncCustomers(locationId = 1) {
 
     // Update jika sudah ada, create jika belum
     if (existing) {
-      await prisma.$transaction([
+      const operations = [
         prisma.customer.update({
           where: { id: existing.id },
           data: payload,
@@ -326,7 +339,22 @@ async function syncCustomers(locationId = 1) {
           where: { id: existing.user_id },
           data: { phone_number: payload.phone_number },
         }),
-      ]);
+        prisma.customerLocation.deleteMany({
+          where: { customer_id: existing.id },
+        }),
+      ];
+      if (locationIds.length > 0) {
+        operations.push(
+          prisma.customerLocation.createMany({
+            data: locationIds.map((location_id) => ({
+              customer_id: existing.id,
+              location_id,
+            })),
+            skipDuplicates: true,
+          }),
+        );
+      }
+      await prisma.$transaction(operations);
     } else {
       await prisma.user.create({
         data: {
@@ -334,7 +362,16 @@ async function syncCustomers(locationId = 1) {
           password_hash: '',
           activation_status: 'pending_activation',
           role: 'customer',
-          customer: { create: payload },
+          customer: {
+            create: {
+              ...payload,
+              ...(locationIds.length > 0 && {
+                customer_locations: {
+                  create: locationIds.map((location_id) => ({ location_id })),
+                },
+              }),
+            },
+          },
         },
       });
     }

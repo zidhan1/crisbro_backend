@@ -40,8 +40,14 @@ const {
 const {
   startRunchiseSyncCron,
   runRunchiseMasterSyncJob,
+  runCustomerSyncJob,
   runCustomerPointsSyncJob,
 } = require('./jobs/runchiseSyncCron');
+const {
+  createCustomerTimestampSyncJob,
+  getCustomerTimestampSyncJob,
+  processCustomerTimestampSyncJob,
+} = require('./services/customerTimestampSyncService');
 
 // ===================== APP SETUP =====================
 const app = express();
@@ -123,6 +129,49 @@ async function handleSyncCustomers(req, res) {
   }
 }
 
+async function handleStartCustomerTimestampSync(req, res) {
+  try {
+    const result = await createCustomerTimestampSyncJob();
+    res.status(result.created ? 202 : 200).json({
+      message: result.created
+        ? 'Job sinkronisasi tanggal Runchise dimulai'
+        : 'Job sinkronisasi tanggal Runchise sudah berjalan',
+      ...result,
+    });
+  } catch (error) {
+    console.error('Gagal membuat job timestamp customer Runchise:', error);
+    res.status(500).json({
+      message: 'Gagal memulai sinkronisasi tanggal customer Runchise',
+      error: error.message,
+    });
+  }
+}
+
+async function handleCustomerTimestampSyncStatus(req, res) {
+  try {
+    res.json({ job: await getCustomerTimestampSyncJob() });
+  } catch (error) {
+    res
+      .status(500)
+      .json({
+        message: 'Gagal membaca status sinkronisasi',
+        error: error.message,
+      });
+  }
+}
+
+async function handleProcessCustomerTimestampSync(req, res) {
+  try {
+    res.json(await processCustomerTimestampSyncJob());
+  } catch (error) {
+    console.error('Worker timestamp customer Runchise gagal:', error);
+    res.status(500).json({
+      message: 'Worker sinkronisasi tanggal customer gagal',
+      error: error.message,
+    });
+  }
+}
+
 // Sync products
 async function handleSyncProducts(req, res) {
   try {
@@ -185,7 +234,8 @@ async function handleSyncPromos(req, res) {
 
 async function handleSyncSalesTransactions(req, res) {
   try {
-    const locationId = req.query.location_id || process.env.RUNCHISE_SYNC_LOCATION_ID || 1;
+    const locationId =
+      req.query.location_id || process.env.RUNCHISE_SYNC_LOCATION_ID || 1;
     const result = await syncSalesTransactionReports(locationId, {
       start_date: req.query.start_date,
       end_date: req.query.end_date,
@@ -209,23 +259,61 @@ const adminOnly = [auth, requireRole('admin', 'staff')];
 
 // Endpoint sync (tanpa prefix /api)
 app.post('/admin/sync/customers', ...adminOnly, handleSyncCustomers);
+app.post(
+  '/admin/sync/customer-timestamps',
+  ...adminOnly,
+  handleStartCustomerTimestampSync,
+);
+app.get(
+  '/admin/sync/customer-timestamps/status',
+  ...adminOnly,
+  handleCustomerTimestampSyncStatus,
+);
+app.post(
+  '/admin/sync/customer-timestamps/process',
+  ...adminOnly,
+  handleProcessCustomerTimestampSync,
+);
 app.post('/admin/sync/products', ...adminOnly, handleSyncProducts);
 app.post('/admin/sync/redeem-menu', ...adminOnly, handleSyncRedeemMenu);
 app.post('/admin/sync/points', ...adminOnly, handleSyncPoints);
 app.post('/admin/sync/brands', ...adminOnly, handleSyncBrands);
 app.post('/admin/sync/locations', ...adminOnly, handleSyncLocations);
 app.post('/admin/sync/promos', ...adminOnly, handleSyncPromos);
-app.post('/admin/sync/sales-transactions', ...adminOnly, handleSyncSalesTransactions);
+app.post(
+  '/admin/sync/sales-transactions',
+  ...adminOnly,
+  handleSyncSalesTransactions,
+);
 
 // Endpoint sync (dengan prefix /api)
 app.post('/api/admin/sync/customers', ...adminOnly, handleSyncCustomers);
+app.post(
+  '/api/admin/sync/customer-timestamps',
+  ...adminOnly,
+  handleStartCustomerTimestampSync,
+);
+app.get(
+  '/api/admin/sync/customer-timestamps/status',
+  ...adminOnly,
+  handleCustomerTimestampSyncStatus,
+);
+app.post(
+  '/api/admin/sync/customer-timestamps/process',
+  ...adminOnly,
+  handleProcessCustomerTimestampSync,
+);
 app.post('/api/admin/sync/products', ...adminOnly, handleSyncProducts);
 app.post('/api/admin/sync/redeem-menu', ...adminOnly, handleSyncRedeemMenu);
 app.post('/api/admin/sync/points', ...adminOnly, handleSyncPoints);
 app.post('/api/admin/sync/brands', ...adminOnly, handleSyncBrands);
 app.post('/api/admin/sync/locations', ...adminOnly, handleSyncLocations);
 app.post('/api/admin/sync/promos', ...adminOnly, handleSyncPromos);
-app.post('/api/admin/sync/sales-transactions', ...adminOnly, handleSyncSalesTransactions);
+app.post(
+  '/api/admin/sync/sales-transactions',
+  ...adminOnly,
+  handleSyncSalesTransactions,
+);
 
 // ===================== VERCEL CRON SYNC ROUTES =====================
 
@@ -240,7 +328,8 @@ function safeStringEqual(left, right) {
 }
 
 function requireCronSecret(req, res, next) {
-  const secret = process.env.CRON_SECRET || process.env.RUNCHISE_SYNC_CRON_SECRET;
+  const secret =
+    process.env.CRON_SECRET || process.env.RUNCHISE_SYNC_CRON_SECRET;
 
   if (!secret) {
     if (process.env.NODE_ENV === 'production') {
@@ -302,6 +391,30 @@ app.post(
   '/api/cron/runchise-sync/master',
   requireCronSecret,
   createCronSyncHandler('runchise-master', runRunchiseMasterSyncJob),
+);
+app.get(
+  '/api/cron/runchise-sync/customer-timestamps-worker',
+  requireCronSecret,
+  createCronSyncHandler('runchise-customer-timestamps', () =>
+    processCustomerTimestampSyncJob({ maxPages: 5 }),
+  ),
+);
+app.post(
+  '/api/cron/runchise-sync/customer-timestamps-worker',
+  requireCronSecret,
+  createCronSyncHandler('runchise-customer-timestamps', () =>
+    processCustomerTimestampSyncJob({ maxPages: 5 }),
+  ),
+);
+app.get(
+  '/api/cron/runchise-sync/customers',
+  requireCronSecret,
+  createCronSyncHandler('runchise-customers', runCustomerSyncJob),
+);
+app.post(
+  '/api/cron/runchise-sync/customers',
+  requireCronSecret,
+  createCronSyncHandler('runchise-customers', runCustomerSyncJob),
 );
 app.get(
   '/api/cron/runchise-sync/points',

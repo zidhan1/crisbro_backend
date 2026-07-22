@@ -157,6 +157,51 @@ async function fetchAllCustomers(locationId) {
   return allCustomers;
 }
 
+// Mengambil customer dari seluruh outlet yang dapat diakses API lalu
+// menggabungkannya berdasarkan ID customer Runchise. Customer dapat terdaftar
+// di beberapa outlet, sehingga nomor telepon tidak aman dijadikan kunci.
+async function fetchAllCustomersAcrossLocations() {
+  const locations = await fetchAllLocations();
+  const locationIds = [
+    ...new Set(
+      locations
+        .map((location) => Number(location.id))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  ];
+
+  // Tetap dukung instalasi yang belum dapat membaca endpoint locations.
+  if (locationIds.length === 0) {
+    locationIds.push(Number(process.env.RUNCHISE_SYNC_LOCATION_ID || 1));
+  }
+
+  const customerById = new Map();
+
+  // Sengaja sekuensial agar satu request dashboard tidak membanjiri API
+  // Runchise ketika akun mempunyai banyak outlet.
+  for (const locationId of locationIds) {
+    const customers = await fetchAllCustomers(locationId);
+    for (const customer of customers) {
+      const customerId = Number(customer.id);
+      if (Number.isInteger(customerId) && customerId > 0) {
+        const existing = customerById.get(customerId);
+        customerById.set(customerId, {
+          ...(existing ?? {}),
+          ...customer,
+          location_ids: [
+            ...new Set([
+              ...(existing?.location_ids ?? []),
+              ...(customer.location_ids ?? []),
+            ].map(Number).filter((id) => Number.isInteger(id) && id > 0)),
+          ],
+        });
+      }
+    }
+  }
+
+  return [...customerById.values()];
+}
+
 // Mencari customer berdasarkan nomor HP
 async function findCustomerByPhone(locationId, phoneNumber) {
   const normalizedPhone = normalizeIndonesianPhone(phoneNumber);
@@ -408,7 +453,9 @@ async function updateCustomer(locationId, customerId, customerData) {
 }
 
 module.exports = {
+  fetchCustomersPage,
   fetchAllCustomers,
+  fetchAllCustomersAcrossLocations,
   fetchAllSalesTransactions,
   findCustomerByPhone,
   findCustomerByPhoneAcrossLocations,

@@ -13,6 +13,7 @@ const DEFAULT_MASTER_CRON = '0 12,18 * * *';
 const DEFAULT_POINTS_CRON = '*/30 * * * *';
 let started = false;
 let masterRunning = false;
+let customersRunning = false;
 let pointsRunning = false;
 
 function getSyncConfig() {
@@ -24,7 +25,9 @@ function getSyncConfig() {
 
 async function runRunchiseMasterSyncJob() {
   if (masterRunning) {
-    console.log('[runchise-sync:master] skipped because previous run is still active');
+    console.log(
+      '[runchise-sync:master] skipped because previous run is still active',
+    );
     return { skipped: true };
   }
 
@@ -39,8 +42,9 @@ async function runRunchiseMasterSyncJob() {
     results.locations = await syncLocations(brandId);
     results.brands = await syncBrands();
     Object.assign(results, await syncProductsAndRedeemMenu(brandId));
-    results.customers = await syncCustomers(locationId);
-    results.salesTransactionReports = await syncSalesTransactionReports(locationId);
+    results.customers = await runCustomerSyncJob();
+    results.salesTransactionReports =
+      await syncSalesTransactionReports(locationId);
     results.promos = await syncPromos();
 
     console.log('[runchise-sync:master] finished', results);
@@ -50,9 +54,32 @@ async function runRunchiseMasterSyncJob() {
   }
 }
 
+async function runCustomerSyncJob() {
+  if (customersRunning) {
+    console.log(
+      '[runchise-sync:customers] skipped because previous run is still active',
+    );
+    return { skipped: true };
+  }
+
+  customersRunning = true;
+  const { locationId } = getSyncConfig();
+
+  try {
+    console.log('[runchise-sync:customers] started');
+    const result = await syncCustomers(locationId);
+    console.log('[runchise-sync:customers] finished', result);
+    return result;
+  } finally {
+    customersRunning = false;
+  }
+}
+
 async function runCustomerPointsSyncJob() {
   if (pointsRunning) {
-    console.log('[runchise-sync:points] skipped because previous run is still active');
+    console.log(
+      '[runchise-sync:points] skipped because previous run is still active',
+    );
     return { skipped: true };
   }
 
@@ -87,22 +114,34 @@ function startRunchiseSyncCron() {
 
   if (process.env.RUNCHISE_SYNC_ON_START !== 'false') {
     runRunchiseMasterSyncJob().catch((error) => {
-      console.error('[runchise-sync:master] initial run failed:', error.message);
+      console.error(
+        '[runchise-sync:master] initial run failed:',
+        error.message,
+      );
     });
     runCustomerPointsSyncJob().catch((error) => {
-      console.error('[runchise-sync:points] initial run failed:', error.message);
+      console.error(
+        '[runchise-sync:points] initial run failed:',
+        error.message,
+      );
     });
   }
 
   const masterTask = cron.schedule(masterSchedule, () => {
     runRunchiseMasterSyncJob().catch((error) => {
-      console.error('[runchise-sync:master] scheduled run failed:', error.message);
+      console.error(
+        '[runchise-sync:master] scheduled run failed:',
+        error.message,
+      );
     });
   });
 
   const pointsTask = cron.schedule(pointsSchedule, () => {
     runCustomerPointsSyncJob().catch((error) => {
-      console.error('[runchise-sync:points] scheduled run failed:', error.message);
+      console.error(
+        '[runchise-sync:points] scheduled run failed:',
+        error.message,
+      );
     });
   });
 
@@ -113,5 +152,6 @@ module.exports = {
   startRunchiseSyncCron,
   runRunchiseSyncJob: runRunchiseMasterSyncJob,
   runRunchiseMasterSyncJob,
+  runCustomerSyncJob,
   runCustomerPointsSyncJob,
 };

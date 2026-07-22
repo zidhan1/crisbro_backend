@@ -276,11 +276,14 @@ function parseRequiredString(value, fieldName, maxLength = 255) {
 }
 
 function parseSortOrder(value, fallback = 'asc') {
-  return value === 'desc' ? 'desc' : fallback;
+  return value === 'asc' || value === 'desc' ? value : fallback;
 }
 
 function buildAdminUserOrderBy(sortBy, sortOrder) {
-  const order = parseSortOrder(sortOrder, sortBy === 'created_at' ? 'desc' : 'asc');
+  const order = parseSortOrder(
+    sortOrder,
+    sortBy === 'created_at' ? 'desc' : 'asc',
+  );
   const map = {
     email: [{ email: order }, { id: 'asc' }],
     phone_number: [{ phone_number: order }, { id: 'asc' }],
@@ -288,35 +291,59 @@ function buildAdminUserOrderBy(sortBy, sortOrder) {
     created_at: [{ created_at: order }, { id: order }],
   };
 
-  return map[sortBy] ?? [{ role: 'asc' }, { created_at: 'desc' }, { id: 'desc' }];
+  return (
+    map[sortBy] ?? [{ role: 'asc' }, { created_at: 'desc' }, { id: 'desc' }]
+  );
 }
 
 function buildAdminCustomerOrderBy(sortBy, sortOrder) {
-  const order = parseSortOrder(sortOrder, sortBy === 'created_at' ? 'desc' : 'asc');
+  const order = parseSortOrder(
+    sortOrder,
+    sortBy === 'created_at' || sortBy === 'updated_at' ? 'desc' : 'asc',
+  );
   const map = {
     name: [{ name: order }, { id: 'desc' }],
     email: [{ user: { email: order } }, { id: 'desc' }],
     phone_number: [{ phone_number: order }, { id: 'desc' }],
-    outlet: [{ owner_location: { name: order } }, { name: 'asc' }, { id: 'desc' }],
+    outlet: [
+      { owner_location: { name: order } },
+      { name: 'asc' },
+      { id: 'desc' },
+    ],
     points: [{ customer_point: { available_point: order } }, { id: 'desc' }],
     status: [{ status: order }, { id: 'desc' }],
     activation_status: [{ user: { activation_status: order } }, { id: 'desc' }],
     runchise_sync_status: [{ runchise_sync_status: order }, { id: 'desc' }],
-    created_at: [{ created_at: order }, { id: order }],
-    updated_at: [{ updated_at: order }, { id: order }],
+    created_at: [
+      { runchise_created_at: order },
+      { runchise_id: order },
+      { id: order },
+    ],
+    updated_at: [
+      { runchise_updated_at: order },
+      { runchise_id: order },
+      { id: order },
+    ],
   };
 
-  return map[sortBy] ?? [{ created_at: 'desc' }, { id: 'desc' }];
+  return map[sortBy] ?? [{ runchise_created_at: 'desc' }, { id: 'desc' }];
 }
 
 function buildRedeemItemOrderBy(sortBy, sortOrder) {
-  const order = parseSortOrder(sortOrder, sortBy === 'created_at' ? 'desc' : 'asc');
+  const order = parseSortOrder(
+    sortOrder,
+    sortBy === 'created_at' ? 'desc' : 'asc',
+  );
   const map = {
     menu: [{ menu_item: { name: order } }, { id: 'asc' }],
     price: [{ menu_item: { price: order } }, { id: 'asc' }],
     points: [{ points_required: order }, { id: 'asc' }],
     status: [{ is_active: order }, { sort_order: 'asc' }, { id: 'asc' }],
-    sort_order: [{ category: { sort_order: order } }, { sort_order: order }, { id: 'asc' }],
+    sort_order: [
+      { category: { sort_order: order } },
+      { sort_order: order },
+      { id: 'asc' },
+    ],
     created_at: [{ created_at: order }, { id: order }],
   };
 
@@ -475,7 +502,11 @@ async function listAdminUsers(req, res) {
   try {
     const search = parseOptionalString(req.query.search, 'search', 100);
     const sortBy = parseOptionalString(req.query.sort_by, 'sort_by', 50);
-    const sortOrder = parseOptionalString(req.query.sort_order, 'sort_order', 10);
+    const sortOrder = parseOptionalString(
+      req.query.sort_order,
+      'sort_order',
+      10,
+    );
 
     const users = await prisma.user.findMany({
       where: {
@@ -742,16 +773,24 @@ async function deleteAdminUser(req, res) {
   }
 }
 
+// Dashboard membaca snapshot Runchise dari database agar pagination, filter,
+// dan sorting tetap cepat. Field tanggal lokal tidak pernah dipakai sebagai
+// tanggal pendaftaran customer.
 async function listAdminCustomers(req, res) {
   try {
     const search = parseOptionalString(req.query.search, 'search', 100);
     const sortBy = parseOptionalString(req.query.sort_by, 'sort_by', 50);
-    const sortOrder = parseOptionalString(req.query.sort_order, 'sort_order', 10);
+    const sortOrder = parseOptionalString(
+      req.query.sort_order,
+      'sort_order',
+      10,
+    );
     const from = parseDateBoundary(req.query.from, 'from');
     const to = parseDateBoundary(req.query.to, 'to', true);
     if (from && to && from > to) {
       return badRequest(res, 'from tidak boleh melebihi to');
     }
+
     const page = parsePositiveInt(req.query.page ?? 1, 'page');
     const limit = Math.min(
       parsePositiveInt(req.query.limit ?? 20, 'limit'),
@@ -762,14 +801,22 @@ async function listAdminCustomers(req, res) {
         OR: [
           { name: { contains: search, mode: 'insensitive' } },
           { phone_number: { contains: search } },
+          ...(/^\d+$/.test(search) ? [{ runchise_id: Number(search) }] : []),
           { user: { email: { contains: search, mode: 'insensitive' } } },
           {
             owner_location: { name: { contains: search, mode: 'insensitive' } },
           },
+          {
+            customer_locations: {
+              some: {
+                location: { name: { contains: search, mode: 'insensitive' } },
+              },
+            },
+          },
         ],
       }),
       ...((from || to) && {
-        created_at: {
+        runchise_created_at: {
           ...(from && { gte: from }),
           ...(to && { lte: to }),
         },
@@ -780,8 +827,8 @@ async function listAdminCustomers(req, res) {
       prisma.customer.count({ where }),
       prisma.customer.aggregate({
         where,
-        _min: { created_at: true },
-        _max: { created_at: true },
+        _min: { runchise_created_at: true },
+        _max: { runchise_created_at: true },
       }),
     ]);
     const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -790,41 +837,30 @@ async function listAdminCustomers(req, res) {
 
     const customers = await prisma.customer.findMany({
       where,
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            phone_number: true,
-            role: true,
-            activation_status: true,
-            activated_at: true,
-          },
-        },
-        brand: { select: { id: true, name: true } },
-        owner_location: { select: { id: true, name: true, city: true } },
-        customer_locations: {
-          select: {
-            location_id: true,
-            location: { select: { id: true, name: true, city: true } },
-          },
-        },
-        customer_point: true,
-      },
+      include: getAdminCustomerInclude(),
       orderBy: buildAdminCustomerOrderBy(sortBy, sortOrder),
       skip,
       take: limit,
     });
 
+    const items = customers.map((customer) => ({
+      ...customer,
+      location_ids: customer.customer_locations.map((item) => item.location_id),
+      created_at: customer.runchise_created_at,
+      updated_at: customer.runchise_updated_at,
+      date_source: 'runchise_sync',
+    }));
+
     res.json({
-      items: customers,
+      items,
       page: clampedPage,
       limit,
       total,
       total_pages: totalPages,
       registration_range: {
-        earliest: registrationRange._min.created_at,
-        latest: registrationRange._max.created_at,
+        earliest: registrationRange._min.runchise_created_at,
+        latest: registrationRange._max.runchise_created_at,
+        source: 'runchise_sync',
       },
     });
   } catch (error) {
@@ -850,7 +886,10 @@ async function createAdminCustomer(req, res) {
       req.body.available_point ?? total_point,
       'available_point',
     );
-    const locationIds = parseLocationIds(req.body.location_ids, owner_location_id);
+    const locationIds = parseLocationIds(
+      req.body.location_ids,
+      owner_location_id,
+    );
 
     if (!phone_number) {
       return badRequest(res, 'Nomor telepon wajib diisi');
@@ -1418,9 +1457,7 @@ async function getSummary(req, res) {
         ...(redemptionFrom ? { gte: redemptionFrom } : {}),
         ...(redemptionTo ? { lte: redemptionTo } : {}),
       },
-      ...(outletId
-        ? { customer: { owner_location_id: outletId } }
-        : {}),
+      ...(outletId ? { customer: { owner_location_id: outletId } } : {}),
     };
     const [
       totalMembers,
@@ -1815,7 +1852,9 @@ async function updateRedeemCategory(req, res) {
     if (req.body.is_active !== undefined)
       data.is_active = parseBoolean(req.body.is_active, 'is_active');
 
-    const before = await prisma.redeemMenuCategory.findUnique({ where: { id } });
+    const before = await prisma.redeemMenuCategory.findUnique({
+      where: { id },
+    });
     const category = await prisma.redeemMenuCategory.update({
       where: { id },
       data,
@@ -1838,7 +1877,11 @@ async function updateRedeemCategory(req, res) {
 async function listRedeemItems(req, res) {
   try {
     const sortBy = parseOptionalString(req.query.sort_by, 'sort_by', 50);
-    const sortOrder = parseOptionalString(req.query.sort_order, 'sort_order', 10);
+    const sortOrder = parseOptionalString(
+      req.query.sort_order,
+      'sort_order',
+      10,
+    );
     const items = await prisma.redeemMenuItem.findMany({
       select: {
         id: true,

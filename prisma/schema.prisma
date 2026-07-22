@@ -94,6 +94,8 @@ model Customer {
   runchise_sync_status      String    @default("pending") // pending | synced | failed | skipped
   runchise_sync_error       String?   @db.Text
   runchise_synced_at        DateTime?
+  runchise_created_at       DateTime?
+  runchise_updated_at       DateTime?
   name                      String
   phone_number              String?
   normalized_phone_number   String?
@@ -132,7 +134,32 @@ model Customer {
   @@index([normalized_phone_number])
   @@index([runchise_location_id])
   @@index([runchise_sync_status])
+  @@index([runchise_created_at])
+  @@index([runchise_updated_at])
   @@index([created_at])
+}
+
+model CustomerTimestampSyncJob {
+  id                     Int       @id @default(autoincrement())
+  status                 String    @default("queued")
+  location_ids           Json
+  current_location_index Int       @default(0)
+  current_location       Int?
+  current_page           Int       @default(1)
+  target_total           Int       @default(0)
+  total_api              Int       @default(0)
+  processed              Int       @default(0)
+  updated                Int       @default(0)
+  unchanged              Int       @default(0)
+  unmatched              Int       @default(0)
+  invalid                Int       @default(0)
+  error                  String?   @db.Text
+  started_at             DateTime  @default(now())
+  heartbeat_at           DateTime  @default(now())
+  finished_at            DateTime?
+
+  @@index([status])
+  @@index([started_at])
 }
 
 // ───────────────────────────────────────────────
