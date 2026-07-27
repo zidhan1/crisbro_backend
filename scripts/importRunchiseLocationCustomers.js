@@ -62,6 +62,16 @@ function nullableInt(value) {
   return Number.isInteger(parsed) ? parsed : null;
 }
 
+function effectiveLocationIds(customer) {
+  const explicitLocationIds = Array.isArray(customer?.location_ids)
+    ? [...new Set(customer.location_ids.map(positiveInt).filter(Boolean))]
+    : [];
+  if (explicitLocationIds.length > 0) return explicitLocationIds;
+
+  const ownerLocationId = positiveInt(customer?.owner_location_id);
+  return ownerLocationId ? [ownerLocationId] : [];
+}
+
 function isoDate(value, dateOnly = false) {
   if (!value) return null;
   const date = new Date(value);
@@ -70,6 +80,7 @@ function isoDate(value, dateOnly = false) {
 }
 
 function mapCustomer(customer, sourceLocationId, runId, importedAt) {
+  const locationIds = effectiveLocationIds(customer);
   return [
     sourceLocationId,
     Number(customer.id),
@@ -86,7 +97,7 @@ function mapCustomer(customer, sourceLocationId, runId, importedAt) {
     customer.gender ?? null,
     nullableInt(customer.brand_id),
     customer.status ?? null,
-    JSON.stringify(Array.isArray(customer.location_ids) ? customer.location_ids : []),
+    JSON.stringify(locationIds),
     nullableInt(customer.owner_location_id),
     customer.owner_location?.name ?? null,
     customer.balance ?? null,
@@ -159,6 +170,17 @@ async function upsertPage(db, rows) {
   return { inserted, updated: result.rowCount - inserted };
 }
 
+async function deleteRejectedRows(db, sourceLocationId, customerIds) {
+  if (customerIds.length === 0) return 0;
+  const result = await db.query(
+    `DELETE FROM "RunchiseLocationCustomer"
+     WHERE "source_location_id" = $1
+       AND "runchise_customer_id" = ANY($2::int[])`,
+    [sourceLocationId, customerIds],
+  );
+  return result.rowCount;
+}
+
 async function importLocationCustomers(locationId, locationName) {
   if (!process.env.RUNCHISE_API_KEY) throw new Error('RUNCHISE_API_KEY tidak tersedia');
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL tidak tersedia');
@@ -177,6 +199,8 @@ async function importLocationCustomers(locationId, locationName) {
   let updated = 0;
   let invalid = 0;
   let mismatches = 0;
+  let rejected = 0;
+  let removed = 0;
   let apiTotal = null;
   const uniqueIds = new Set();
 
@@ -203,6 +227,7 @@ async function importLocationCustomers(locationId, locationName) {
       if (apiTotal === null && data.paging?.total_item != null) apiTotal = Number(data.paging.total_item);
 
       const validCustomers = [];
+      const rejectedCustomerIds = [];
       for (const customer of data.customers) {
         const customerId = positiveInt(customer?.id);
         if (!customerId) {
@@ -210,11 +235,14 @@ async function importLocationCustomers(locationId, locationName) {
           continue;
         }
         uniqueIds.add(customerId);
-        const locationIds = Array.isArray(customer.location_ids)
-          ? customer.location_ids.map(Number)
-          : [];
-        if (!locationIds.includes(locationId)) mismatches++;
-        validCustomers.push(customer);
+        const locationIds = effectiveLocationIds(customer);
+        if (!locationIds.includes(locationId)) {
+          mismatches++;
+          rejected++;
+          rejectedCustomerIds.push(customerId);
+          continue;
+        }
+        validCustomers.push({ ...customer, location_ids: locationIds });
       }
 
       const importedAt = new Date().toISOString();
@@ -225,6 +253,7 @@ async function importLocationCustomers(locationId, locationName) {
           client,
           validCustomers.map((customer) => mapCustomer(customer, locationId, runId, importedAt)),
         );
+        removed += await deleteRejectedRows(client, locationId, rejectedCustomerIds);
         inserted += pageResult.inserted;
         updated += pageResult.updated;
         rowsReceived += data.customers.length;
@@ -244,7 +273,9 @@ async function importLocationCustomers(locationId, locationName) {
         client.release();
       }
 
-      console.log(`Halaman ${pages}: tersimpan ${validCustomers.length}; unik ${uniqueIds.size}`);
+      console.log(
+        `Halaman ${pages}: tersimpan ${validCustomers.length}; ditolak ${rejectedCustomerIds.length}; unik ${uniqueIds.size}`,
+      );
       nextUrl = data.paging?.next_page ?? null;
     }
 
@@ -263,6 +294,7 @@ async function importLocationCustomers(locationId, locationName) {
       run_id: String(runId), location_id: locationId, location_name: locationName,
       pages_fetched: pages, rows_received: rowsReceived, unique_customers: uniqueIds.size,
       inserted, updated, invalid, location_mismatches: mismatches,
+      rejected_for_location: rejected, removed_stale: removed,
       stored_for_location: stored.rows[0].total, complete: true,
     };
     console.log('\n=== IMPORT SELESAI ===');
@@ -289,9 +321,11 @@ async function main() {
   await importLocationCustomers(locationId, locationName);
 }
 
-main().catch((error) => {
-  console.error(`\nImport gagal: ${error.response?.data?.message || error.message}`);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`\nImport gagal: ${error.response?.data?.message || error.message}`);
+    process.exitCode = 1;
+  });
+}
 
-module.exports = { importLocationCustomers };
+module.exports = { effectiveLocationIds, importLocationCustomers };
