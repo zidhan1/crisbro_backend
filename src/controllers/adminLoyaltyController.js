@@ -1028,6 +1028,35 @@ async function listCustomerSalesTransactionReports(req, res) {
       100,
     );
     const where = {
+      AND: [
+        {
+          OR: [
+            { penambahan_poin: { not: 0 } },
+            { penggunaan_poin: { not: 0 } },
+          ],
+        },
+        ...(search
+          ? [
+              {
+                OR: [
+                  {
+                    nama_pelanggan: {
+                      contains: search,
+                      mode: 'insensitive',
+                    },
+                  },
+                  { no_telepon: { contains: search } },
+                  {
+                    nama_outlet: { contains: search, mode: 'insensitive' },
+                  },
+                  {
+                    tipe_order: { contains: search, mode: 'insensitive' },
+                  },
+                ],
+              },
+            ]
+          : []),
+      ],
       ...(outlet
         ? { nama_outlet: { equals: outlet, mode: 'insensitive' } }
         : {}),
@@ -1037,16 +1066,6 @@ async function listCustomerSalesTransactionReports(req, res) {
               ...(from ? { gte: from } : {}),
               ...(to ? { lte: to } : {}),
             },
-          }
-        : {}),
-      ...(search
-        ? {
-            OR: [
-              { nama_pelanggan: { contains: search, mode: 'insensitive' } },
-              { no_telepon: { contains: search } },
-              { nama_outlet: { contains: search, mode: 'insensitive' } },
-              { tipe_order: { contains: search, mode: 'insensitive' } },
-            ],
           }
         : {}),
     };
