@@ -7,6 +7,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "verify:redeem-menu": "node scripts/verifyRedeemMenuFlow.js --confirm-db-write",
     "cleanup:redeem-menu-test": "node scripts/verifyRedeemMenuFlow.js --cleanup --confirm-db-write",
+    "count:runchise-customers": "node scripts/countRunchiseCustomers.js",
+    "import:runchise-customers": "node scripts/importRunchiseLocationCustomers.js",
     "dev": "nodemon src/index.js",
     "build": "node scripts/prismaGenerate.js",
     "vercel-build": "node scripts/prismaGenerate.js",
