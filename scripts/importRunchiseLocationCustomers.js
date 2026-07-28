@@ -51,17 +51,32 @@ const COLUMNS = [
   'last_import_run_id', 'imported_at', 'updated_at',
 ];
 
+/**
+ * Mengubah nilai masukan menjadi bilangan bulat positif. Number(value) membuat
+ * angka berbentuk string tetap diterima. Nilai non-integer, nol, atau negatif
+ * dianggap tidak valid dan menghasilkan null.
+ */
 function positiveInt(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+/**
+ * Mengubah nilai opsional menjadi bilangan bulat untuk disimpan di database.
+ * Nilai null, undefined, string kosong, atau angka yang tidak valid menghasilkan
+ * null. Angka nol dan negatif tetap diterima selama berupa integer.
+ */
 function nullableInt(value) {
   if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
   return Number.isInteger(parsed) ? parsed : null;
 }
 
+/**
+ * Menentukan daftar lokasi efektif customer. location_ids dibersihkan sehingga
+ * hanya berisi integer positif yang unik. Jika daftar itu kosong, fungsi memakai
+ * owner_location_id sebagai fallback; jika fallback juga tidak valid, hasilnya [].
+ */
 function effectiveLocationIds(customer) {
   const explicitLocationIds = Array.isArray(customer?.location_ids)
     ? [...new Set(customer.location_ids.map(positiveInt).filter(Boolean))]
@@ -72,6 +87,11 @@ function effectiveLocationIds(customer) {
   return ownerLocationId ? [ownerLocationId] : [];
 }
 
+/**
+ * Menormalkan tanggal dari API ke format ISO. Nilai kosong atau tanggal tidak
+ * valid menghasilkan null. Saat dateOnly bernilai true hasilnya YYYY-MM-DD;
+ * selain itu fungsi mengembalikan tanggal dan waktu ISO secara lengkap.
+ */
 function isoDate(value, dateOnly = false) {
   if (!value) return null;
   const date = new Date(value);
@@ -79,6 +99,11 @@ function isoDate(value, dateOnly = false) {
   return dateOnly ? date.toISOString().slice(0, 10) : date.toISOString();
 }
 
+/**
+ * Mengubah satu objek customer API menjadi array nilai untuk query INSERT.
+ * Posisi nilai harus sama dengan urutan COLUMNS. Fungsi ini juga menormalkan
+ * integer/tanggal, membuat JSON, dan menyertakan metadata proses import.
+ */
 function mapCustomer(customer, sourceLocationId, runId, importedAt) {
   const locationIds = effectiveLocationIds(customer);
   return [
@@ -120,6 +145,11 @@ function mapCustomer(customer, sourceLocationId, runId, importedAt) {
   ];
 }
 
+/**
+ * Mengambil satu halaman customer dari API. Request dicoba maksimal empat kali
+ * untuk gangguan jaringan, HTTP 408, 429, dan 5xx. Jeda retry bertambah secara
+ * exponential (1, 2, lalu 4 detik); error terakhir diteruskan ke pemanggil.
+ */
 async function requestPage(client, url, page) {
   let lastError;
   for (let attempt = 0; attempt <= 3; attempt++) {
@@ -138,6 +168,11 @@ async function requestPage(client, url, page) {
   throw lastError;
 }
 
+/**
+ * Menyimpan satu halaman customer dalam satu query batch. Jika pasangan
+ * source_location_id dan runchise_customer_id sudah ada, kolom lain diperbarui.
+ * Nilai kembalian memisahkan jumlah data baru dan data yang diperbarui.
+ */
 async function upsertPage(db, rows) {
   if (rows.length === 0) return { inserted: 0, updated: 0 };
 
@@ -170,6 +205,11 @@ async function upsertPage(db, rows) {
   return { inserted, updated: result.rowCount - inserted };
 }
 
+/**
+ * Menghapus data lama milik customer yang sekarang ditolak untuk lokasi sumber.
+ * Ini mencegah customer mismatch tetap tercatat sebagai customer lokasi tersebut.
+ * Fungsi mengembalikan jumlah baris yang dihapus oleh database.
+ */
 async function deleteRejectedRows(db, sourceLocationId, customerIds) {
   if (customerIds.length === 0) return 0;
   const result = await db.query(
@@ -181,6 +221,13 @@ async function deleteRejectedRows(db, sourceLocationId, customerIds) {
   return result.rowCount;
 }
 
+/**
+ * Menjalankan keseluruhan import untuk satu lokasi: membuat catatan import run,
+ * mengambil semua halaman API, memvalidasi customer, menerima data yang lokasi
+ * efektifnya memuat locationId, lalu melakukan upsert per halaman dalam transaksi.
+ * Data mismatch lama dihapus dan statistik selalu diperbarui. Jika semua halaman
+ * selesai status menjadi completed; jika terjadi error status menjadi failed.
+ */
 async function importLocationCustomers(locationId, locationName) {
   if (!process.env.RUNCHISE_API_KEY) throw new Error('RUNCHISE_API_KEY tidak tersedia');
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL tidak tersedia');
@@ -314,6 +361,11 @@ async function importLocationCustomers(locationId, locationName) {
   }
 }
 
+/**
+ * Entry point command line. Argumen pertama menjadi location ID (default Antapani
+ * 4453), sedangkan argumen kedua menjadi nama lokasi. Jika nama tidak diberikan,
+ * nama dicari dari LOCATION_NAMES sebelum proses import dijalankan.
+ */
 async function main() {
   const locationId = positiveInt(process.argv[2] ?? DEFAULT_LOCATION_ID);
   if (!locationId) throw new Error(`location_id tidak valid: ${process.argv[2]}`);
