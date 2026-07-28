@@ -129,6 +129,17 @@ async function handleSyncCustomers(req, res) {
   }
 }
 
+// Endpoint kompatibilitas untuk frontend yang memeriksa background customer job.
+// Sync customer saat ini masih dijalankan langsung oleh POST /sync/customers,
+// sehingga tidak ada job persisten yang perlu dilaporkan atau diproses terpisah.
+async function handleCustomerSyncStatus(req, res) {
+  res.json({ job: null });
+}
+
+async function handleProcessCustomerSync(req, res) {
+  res.json({ status: 'idle', job: null });
+}
+
 async function handleStartCustomerTimestampSync(req, res) {
   try {
     const result = await createCustomerTimestampSyncJob();
@@ -259,6 +270,16 @@ const adminOnly = [auth, requireRole('admin', 'staff')];
 
 // Endpoint sync (tanpa prefix /api)
 app.post('/admin/sync/customers', ...adminOnly, handleSyncCustomers);
+app.get(
+  '/admin/sync/customers/status',
+  ...adminOnly,
+  handleCustomerSyncStatus,
+);
+app.post(
+  '/admin/sync/customers/process',
+  ...adminOnly,
+  handleProcessCustomerSync,
+);
 app.post(
   '/admin/sync/customer-timestamps',
   ...adminOnly,
@@ -288,6 +309,16 @@ app.post(
 
 // Endpoint sync (dengan prefix /api)
 app.post('/api/admin/sync/customers', ...adminOnly, handleSyncCustomers);
+app.get(
+  '/api/admin/sync/customers/status',
+  ...adminOnly,
+  handleCustomerSyncStatus,
+);
+app.post(
+  '/api/admin/sync/customers/process',
+  ...adminOnly,
+  handleProcessCustomerSync,
+);
 app.post(
   '/api/admin/sync/customer-timestamps',
   ...adminOnly,
