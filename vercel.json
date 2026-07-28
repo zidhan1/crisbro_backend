@@ -15,15 +15,15 @@
   "crons": [
     {
       "path": "/api/cron/runchise-sync/master",
-      "schedule": "0 12,18 * * *"
+      "schedule": "0 12 * * *"
     },
     {
       "path": "/api/cron/runchise-sync/points",
-      "schedule": "*/30 * * * *"
+      "schedule": "15 12 * * *"
     },
     {
       "path": "/api/cron/runchise-sync/customer-timestamps-worker",
-      "schedule": "*/5 * * * *"
+      "schedule": "30 12 * * *"
     }
   ]
 }
