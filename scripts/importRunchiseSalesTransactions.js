@@ -372,7 +372,10 @@ async function importSalesTransactions(
           `Jumlah ${windowDate} tidak lengkap: API=${windowApiTotal}, diterima=${windowRowsReceived}`,
         );
       }
-      if (windowApiTotal >= 500) {
+      // Nilai total yang lebih besar dari 500 bukan truncation: pagination
+      // harian dapat mengembalikan seluruh baris (misalnya 527). Hanya total
+      // tepat 500 yang tetap ambigu terhadap batas historis endpoint.
+      if (windowApiTotal === 500) {
         throw new Error(
           `Tanggal ${windowDate} mencapai batas 500 record API; window yang lebih kecil diperlukan`,
         );

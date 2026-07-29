@@ -1497,6 +1497,7 @@ async function getSummary(req, res) {
       activatedCustomersByOutlet,
       redemptionsByCustomer,
       redemptionHistory,
+      runchiseCustomersByOutlet,
     ] = await Promise.all([
       prisma.customer.count(),
       prisma.customer.count({ where: { status: 'active' } }),
@@ -1549,6 +1550,45 @@ async function getSummary(req, res) {
         },
         orderBy: { redeemed_at: 'desc' },
       }),
+      prisma.$queryRaw`
+        SELECT
+          l."id" AS outlet_id,
+          l."runchise_id" AS source_location_id,
+          l."name" AS outlet_name,
+          l."city" AS city,
+          COALESCE(customer_metric.stored_customers, 0)::int AS stored_customers,
+          COALESCE(customer_metric.customers_with_points, 0)::int AS customers_with_points,
+          customer_metric.last_snapshot_at,
+          latest_import.api_reported_total,
+          latest_import.rows_received,
+          latest_import.status AS import_status
+        FROM "Location" l
+        LEFT JOIN (
+          SELECT
+            "source_location_id",
+            COUNT(*)::int AS stored_customers,
+            COUNT(*) FILTER (
+              WHERE COALESCE("available_point", 0) > 0
+            )::int AS customers_with_points,
+            MAX("imported_at") AS last_snapshot_at
+          FROM "RunchiseLocationCustomer"
+          GROUP BY "source_location_id"
+        ) customer_metric
+          ON customer_metric."source_location_id" = l."runchise_id"
+        LEFT JOIN LATERAL (
+          SELECT
+            import_run."api_reported_total",
+            import_run."rows_received",
+            import_run."status"
+          FROM "RunchiseCustomerImportRun" import_run
+          WHERE import_run."source_location_id" = l."runchise_id"
+          ORDER BY import_run."started_at" DESC
+          LIMIT 1
+        ) latest_import ON TRUE
+        WHERE l."is_outlet" = TRUE
+          AND l."runchise_id" IS NOT NULL
+        ORDER BY l."name" ASC
+      `,
     ]);
 
     const rewardIds = topRewards.map((item) => item.reward_id);
@@ -1595,6 +1635,29 @@ async function getSummary(req, res) {
         },
       ]),
     );
+    const customerMetricsByOutlet = runchiseCustomersByOutlet.map((outlet) => {
+      const apiReportedTotal = outlet.api_reported_total ?? null;
+      const rowsReceived = outlet.rows_received ?? 0;
+      const isCapped = rowsReceived >= 10000;
+      const hasMismatch =
+        apiReportedTotal !== null && apiReportedTotal !== rowsReceived;
+
+      return {
+        outlet_id: outlet.outlet_id,
+        source_location_id: outlet.source_location_id,
+        outlet_name: outlet.outlet_name,
+        city: outlet.city,
+        stored_customers: outlet.stored_customers,
+        customers_with_points: outlet.customers_with_points,
+        api_reported_total: apiReportedTotal,
+        last_snapshot_at: outlet.last_snapshot_at,
+        status: hasMismatch
+          ? 'mismatch'
+          : isCapped
+            ? 'capped'
+            : outlet.import_status ?? (outlet.stored_customers > 0 ? 'available' : 'empty'),
+      };
+    });
 
     for (const redemption of redemptionsByCustomer) {
       const customer = customerById.get(redemption.customer_id);
@@ -1639,6 +1702,11 @@ async function getSummary(req, res) {
       redemption_count: redemptionCount,
       pending_redemptions: pendingRedemptions,
       claimed_redemptions: claimedRedemptions,
+      runchise_customers_stored: customerMetricsByOutlet.reduce(
+        (total, outlet) => total + outlet.stored_customers,
+        0,
+      ),
+      runchise_customers_by_outlet: customerMetricsByOutlet,
       top_rewards: topRewards.map((item) => ({
         reward_id: item.reward_id,
         reward_name: rewardById.get(item.reward_id)?.name ?? 'Reward',
