@@ -461,7 +461,8 @@ model Promo {
 
 model CustomerSalesTransactionReport {
   id                            Int      @id @default(autoincrement())
-  runchise_sales_transaction_id Int      @unique
+  source_location_id            Int
+  runchise_sales_transaction_id Int
   runchise_customer_id          Int?
   customer_id                   Int?
   runchise_location_id          Int?
@@ -476,6 +477,17 @@ model CustomerSalesTransactionReport {
   pembelian_per_order          Decimal  @default(0.0) @db.Decimal(12, 2)
   penambahan_poin              Int      @default(0)
   penggunaan_poin              Decimal  @default(0.0) @db.Decimal(12, 2)
+  sales_no                      String?
+  receipt_no                    String?
+  status                        String?
+  is_deleted                    Boolean  @default(false)
+  nominal_transaksi             Decimal  @default(0.0) @db.Decimal(14, 2)
+  jumlah_diterima               Decimal  @default(0.0) @db.Decimal(14, 2)
+  jumlah_kembalian              Decimal  @default(0.0) @db.Decimal(14, 2)
+  sumber_nominal                String?
+  payment_methods               String?
+  customer_snapshot_at          DateTime?
+  import_run_id                 BigInt?
   raw                          Json?
   created_at                   DateTime @default(now())
   updated_at                   DateTime @updatedAt
@@ -483,10 +495,40 @@ model CustomerSalesTransactionReport {
   customer Customer? @relation(fields: [customer_id], references: [id])
 
   @@index([customer_id])
+  @@index([source_location_id, tanggal_transaksi])
+  @@index([source_location_id, runchise_customer_id])
   @@index([runchise_customer_id])
   @@index([runchise_location_id])
   @@index([tanggal_transaksi])
   @@index([nama_outlet])
+  @@index([status])
+  @@index([import_run_id])
+  @@unique([source_location_id, runchise_sales_transaction_id])
+}
+
+model RunchiseSalesTransactionImportRun {
+  id                    BigInt    @id @default(autoincrement())
+  source_location_id    Int
+  source_location_name  String?
+  start_date            DateTime  @db.Date
+  end_date              DateTime  @db.Date
+  status                String    @default("running")
+  pages_fetched         Int       @default(0)
+  api_reported_total    Int?
+  rows_received         Int       @default(0)
+  unique_transactions   Int       @default(0)
+  inserted              Int       @default(0)
+  updated               Int       @default(0)
+  invalid               Int       @default(0)
+  location_mismatches   Int       @default(0)
+  out_of_range          Int       @default(0)
+  last_page             Int       @default(0)
+  error                 String?   @db.Text
+  started_at            DateTime  @default(now())
+  finished_at           DateTime?
+
+  @@index([source_location_id, start_date, end_date])
+  @@index([status])
 }
 
 model RewardRedemption {

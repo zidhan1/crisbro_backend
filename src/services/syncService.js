@@ -504,7 +504,12 @@ function buildSalesTransactionParams({
   return params;
 }
 
-function mapSalesTransactionReportData(sale, runchiseCustomer, localCustomer) {
+function mapSalesTransactionReportData(
+  sale,
+  runchiseCustomer,
+  localCustomer,
+  sourceLocationId,
+) {
   const metadata = sale.metadata || {};
   const customerPoint = localCustomer?.customer_point;
   const ownerLocation = localCustomer?.owner_location;
@@ -519,6 +524,7 @@ function mapSalesTransactionReportData(sale, runchiseCustomer, localCustomer) {
     localCustomer?.phone_number;
 
   return {
+    source_location_id: Number(sourceLocationId),
     runchise_sales_transaction_id: Number(sale.id),
     runchise_customer_id: sale.customer_id ? Number(sale.customer_id) : null,
     customer_id: localCustomer?.id ?? null,
@@ -546,6 +552,35 @@ function mapSalesTransactionReportData(sale, runchiseCustomer, localCustomer) {
     pembelian_per_order: getOrderPurchaseAmount(sale),
     penambahan_poin: parseInteger(metadata.earned_point),
     penggunaan_poin: parseNumber(metadata.redeemed_point),
+    sales_no: sale.sales_no ?? null,
+    receipt_no: sale.receipt_no ?? null,
+    status: sale.status ?? null,
+    is_deleted: Boolean(sale.deleted),
+    nominal_transaksi: parseNumber(
+      sale.net_sales_after_tax ??
+        sale.net_sales ??
+        sale.new_net_sales ??
+        sale.subtotal ??
+        sale.gross_sales,
+    ),
+    jumlah_diterima: (Array.isArray(sale.payments) ? sale.payments : []).reduce(
+      (total, payment) => total + parseNumber(payment.amount_receive),
+      0,
+    ),
+    jumlah_kembalian: (Array.isArray(sale.payments) ? sale.payments : []).reduce(
+      (total, payment) => total + parseNumber(payment.change),
+      0,
+    ),
+    sumber_nominal:
+      Array.isArray(sale.payments) && sale.payments.length > 0
+        ? 'payments.amount_receive'
+        : 'fallback_transaction_nominal',
+    payment_methods:
+      sale.payment_method_names ??
+      (Array.isArray(sale.payments)
+        ? [...new Set(sale.payments.map((p) => p.payment_method_name).filter(Boolean))].join(', ') || null
+        : null),
+    customer_snapshot_at: new Date(),
     raw: sale,
   };
 }
@@ -603,6 +638,7 @@ async function syncSalesTransactionReports(locationId = 1, options = {}) {
       sale,
       runchiseCustomer,
       localCustomer,
+      locationId,
     );
 
     await prisma.customerSalesTransactionReport.upsert({

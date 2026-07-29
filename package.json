@@ -9,6 +9,8 @@
     "cleanup:redeem-menu-test": "node scripts/verifyRedeemMenuFlow.js --cleanup --confirm-db-write",
     "count:runchise-customers": "node scripts/countRunchiseCustomers.js",
     "import:runchise-customers": "node scripts/importRunchiseLocationCustomers.js",
+    "import:runchise-sales": "node scripts/importRunchiseSalesTransactions.js",
+    "import:runchise-sales-periods": "node scripts/importRunchiseSalesTransactionPeriods.js",
     "dev": "nodemon src/index.js",
     "build": "node scripts/prismaGenerate.js",
     "vercel-build": "node scripts/prismaGenerate.js",

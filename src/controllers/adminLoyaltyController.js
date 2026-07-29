@@ -1088,7 +1088,13 @@ async function listCustomerSalesTransactionReports(req, res) {
       }),
     ]);
     res.json({
-      items: reports,
+      items: reports.map((report) => ({
+        ...report,
+        import_run_id:
+          report.import_run_id === null || report.import_run_id === undefined
+            ? null
+            : report.import_run_id.toString(),
+      })),
       page: clampedPage,
       limit,
       total,

@@ -55,6 +55,19 @@ Content-Type: application/json
 - Legacy master-data override still supported: `RUNCHISE_SYNC_CRON="0 1,13 * * *"`
 - Change customer-points schedule: `RUNCHISE_POINTS_SYNC_CRON="*/15 * * * *"`
 - Sales transaction sync uses Runchise params: `start_date`, `end_date`, `location_id`, `payment_method_ids`, `status`
+- Historical sales import (customer snapshot + transactions):
+  `npm run import:runchise-sales -- <locationId> <YYYY-MM-DD> <YYYY-MM-DD> [locationName]`
+- Historical sales are requested in daily windows because Runchise caps a broad
+  date-range response at 500 rows. Every page inside every daily window is read,
+  validated against the source location/date, and batch-upserted with an import run.
+- Add `--skip-customers` only when the location customer snapshot was refreshed by
+  an immediately preceding run.
+- Reusable multi-location/period job list:
+  `npm run import:runchise-sales-periods`. Edit `IMPORT_JOBS` in
+  `scripts/importRunchiseSalesTransactionPeriods.js`; jobs run sequentially and
+  customer snapshots are refreshed only once per location per execution.
+- Validate a configured job list without calling the API or database:
+  `npm run import:runchise-sales-periods -- --dry-run`.
 - Override sales transaction endpoint path if needed: `RUNCHISE_SALES_TRANSACTIONS_PATH="/sale_transactions"`
 - Disable initial boot sync: `RUNCHISE_SYNC_ON_START=false`
 - Product/catalog response cache TTL: `CATALOG_RESPONSE_CACHE_TTL_MS=300000`
