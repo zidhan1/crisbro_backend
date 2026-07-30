@@ -1498,9 +1498,25 @@ async function getSummary(req, res) {
       redemptionsByCustomer,
       redemptionHistory,
       runchiseCustomersByOutlet,
+      runchiseCustomersUnique,
     ] = await Promise.all([
       prisma.customer.count(),
-      prisma.customer.count({ where: { status: 'active' } }),
+      // "Member aktif" berarti akun aplikasinya sudah diaktivasi, bukan status
+      // customer di POS. Customer.status disalin dari Runchise dan default-nya
+      // 'active', sehingga metrik lama selalu sama dengan total member.
+      //
+      // Kondisi di bawah adalah negasi tepat dari isSyncedPlaceholderUser di
+      // authController, yaitu definisi yang dipakai aplikasi untuk memblokir
+      // login. password_hash ikut diperiksa karena kolom activation_status
+      // punya default 'active' di schema.
+      prisma.customer.count({
+        where: {
+          user: {
+            activation_status: { not: 'pending_activation' },
+            password_hash: { not: '' },
+          },
+        },
+      }),
       prisma.customerPoint.aggregate({
         _sum: { total_point: true, available_point: true },
       }),
@@ -1588,6 +1604,18 @@ async function getSummary(req, res) {
         WHERE l."is_outlet" = TRUE
           AND l."runchise_id" IS NOT NULL
         ORDER BY l."name" ASC
+      `,
+      // Customer unik, bukan jumlah baris. Satu customer dapat terdaftar di
+      // beberapa outlet, sehingga menjumlahkan stored_customers per outlet
+      // menghitung orang yang sama berulang kali. Cakupan WHERE dibuat identik
+      // dengan query di atas agar kedua angka dapat dibandingkan.
+      prisma.$queryRaw`
+        SELECT COUNT(DISTINCT rlc."runchise_customer_id")::int AS unique_customers
+        FROM "RunchiseLocationCustomer" rlc
+        JOIN "Location" l
+          ON l."runchise_id" = rlc."source_location_id"
+        WHERE l."is_outlet" = TRUE
+          AND l."runchise_id" IS NOT NULL
       `,
     ]);
 
@@ -1692,20 +1720,34 @@ async function getSummary(req, res) {
       redemptionTrendByDate.set(date, current);
     }
 
+    const totalPointsGiven = points._sum.total_point ?? 0;
+    const totalPointsAvailable = points._sum.available_point ?? 0;
+
     res.json({
       total_members: totalMembers,
       active_members: activeMembers,
-      total_points_given: points._sum.total_point ?? 0,
-      total_points_available: points._sum.available_point ?? 0,
+      total_points_given: totalPointsGiven,
+      total_points_available: totalPointsAvailable,
       points_earned: pointsEarned._sum.points_change ?? 0,
-      points_redeemed: Math.abs(pointsRedeemed._sum.points_change ?? 0),
+      // Poin terpakai menurut Runchise: selisih poin seumur hidup dengan saldo
+      // yang masih tersedia. PointHistory tidak dapat dipakai karena penukaran
+      // terjadi di kasir/POS dan tabel itu tidak pernah terisi, sehingga metrik
+      // lama selalu melaporkan 0 meskipun Runchise mencatat poin terpakai.
+      // Nilai versi PointHistory tetap diekspos terpisah untuk transparansi.
+      points_redeemed: Math.max(0, totalPointsGiven - totalPointsAvailable),
+      points_redeemed_from_history: Math.abs(
+        pointsRedeemed._sum.points_change ?? 0,
+      ),
       redemption_count: redemptionCount,
       pending_redemptions: pendingRedemptions,
       claimed_redemptions: claimedRedemptions,
+      // Jumlah baris per outlet, sama dengan total kolom di tabel per outlet.
       runchise_customers_stored: customerMetricsByOutlet.reduce(
         (total, outlet) => total + outlet.stored_customers,
         0,
       ),
+      runchise_customers_unique:
+        runchiseCustomersUnique?.[0]?.unique_customers ?? 0,
       runchise_customers_by_outlet: customerMetricsByOutlet,
       top_rewards: topRewards.map((item) => ({
         reward_id: item.reward_id,

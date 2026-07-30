@@ -627,6 +627,118 @@ async function syncCustomerPointsFromStaging() {
   };
 }
 
+// SUM() Postgres atas kolom int menghasilkan bigint, yang diterima Prisma
+// sebagai BigInt dan tidak dapat diserialisasi JSON.stringify.
+function bigIntToNumber(value) {
+  return value === null || value === undefined ? 0 : Number(value);
+}
+
+// Diagnostik read-only untuk saldo poin. Tidak menulis apa pun.
+//
+// Menjawab satu pertanyaan yang menentukan strategi merge lintas outlet: apakah
+// poin Runchise bersifat global per customer, atau berbeda per outlet?
+//
+// fetchAllCustomersAcrossLocations menggabungkan dengan pola {...existing,
+// ...customer}, sehingga outlet yang diproses terakhir menang. Bila poin
+// ternyata dilaporkan hanya pada outlet asal customer dan 0 di outlet lain,
+// penggabungan itu dapat menimpa nilai benar dengan 0 dan mengecilkan saldo
+// tanpa gejala apa pun. divergent_customers membuktikan mana yang terjadi.
+async function inspectCustomerPointSources() {
+  // 1. Apakah poin berbeda antar outlet? Dihitung atas SELURUH customer staging
+  //    yang terdaftar di lebih dari satu outlet, bukan hanya yang punya akun.
+  const [spread] = await prisma.$queryRaw`
+    SELECT
+      COUNT(*)::int AS multi_outlet_customers,
+      COUNT(*) FILTER (
+        WHERE min_total <> max_total OR min_available <> max_available
+      )::int AS divergent_customers,
+      COALESCE(SUM(max_total - min_total), 0)::bigint AS total_point_spread
+    FROM (
+      SELECT
+        "runchise_customer_id",
+        MIN(COALESCE("total_point", 0)) AS min_total,
+        MAX(COALESCE("total_point", 0)) AS max_total,
+        MIN(COALESCE("available_point", 0)) AS min_available,
+        MAX(COALESCE("available_point", 0)) AS max_available
+      FROM "RunchiseLocationCustomer"
+      GROUP BY "runchise_customer_id"
+      HAVING COUNT(*) > 1
+    ) multi
+  `;
+
+  // 2. Berapa hasilnya bila memakai strategi merge berbeda, khusus customer yang
+  //    punya akun lokal. Bila poin global, kolom max dan sum akan sama.
+  const [strategies] = await prisma.$queryRaw`
+    SELECT
+      COUNT(*)::int AS matched_customers,
+      COALESCE(SUM(max_total), 0)::bigint AS total_if_max,
+      COALESCE(SUM(sum_total), 0)::bigint AS total_if_sum,
+      COALESCE(SUM(max_available), 0)::bigint AS available_if_max,
+      COALESCE(SUM(sum_available), 0)::bigint AS available_if_sum,
+      COUNT(*) FILTER (WHERE max_total > 0)::int AS customers_with_points
+    FROM (
+      SELECT
+        c."id",
+        MAX(COALESCE(rlc."total_point", 0)) AS max_total,
+        SUM(COALESCE(rlc."total_point", 0)) AS sum_total,
+        MAX(COALESCE(rlc."available_point", 0)) AS max_available,
+        SUM(COALESCE(rlc."available_point", 0)) AS sum_available
+      FROM "Customer" c
+      JOIN "RunchiseLocationCustomer" rlc
+        ON rlc."runchise_customer_id" = c."runchise_id"
+      WHERE c."runchise_id" IS NOT NULL
+      GROUP BY c."id"
+    ) per_customer
+  `;
+
+  // 3. Nilai yang tersimpan sekarang, untuk dibandingkan dengan dua di atas.
+  const [stored] = await prisma.$queryRaw`
+    SELECT
+      COUNT(*)::int AS point_rows,
+      COALESCE(SUM("total_point"), 0)::bigint AS total_point,
+      COALESCE(SUM("available_point"), 0)::bigint AS available_point,
+      COUNT(*) FILTER (WHERE "total_point" > 0)::int AS customers_with_points,
+      MAX("updated_at") AS last_updated_at
+    FROM "CustomerPoint"
+  `;
+
+  const [staleness] = await prisma.$queryRaw`
+    SELECT
+      COUNT(DISTINCT "runchise_customer_id")::int AS unique_staging_customers,
+      COUNT(*)::int AS staging_rows,
+      MAX("imported_at") AS last_import_at
+    FROM "RunchiseLocationCustomer"
+  `;
+
+  return {
+    staging: {
+      staging_rows: staleness?.staging_rows ?? 0,
+      unique_customers: staleness?.unique_staging_customers ?? 0,
+      last_import_at: staleness?.last_import_at ?? null,
+    },
+    divergence: {
+      multi_outlet_customers: spread?.multi_outlet_customers ?? 0,
+      divergent_customers: spread?.divergent_customers ?? 0,
+      total_point_spread: bigIntToNumber(spread?.total_point_spread),
+    },
+    merge_strategies: {
+      matched_customers: strategies?.matched_customers ?? 0,
+      customers_with_points: strategies?.customers_with_points ?? 0,
+      total_if_max: bigIntToNumber(strategies?.total_if_max),
+      total_if_sum: bigIntToNumber(strategies?.total_if_sum),
+      available_if_max: bigIntToNumber(strategies?.available_if_max),
+      available_if_sum: bigIntToNumber(strategies?.available_if_sum),
+    },
+    stored_now: {
+      point_rows: stored?.point_rows ?? 0,
+      total_point: bigIntToNumber(stored?.total_point),
+      available_point: bigIntToNumber(stored?.available_point),
+      customers_with_points: stored?.customers_with_points ?? 0,
+      last_updated_at: stored?.last_updated_at ?? null,
+    },
+  };
+}
+
 // ===================== SYNC SALES TRANSACTION REPORT =====================
 
 function buildSalesTransactionParams({
@@ -1425,6 +1537,7 @@ module.exports = {
   syncCrisbroRedeemMenu,
   syncCustomerPoints,
   syncCustomerPointsFromStaging,
+  inspectCustomerPointSources,
   syncSalesTransactionReports,
   syncBrands,
   syncLocations,
