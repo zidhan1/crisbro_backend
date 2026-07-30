@@ -1,4 +1,5 @@
 const prisma = require('../lib/prisma');
+const { Prisma } = require('@prisma/client');
 const bcrypt = require('bcrypt');
 const {
   createAccountActivationToken,
@@ -796,60 +797,185 @@ async function listAdminCustomers(req, res) {
       parsePositiveInt(req.query.limit ?? 20, 'limit'),
       100,
     );
-    const where = {
-      ...(search && {
-        OR: [
-          { name: { contains: search, mode: 'insensitive' } },
-          { phone_number: { contains: search } },
-          ...(/^\d+$/.test(search) ? [{ runchise_id: Number(search) }] : []),
-          { user: { email: { contains: search, mode: 'insensitive' } } },
-          {
-            owner_location: { name: { contains: search, mode: 'insensitive' } },
-          },
-          {
-            customer_locations: {
-              some: {
-                location: { name: { contains: search, mode: 'insensitive' } },
-              },
-            },
-          },
-        ],
-      }),
-      ...((from || to) && {
-        runchise_created_at: {
-          ...(from && { gte: from }),
-          ...(to && { lte: to }),
-        },
-      }),
-    };
+    const filters = [];
+    if (search) {
+      const pattern = `%${search}%`;
+      filters.push(Prisma.sql`(
+        rlc."name" ILIKE ${pattern}
+        OR rlc."phone_number" ILIKE ${pattern}
+        OR rlc."email" ILIKE ${pattern}
+        OR rlc."runchise_customer_id"::text ILIKE ${pattern}
+        OR source_location."name" ILIKE ${pattern}
+      )`);
+    }
+    if (from) filters.push(Prisma.sql`rlc."runchise_created_at" >= ${from}`);
+    if (to) filters.push(Prisma.sql`rlc."runchise_created_at" <= ${to}`);
+    const extraFilterSql = filters.length
+      ? Prisma.sql`AND ${Prisma.join(filters, ' AND ')}`
+      : Prisma.empty;
 
-    const [total, registrationRange] = await Promise.all([
-      prisma.customer.count({ where }),
-      prisma.customer.aggregate({
-        where,
-        _min: { runchise_created_at: true },
-        _max: { runchise_created_at: true },
-      }),
-    ]);
+    const [countRow] = await prisma.$queryRaw`
+      SELECT
+        COUNT(DISTINCT rlc."runchise_customer_id")::int AS total,
+        MIN(rlc."runchise_created_at") AS earliest,
+        MAX(rlc."runchise_created_at") AS latest
+      FROM "RunchiseLocationCustomer" rlc
+      JOIN "Location" source_location
+        ON source_location."runchise_id" = rlc."source_location_id"
+      WHERE source_location."is_outlet" = TRUE
+        AND source_location."runchise_id" IS NOT NULL
+        ${extraFilterSql}
+    `;
+    const total = countRow?.total ?? 0;
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const clampedPage = Math.min(page, totalPages);
     const skip = (clampedPage - 1) * limit;
+    const order = parseSortOrder(
+      sortOrder,
+      sortBy === 'created_at' || sortBy === 'updated_at' ? 'desc' : 'asc',
+    );
+    const direction = order === 'desc' ? Prisma.sql`DESC` : Prisma.sql`ASC`;
+    const orderColumns = {
+      name: Prisma.sql`MAX(rlc."name")`,
+      email: Prisma.sql`MAX(COALESCE(customer_user."email", rlc."email"))`,
+      phone_number: Prisma.sql`MAX(rlc."phone_number")`,
+      outlet: Prisma.sql`MIN(source_location."name")`,
+      points: Prisma.sql`MAX(rlc."available_point")`,
+      status: Prisma.sql`MAX(rlc."status")`,
+      activation_status: Prisma.sql`MAX(customer_user."activation_status")`,
+      runchise_sync_status: Prisma.sql`MAX(customer."runchise_sync_status")`,
+      created_at: Prisma.sql`MAX(rlc."runchise_created_at")`,
+      updated_at: Prisma.sql`MAX(rlc."runchise_updated_at")`,
+    };
+    const orderColumn =
+      orderColumns[sortBy] ?? Prisma.sql`MAX(rlc."runchise_created_at")`;
 
-    const customers = await prisma.customer.findMany({
-      where,
-      include: getAdminCustomerInclude(),
-      orderBy: buildAdminCustomerOrderBy(sortBy, sortOrder),
-      skip,
-      take: limit,
+    const pageRows = await prisma.$queryRaw`
+      SELECT rlc."runchise_customer_id"
+      FROM "RunchiseLocationCustomer" rlc
+      JOIN "Location" source_location
+        ON source_location."runchise_id" = rlc."source_location_id"
+      LEFT JOIN "Customer" customer
+        ON customer."runchise_id" = rlc."runchise_customer_id"
+      LEFT JOIN "User" customer_user ON customer_user."id" = customer."user_id"
+      WHERE source_location."is_outlet" = TRUE
+        AND source_location."runchise_id" IS NOT NULL
+        ${extraFilterSql}
+      GROUP BY rlc."runchise_customer_id"
+      ORDER BY ${orderColumn} ${direction} NULLS LAST,
+        rlc."runchise_customer_id" ${direction}
+      OFFSET ${skip}
+      LIMIT ${limit}
+    `;
+    const runchiseIds = pageRows.map((row) => row.runchise_customer_id);
+    const [snapshots, linkedCustomers] = runchiseIds.length
+      ? await Promise.all([
+          prisma.runchiseLocationCustomer.findMany({
+            where: { runchise_customer_id: { in: runchiseIds } },
+            orderBy: [
+              { runchise_updated_at: 'desc' },
+              { imported_at: 'desc' },
+              { source_location_id: 'desc' },
+            ],
+          }),
+          prisma.customer.findMany({
+            where: { runchise_id: { in: runchiseIds } },
+            include: getAdminCustomerInclude(),
+          }),
+        ])
+      : [[], []];
+    const sourceLocationIds = [
+      ...new Set(snapshots.map((row) => row.source_location_id)),
+    ];
+    const ownerLocationIds = [
+      ...new Set(snapshots.map((row) => row.owner_location_id).filter(Boolean)),
+    ];
+    const locations = await prisma.location.findMany({
+      where: {
+        runchise_id: { in: [...new Set([...sourceLocationIds, ...ownerLocationIds])] },
+        is_outlet: true,
+      },
+      select: { id: true, name: true, city: true, runchise_id: true },
     });
+    const locationByRunchiseId = new Map(
+      locations.map((location) => [location.runchise_id, location]),
+    );
+    const snapshotsByCustomer = new Map();
+    for (const snapshot of snapshots) {
+      const group = snapshotsByCustomer.get(snapshot.runchise_customer_id) ?? [];
+      group.push(snapshot);
+      snapshotsByCustomer.set(snapshot.runchise_customer_id, group);
+    }
+    const linkedByRunchiseId = new Map(
+      linkedCustomers.map((customer) => [customer.runchise_id, customer]),
+    );
 
-    const items = customers.map((customer) => ({
-      ...customer,
-      location_ids: customer.customer_locations.map((item) => item.location_id),
-      created_at: customer.runchise_created_at,
-      updated_at: customer.runchise_updated_at,
-      date_source: 'runchise_sync',
-    }));
+    const items = runchiseIds.map((runchiseId) => {
+      const customerSnapshots = snapshotsByCustomer.get(runchiseId) ?? [];
+      const latest = customerSnapshots[0];
+      const linked = linkedByRunchiseId.get(runchiseId);
+      const customerLocations = [
+        ...new Map(
+          customerSnapshots
+            .map((snapshot) => locationByRunchiseId.get(snapshot.source_location_id))
+            .filter(Boolean)
+            .map((location) => [location.id, location]),
+        ).values(),
+      ].sort((a, b) => a.id - b.id);
+      const ownerLocation =
+        locationByRunchiseId.get(latest?.owner_location_id) ??
+        customerLocations[0] ??
+        null;
+
+      return {
+        id: linked?.id ?? 0,
+        user_id: linked?.user_id,
+        runchise_id: runchiseId,
+        name: latest?.name ?? '-',
+        phone_number: latest?.phone_number ?? null,
+        phone_number_country_code: latest?.phone_number_country_code ?? 62,
+        address: latest?.address ?? null,
+        province: latest?.province ?? null,
+        city: latest?.city ?? null,
+        country: latest?.country ?? null,
+        postal_code: latest?.postal_code ?? null,
+        dob: latest?.dob ?? null,
+        gender: latest?.gender ?? null,
+        status: latest?.status ?? null,
+        balance: latest?.balance ?? 0,
+        brand_id: latest?.brand_id ?? linked?.brand_id ?? null,
+        brand: linked?.brand,
+        owner_location_id: ownerLocation?.id ?? null,
+        owner_location: ownerLocation,
+        location_ids: customerLocations.map((location) => location.id),
+        customer_locations: customerLocations.map((location) => ({
+          location_id: location.id,
+          location,
+        })),
+        customer_point: {
+          total_point: latest?.total_point ?? 0,
+          available_point: latest?.available_point ?? 0,
+          next_reward_threshold: DEFAULT_REWARD_THRESHOLD,
+        },
+        user: linked?.user ?? {
+          id: null,
+          email: latest?.email ?? null,
+          phone_number: null,
+          role: 'customer',
+          activation_status: 'not_linked',
+          activated_at: null,
+        },
+        runchise_location_id: latest?.source_location_id ?? null,
+        runchise_sync_status: linked?.runchise_sync_status ?? 'not_linked',
+        runchise_sync_error: linked?.runchise_sync_error ?? null,
+        runchise_synced_at: linked?.runchise_synced_at ?? null,
+        runchise_created_at: latest?.runchise_created_at ?? null,
+        runchise_updated_at: latest?.runchise_updated_at ?? null,
+        created_at: latest?.runchise_created_at ?? null,
+        updated_at: latest?.runchise_updated_at ?? null,
+        date_source: 'runchise',
+      };
+    });
 
     res.json({
       items,
@@ -858,9 +984,9 @@ async function listAdminCustomers(req, res) {
       total,
       total_pages: totalPages,
       registration_range: {
-        earliest: registrationRange._min.runchise_created_at,
-        latest: registrationRange._max.runchise_created_at,
-        source: 'runchise_sync',
+        earliest: countRow?.earliest ?? null,
+        latest: countRow?.latest ?? null,
+        source: 'runchise',
       },
     });
   } catch (error) {
