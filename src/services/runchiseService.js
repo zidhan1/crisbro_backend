@@ -170,9 +170,20 @@ async function fetchAllCustomersAcrossLocations() {
     ),
   ];
 
-  // Tetap dukung instalasi yang belum dapat membaca endpoint locations.
+  // Tetap dukung instalasi yang belum dapat membaca endpoint locations, tapi
+  // hanya bila ada outlet pengganti yang ditentukan secara eksplisit. Fallback
+  // lama ke ID 1 menunjuk outlet yang tidak dimiliki Crisbar, sehingga sync
+  // tampak sukses padahal tidak memproses satu customer pun.
   if (locationIds.length === 0) {
-    locationIds.push(Number(process.env.RUNCHISE_SYNC_LOCATION_ID || 1));
+    const fallbackLocationId = Number(process.env.RUNCHISE_SYNC_LOCATION_ID);
+
+    if (!Number.isInteger(fallbackLocationId) || fallbackLocationId <= 0) {
+      throw new Error(
+        'Tidak ada lokasi Runchise yang dapat dibaca dan RUNCHISE_SYNC_LOCATION_ID belum diisi',
+      );
+    }
+
+    locationIds.push(fallbackLocationId);
   }
 
   const customerById = new Map();

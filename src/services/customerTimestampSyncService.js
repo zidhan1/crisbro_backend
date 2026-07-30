@@ -147,7 +147,16 @@ async function createCustomerTimestampSyncJob() {
       .map((row) => Number(row.runchise_id))
       .filter((id) => Number.isInteger(id) && id > 0);
     if (locationIds.length === 0) {
-      const fallback = Number(process.env.RUNCHISE_SYNC_LOCATION_ID || 1);
+      // Fallback lama ke ID 1 menunjuk outlet yang bukan milik Crisbar, membuat
+      // job berjalan sampai selesai tanpa memperbarui satu baris pun.
+      const fallback = Number(process.env.RUNCHISE_SYNC_LOCATION_ID);
+
+      if (!Number.isInteger(fallback) || fallback <= 0) {
+        throw new Error(
+          'Tidak ada outlet aktif di tabel Location dan RUNCHISE_SYNC_LOCATION_ID belum diisi',
+        );
+      }
+
       locationIds.push(fallback);
     }
     const targetResult = await client.query(

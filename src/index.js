@@ -32,6 +32,7 @@ const {
   syncProducts,
   syncCrisbroRedeemMenu,
   syncCustomerPoints,
+  syncCustomerPointsFromStaging,
   syncSalesTransactionReports,
   syncBrands,
   syncLocations,
@@ -121,7 +122,9 @@ app.post('/redeem/:id', auth, (req, res) => {
 // Sync customers dari Runchise → DB lokal
 async function handleSyncCustomers(req, res) {
   try {
-    const locationId = req.query.location_id || 1;
+    // Tanpa fallback ke 1: outlet itu tidak ada di Runchise, dan memakainya
+    // membuat customer tanpa owner_location dipetakan ke outlet palsu.
+    const locationId = req.query.location_id || null;
     const result = await syncCustomers(locationId);
     res.json({ message: 'Sync customers selesai', ...result });
   } catch (error) {
@@ -204,10 +207,22 @@ async function handleSyncRedeemMenu(req, res) {
 }
 
 // Sync points
+//
+// Tanpa location_id, poin diturunkan dari tabel staging: mencakup ke-29 outlet
+// dan selesai dalam satu query, sehingga tetap aman di batas waktu serverless.
+// Dengan location_id, satu outlet disegarkan langsung dari API Runchise.
+// Refresh penuh semua outlet dari API dijalankan lewat `npm run sync:points`.
 async function handleSyncPoints(req, res) {
   try {
-    const locationId = req.query.location_id || 1;
-    const result = await syncCustomerPoints(locationId);
+    const rawLocationId = Number(req.query.location_id);
+    const locationId =
+      Number.isInteger(rawLocationId) && rawLocationId > 0
+        ? rawLocationId
+        : null;
+    const result = locationId
+      ? await syncCustomerPoints({ locationId })
+      : await syncCustomerPointsFromStaging();
+
     res.json({ message: 'Sync points selesai', ...result });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -245,8 +260,9 @@ async function handleSyncPromos(req, res) {
 
 async function handleSyncSalesTransactions(req, res) {
   try {
+    // Tanpa fallback ke 1: tidak ada outlet Crisbar dengan ID itu di Runchise.
     const locationId =
-      req.query.location_id || process.env.RUNCHISE_SYNC_LOCATION_ID || 1;
+      req.query.location_id || process.env.RUNCHISE_SYNC_LOCATION_ID || null;
     const result = await syncSalesTransactionReports(locationId, {
       start_date: req.query.start_date,
       end_date: req.query.end_date,

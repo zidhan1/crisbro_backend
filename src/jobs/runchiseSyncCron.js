@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const {
   syncCustomers,
-  syncCustomerPoints,
+  syncCustomerPointsFromStaging,
   syncSalesTransactionReports,
   syncProductsAndRedeemMenu,
   syncBrands,
@@ -17,8 +17,16 @@ let customersRunning = false;
 let pointsRunning = false;
 
 function getSyncConfig() {
+  const rawLocationId = Number(process.env.RUNCHISE_SYNC_LOCATION_ID);
+
   return {
-    locationId: process.env.RUNCHISE_SYNC_LOCATION_ID || 1,
+    // Tanpa fallback angka. Outlet Crisbar di Runchise memakai ID 4424-9854 dan
+    // tidak ada outlet ID 1, sehingga default lama membuat sync menunjuk lokasi
+    // milik brand lain: request gagal, atau sukses dengan nol baris.
+    locationId:
+      Number.isInteger(rawLocationId) && rawLocationId > 0
+        ? rawLocationId
+        : null,
     brandId: Number(process.env.RUNCHISE_SYNC_BRAND_ID || 1),
   };
 }
@@ -84,11 +92,21 @@ async function runCustomerPointsSyncJob() {
   }
 
   pointsRunning = true;
-  const { locationId } = getSyncConfig();
 
   try {
     console.log('[runchise-sync:points] started');
-    const result = await syncCustomerPoints(locationId);
+
+    // Diturunkan dari tabel staging, bukan API: mencakup ke-29 outlet dan
+    // selesai dalam satu query, sehingga aman dijalankan sebagai cron
+    // serverless. Refresh penuh dari API lewat scripts/syncCustomerPoints.js.
+    const result = await syncCustomerPointsFromStaging();
+
+    if (result.divergent_customers > 0) {
+      console.warn(
+        `[runchise-sync:points] ${result.divergent_customers} customer memiliki poin berbeda antar outlet; asumsi poin global per customer perlu ditinjau`,
+      );
+    }
+
     console.log('[runchise-sync:points] finished', result);
     return result;
   } finally {

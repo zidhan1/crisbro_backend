@@ -1,6 +1,9 @@
 // Mengimpor Prisma untuk akses database lokal
 const prisma = require('../lib/prisma');
 
+// Prisma.sql/Prisma.join dipakai untuk menyusun bulk upsert yang aman parameter
+const { Prisma } = require('@prisma/client');
+
 // Mengimpor service Runchise (API eksternal)
 const {
   fetchAllCustomers,
@@ -24,6 +27,13 @@ const {
 const VISIBLE_PROMO_SUB_BRANDS = new Set(['Crisbar']);
 const DEFAULT_PROMO_LIFESPAN_DAYS = 90;
 const POS_CHANNEL = 'pos';
+
+// Sama dengan default kolom CustomerPoint.next_reward_threshold di schema.
+const DEFAULT_NEXT_REWARD_THRESHOLD = 2000;
+
+// Jumlah baris per statement bulk upsert poin. Cukup besar untuk menekan
+// jumlah round trip, cukup kecil untuk menjaga ukuran query tetap wajar.
+const CUSTOMER_POINT_UPSERT_CHUNK = 500;
 
 function normalizeChannel(rawChannel) {
   return String(rawChannel ?? '')
@@ -179,13 +189,12 @@ function detectPromoSubBrand(promo, categoryIdToSubBrand) {
 // ===================== SYNC CUSTOMERS =====================
 
 // Sync customer dari Runchise → database lokal
-async function syncCustomers(locationId = 1) {
+// locationId hanya menjadi cadangan owner_location_id ketika Runchise tidak
+// mengirimkannya. Default lama 1 membuat customer tanpa outlet dipetakan ke
+// outlet yang tidak ada, sekaligus membuat baris Location id 1 palsu.
+async function syncCustomers(locationId = null) {
   const customers = await fetchAllCustomersAcrossLocations();
-  const numericLocationId = Number(locationId);
-  const fallbackLocationId =
-    Number.isInteger(numericLocationId) && numericLocationId > 0
-      ? numericLocationId
-      : null;
+  const fallbackLocationId = parseRunchiseId(locationId);
   let synced = 0;
   let skippedConflicts = 0;
 
@@ -402,6 +411,15 @@ function parseInteger(value, fallback = 0) {
   return Number.isInteger(number) ? number : Math.trunc(number);
 }
 
+// Mengembalikan ID Runchise yang valid, atau null bila tidak dapat dipakai.
+// Sengaja tidak memiliki fallback angka: outlet Crisbar di Runchise memakai ID
+// 4424-9854, sehingga fallback seperti 1 akan menunjuk lokasi yang bukan milik
+// brand ini dan membuat sync mengembalikan data kosong.
+function parseRunchiseId(value) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
 function formatPhoneWithCountryCode(phoneNumber, countryCode = 62) {
   if (!phoneNumber) return null;
 
@@ -435,11 +453,62 @@ function getOrderPurchaseAmount(sale) {
 
 // ===================== SYNC CUSTOMER POINTS =====================
 
-// Sync poin customer dari Runchise ke database lokal
-async function syncCustomerPoints(locationId = 1) {
+// Menulis saldo poin dalam beberapa statement bulk upsert. Versi lama mengirim
+// satu prisma.customerPoint.upsert per customer di dalam satu $transaction,
+// sehingga 16 ribu customer berarti 16 ribu round trip dan hampir pasti habis
+// waktu. Pemanggil wajib memastikan customerId unik karena ON CONFLICT tidak
+// boleh menyentuh baris yang sama dua kali dalam satu statement.
+async function bulkUpsertCustomerPoints(rows) {
+  let written = 0;
+
+  for (
+    let index = 0;
+    index < rows.length;
+    index += CUSTOMER_POINT_UPSERT_CHUNK
+  ) {
+    const chunk = rows.slice(index, index + CUSTOMER_POINT_UPSERT_CHUNK);
+    const tuples = Prisma.join(
+      chunk.map(
+        (row) =>
+          Prisma.sql`(${row.customerId}, ${row.totalPoint}, ${row.availablePoint}, ${DEFAULT_NEXT_REWARD_THRESHOLD}, CURRENT_TIMESTAMP)`,
+      ),
+    );
+
+    // next_reward_threshold sengaja tidak ikut diperbarui agar ambang batas
+    // yang sudah disesuaikan per customer tidak tertimpa nilai default.
+    written += await prisma.$executeRaw`
+      INSERT INTO "CustomerPoint" (
+        "customer_id", "total_point", "available_point",
+        "next_reward_threshold", "updated_at"
+      )
+      VALUES ${tuples}
+      ON CONFLICT ("customer_id") DO UPDATE SET
+        "total_point" = EXCLUDED."total_point",
+        "available_point" = EXCLUDED."available_point",
+        "updated_at" = CURRENT_TIMESTAMP
+    `;
+  }
+
+  return written;
+}
+
+// Sync poin customer dari Runchise ke database lokal.
+//
+// Tanpa locationId, sync mencakup SELURUH outlet. Ini penting: Crisbar punya 29
+// lokasi di Runchise (ID 4424-9854) dan customer tersebar di semuanya, sedangkan
+// versi lama memakai default locationId = 1 yang bukan outlet Crisbar sehingga
+// tidak ada satu pun saldo poin yang ikut ter-update.
+//
+// locationId hanya diisi bila memang ingin membatasi ke satu outlet, misalnya
+// dari endpoint admin manual yang harus selesai dalam batas waktu serverless.
+async function syncCustomerPoints({ locationId = null } = {}) {
+  const targetLocationId = parseRunchiseId(locationId);
+
   // Ambil data dari API + database sekaligus
   const [runchiseCustomers, localCustomers] = await Promise.all([
-    fetchAllCustomers(locationId),
+    targetLocationId
+      ? fetchAllCustomers(targetLocationId)
+      : fetchAllCustomersAcrossLocations(),
     prisma.customer.findMany({
       where: { runchise_id: { not: null } },
       select: { id: true, runchise_id: true },
@@ -451,34 +520,111 @@ async function syncCustomerPoints(locationId = 1) {
     localCustomers.map((c) => [c.runchise_id, c.id]),
   );
 
-  const ops = [];
+  // Dikunci per customer lokal supaya satu customer yang muncul di beberapa
+  // outlet tetap menghasilkan tepat satu baris untuk ON CONFLICT.
+  const pointsByCustomerId = new Map();
+  let unmatched = 0;
 
   for (const c of runchiseCustomers) {
-    const localId = runchiseToLocal.get(c.id);
-    if (!localId) continue;
+    const localId = runchiseToLocal.get(parseRunchiseId(c.id));
+    if (!localId) {
+      unmatched++;
+      continue;
+    }
 
     // Runchise/POS adalah source of truth poin. Karena API riwayat poin
     // Runchise belum tersedia, saldo lokal hanya menjadi mirror nilai terbaru.
-    ops.push(
-      prisma.customerPoint.upsert({
-        where: { customer_id: localId },
-        update: {
-          total_point: c.total_point,
-          available_point: c.available_point,
-        },
-        create: {
-          customer_id: localId,
-          total_point: c.total_point,
-          available_point: c.available_point,
-          next_reward_threshold: 2000,
-        },
-      }),
-    );
+    pointsByCustomerId.set(localId, {
+      customerId: localId,
+      totalPoint: parseInteger(c.total_point, 0),
+      availablePoint: parseInteger(c.available_point, 0),
+    });
   }
 
-  await prisma.$transaction(ops);
+  const rows = [...pointsByCustomerId.values()];
+  const synced = await bulkUpsertCustomerPoints(rows);
 
-  return { synced: ops.length, total: runchiseCustomers.length };
+  return {
+    scope: targetLocationId ? `location:${targetLocationId}` : 'all-locations',
+    synced,
+    matched: rows.length,
+    unmatched,
+    total: runchiseCustomers.length,
+    local_customers: localCustomers.length,
+  };
+}
+
+// Menurunkan saldo poin dari tabel staging RunchiseLocationCustomer, bukan dari
+// API. Staging sudah memuat total_point/available_point untuk ke-29 outlet dari
+// endpoint yang sama, sehingga cakupannya lengkap tanpa satu pun request HTTP.
+// Ini membuat job harian selesai dalam hitungan milidetik, sementara refresh
+// penuh dari API dijalankan lewat scripts/syncCustomerPoints.js yang tidak
+// terikat batas waktu serverless.
+//
+// Poin Runchise diperlakukan sebagai nilai global per customer: objek customer
+// yang sama muncul di setiap listing outlet yang ia ikuti dan membawa
+// location_ids lengkap, jadi barisnya cukup dipilih satu yang paling baru.
+// divergent_customers memverifikasi asumsi itu setiap kali sync berjalan; nilai
+// di atas nol berarti poin ternyata berbeda antar outlet dan strategi merge ini
+// harus ditinjau ulang.
+async function syncCustomerPointsFromStaging() {
+  const [divergence] = await prisma.$queryRaw`
+    SELECT COUNT(*)::int AS divergent_customers
+    FROM (
+      SELECT c."id"
+      FROM "Customer" c
+      JOIN "RunchiseLocationCustomer" rlc
+        ON rlc."runchise_customer_id" = c."runchise_id"
+      WHERE c."runchise_id" IS NOT NULL
+      GROUP BY c."id"
+      HAVING MIN(COALESCE(rlc."total_point", 0))
+               <> MAX(COALESCE(rlc."total_point", 0))
+          OR MIN(COALESCE(rlc."available_point", 0))
+               <> MAX(COALESCE(rlc."available_point", 0))
+    ) divergent
+  `;
+
+  // DISTINCT ON memilih satu baris staging per customer, diambil dari snapshot
+  // terbaru. Dipisahkan ke CTE agar ORDER BY tetap milik SELECT dan tidak
+  // bercampur dengan ON CONFLICT milik INSERT.
+  const synced = await prisma.$executeRaw`
+    WITH latest_points AS (
+      SELECT DISTINCT ON (c."id")
+        c."id" AS customer_id,
+        COALESCE(rlc."total_point", 0) AS total_point,
+        COALESCE(rlc."available_point", 0) AS available_point
+      FROM "Customer" c
+      JOIN "RunchiseLocationCustomer" rlc
+        ON rlc."runchise_customer_id" = c."runchise_id"
+      WHERE c."runchise_id" IS NOT NULL
+      ORDER BY
+        c."id",
+        rlc."updated_at" DESC NULLS LAST,
+        rlc."source_location_id" DESC
+    )
+    INSERT INTO "CustomerPoint" (
+      "customer_id", "total_point", "available_point",
+      "next_reward_threshold", "updated_at"
+    )
+    SELECT
+      "customer_id",
+      "total_point",
+      "available_point",
+      ${DEFAULT_NEXT_REWARD_THRESHOLD}::int,
+      CURRENT_TIMESTAMP
+    FROM latest_points
+    ON CONFLICT ("customer_id") DO UPDATE SET
+      "total_point" = EXCLUDED."total_point",
+      "available_point" = EXCLUDED."available_point",
+      "updated_at" = CURRENT_TIMESTAMP
+  `;
+
+  return {
+    scope: 'all-locations',
+    source: 'staging',
+    synced,
+    divergent_customers: divergence?.divergent_customers ?? 0,
+  };
 }
 
 // ===================== SYNC SALES TRANSACTION REPORT =====================
@@ -585,9 +731,25 @@ function mapSalesTransactionReportData(
   };
 }
 
-async function syncSalesTransactionReports(locationId = 1, options = {}) {
+async function syncSalesTransactionReports(locationId = null, options = {}) {
+  const targetLocationId = parseRunchiseId(locationId);
+
+  // source_location_id ikut menyusun identitas unik baris laporan, sehingga
+  // outlet sumber wajib diketahui. Tanpa itu Number(null) akan tersimpan
+  // sebagai 0 dan menimpa transaksi outlet lain di composite key yang sama.
+  if (!targetLocationId) {
+    return {
+      skipped: true,
+      reason:
+        'RUNCHISE_SYNC_LOCATION_ID belum diisi dengan ID outlet Runchise yang valid',
+      synced: 0,
+      skipped_rows: 0,
+      total: 0,
+    };
+  }
+
   const params = buildSalesTransactionParams({
-    locationId,
+    locationId: targetLocationId,
     startDate: options.startDate ?? options.start_date ?? options.from,
     endDate: options.endDate ?? options.end_date ?? options.to,
     status: options.status,
@@ -595,7 +757,7 @@ async function syncSalesTransactionReports(locationId = 1, options = {}) {
   });
   const [salesTransactions, runchiseCustomers] = await Promise.all([
     fetchAllSalesTransactions(params),
-    fetchAllCustomers(locationId),
+    fetchAllCustomers(targetLocationId),
   ]);
   const runchiseCustomerById = new Map(
     runchiseCustomers.map((customer) => [Number(customer.id), customer]),
@@ -638,11 +800,20 @@ async function syncSalesTransactionReports(locationId = 1, options = {}) {
       sale,
       runchiseCustomer,
       localCustomer,
-      locationId,
+      targetLocationId,
     );
 
+    // Identitas baris adalah pasangan outlet sumber + ID transaksi. Unique
+    // index kolom tunggal sudah dihapus migration
+    // 20260729120000_use_composite_sales_transaction_identity, jadi upsert
+    // harus memakai composite key-nya.
     await prisma.customerSalesTransactionReport.upsert({
-      where: { runchise_sales_transaction_id: saleId },
+      where: {
+        source_location_id_runchise_sales_transaction_id: {
+          source_location_id: targetLocationId,
+          runchise_sales_transaction_id: saleId,
+        },
+      },
       update: data,
       create: data,
     });
@@ -1253,6 +1424,7 @@ module.exports = {
   syncProductsAndRedeemMenu,
   syncCrisbroRedeemMenu,
   syncCustomerPoints,
+  syncCustomerPointsFromStaging,
   syncSalesTransactionReports,
   syncBrands,
   syncLocations,
