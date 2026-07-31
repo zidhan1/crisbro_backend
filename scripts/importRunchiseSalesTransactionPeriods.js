@@ -149,6 +149,14 @@ async function runImportJobs(
     ),
     inserted: results.reduce((total, result) => total + result.inserted, 0),
     updated: results.reduce((total, result) => total + result.updated, 0),
+    skipped_zero_points: results.reduce(
+      (total, result) => total + result.skipped_zero_points,
+      0,
+    ),
+    deleted_zero_points: results.reduce(
+      (total, result) => total + result.deleted_zero_points,
+      0,
+    ),
     results,
   };
   console.log('\n=== SELURUH JOB IMPORT SELESAI ===');

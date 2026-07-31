@@ -204,8 +204,21 @@ async function loadCustomerMaps(db, sourceLocationId) {
   };
 }
 
-async function upsertPage(db, rows) {
-  if (rows.length === 0) return { inserted: 0, updated: 0 };
+async function upsertPage(db, rows, zeroPointSaleIds, sourceLocationId) {
+  let deletedZeroPoints = 0;
+  if (zeroPointSaleIds.length > 0) {
+    const deleted = await db.query(
+      `DELETE FROM "CustomerSalesTransactionReport"
+       WHERE "source_location_id"=$1
+         AND "runchise_sales_transaction_id"=ANY($2::int[])
+       RETURNING "id"`,
+      [sourceLocationId, zeroPointSaleIds],
+    );
+    deletedZeroPoints = deleted.rowCount;
+  }
+  if (rows.length === 0) {
+    return { inserted: 0, updated: 0, deletedZeroPoints };
+  }
   const values = [];
   const tuples = rows.map((row) => `(${row.map((value) => {
     values.push(value);
@@ -225,7 +238,7 @@ async function upsertPage(db, rows) {
     values,
   );
   const inserted = result.rows.filter((row) => row.inserted === true).length;
-  return { inserted, updated: result.rowCount - inserted };
+  return { inserted, updated: result.rowCount - inserted, deletedZeroPoints };
 }
 
 async function importSalesTransactions(
@@ -259,11 +272,14 @@ async function importSalesTransactions(
   let rowsReceived = 0;
   let inserted = 0;
   let updated = 0;
+  let skippedZeroPoints = 0;
+  let deletedZeroPoints = 0;
   let invalid = 0;
   let locationMismatches = 0;
   let outOfRange = 0;
   let apiTotal = 0;
   const uniqueIds = new Set();
+  const retainedIds = new Set();
 
   try {
     const run = await pool.query(
@@ -310,6 +326,7 @@ async function importSalesTransactions(
         }
 
         const rows = [];
+        const zeroPointSaleIds = [];
         for (const sale of transactions) {
         const saleId = positiveInt(sale?.id);
         if (!saleId || uniqueIds.has(saleId)) {
@@ -331,20 +348,35 @@ async function importSalesTransactions(
           continue;
         }
         const customerId = positiveInt(sale.customer_id);
-        rows.push(mapSale(
+        const row = mapSale(
           sale, locationId, customerMaps.staged.get(customerId),
           customerMaps.local.get(customerId),
           customerMaps.locations.get(positiveInt(sale.location_id)),
           runId, snapshotAt,
-        ));
+        );
+        // Indeks 14 dan 15 mengikuti COLUMNS: penambahan_poin dan
+        // penggunaan_poin. Salah satu nilai non-nol cukup untuk menyimpan baris.
+        if (number(row[14]) === 0 && number(row[15]) === 0) {
+          zeroPointSaleIds.push(saleId);
+          skippedZeroPoints++;
+        } else {
+          rows.push(row);
+          retainedIds.add(saleId);
+        }
         }
 
         const client = await pool.connect();
         try {
         await client.query('BEGIN');
-        const result = await upsertPage(client, rows);
+        const result = await upsertPage(
+          client,
+          rows,
+          zeroPointSaleIds,
+          locationId,
+        );
         inserted += result.inserted;
         updated += result.updated;
+        deletedZeroPoints += result.deletedZeroPoints;
         await client.query(
           `UPDATE "RunchiseSalesTransactionImportRun" SET
              "pages_fetched"=$2, "api_reported_total"=$3, "rows_received"=$4,
@@ -361,7 +393,7 @@ async function importSalesTransactions(
         } finally {
         client.release();
         }
-        console.log(`${windowDate} halaman ${windowPage}: diterima ${transactions.length}; disimpan ${rows.length}; unik ${uniqueIds.size}`);
+        console.log(`${windowDate} halaman ${windowPage}: diterima ${transactions.length}; disimpan ${rows.length}; nol-nol ${zeroPointSaleIds.length}; unik ${uniqueIds.size}`);
         nextUrl = nextPageUrl(
           data, windowPage, windowRowsReceived, transactions.length, initialParams,
         );
@@ -403,9 +435,9 @@ async function importSalesTransactions(
     if (rowsReceived !== apiTotal) {
       mismatchReasons.push(`api=${apiTotal}, diterima=${rowsReceived}`);
     }
-    if (uniqueIds.size !== Number(verificationResult.unique_stored)) {
+    if (retainedIds.size !== Number(verificationResult.unique_stored)) {
       mismatchReasons.push(
-        `unik_api=${uniqueIds.size}, unik_database=${verificationResult.unique_stored}`,
+        `unik_berpoin=${retainedIds.size}, unik_database=${verificationResult.unique_stored}`,
       );
     }
     if (invalid > 0 || locationMismatches > 0 || outOfRange > 0) {
@@ -426,6 +458,8 @@ async function importSalesTransactions(
       start_date: startDate, end_date: endDate, pages_fetched: pages,
       api_reported_total: apiTotal, rows_received: rowsReceived,
       unique_transactions: uniqueIds.size, inserted, updated, invalid,
+      skipped_zero_points: skippedZeroPoints,
+      deleted_zero_points: deletedZeroPoints,
       location_mismatches: locationMismatches, out_of_range: outOfRange,
       expected_total: expectedTotal, status, mismatch_reasons: mismatchReasons,
       customer_import: customerImport, verification: verificationResult,

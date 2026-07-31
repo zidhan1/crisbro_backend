@@ -897,6 +897,8 @@ async function syncSalesTransactionReports(locationId = null, options = {}) {
 
   let synced = 0;
   let skipped = 0;
+  let skippedZeroPoints = 0;
+  let deletedZeroPoints = 0;
 
   for (const sale of salesTransactions) {
     const saleId = Number(sale.id);
@@ -914,6 +916,25 @@ async function syncSalesTransactionReports(locationId = null, options = {}) {
       localCustomer,
       targetLocationId,
     );
+
+    // Tabel ini adalah laporan aktivitas poin. Transaksi tanpa penambahan dan
+    // tanpa penggunaan poin tidak memberi nilai pada laporan dan tidak perlu
+    // memenuhi penyimpanan. Tetap hapus pasangan lama bila Runchise mengoreksi
+    // transaksi yang sebelumnya memiliki poin menjadi nol-nol.
+    if (
+      data.penambahan_poin === 0 &&
+      Number(data.penggunaan_poin) === 0
+    ) {
+      const deleted = await prisma.customerSalesTransactionReport.deleteMany({
+        where: {
+          source_location_id: targetLocationId,
+          runchise_sales_transaction_id: saleId,
+        },
+      });
+      skippedZeroPoints++;
+      deletedZeroPoints += deleted.count;
+      continue;
+    }
 
     // Identitas baris adalah pasangan outlet sumber + ID transaksi. Unique
     // index kolom tunggal sudah dihapus migration
@@ -937,6 +958,8 @@ async function syncSalesTransactionReports(locationId = null, options = {}) {
     synced,
     total: salesTransactions.length,
     skipped,
+    skipped_zero_points: skippedZeroPoints,
+    deleted_zero_points: deletedZeroPoints,
   };
 }
 

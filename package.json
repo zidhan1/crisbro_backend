@@ -12,6 +12,7 @@
     "sync:points": "node scripts/syncCustomerPoints.js",
     "import:runchise-sales": "node scripts/importRunchiseSalesTransactions.js",
     "import:runchise-sales-periods": "node scripts/importRunchiseSalesTransactionPeriods.js",
+    "cleanup:zero-point-sales": "node scripts/cleanupZeroPointSalesTransactions.js",
     "dev": "nodemon src/index.js",
     "build": "node scripts/prismaGenerate.js",
     "vercel-build": "node scripts/prismaGenerate.js",
