@@ -17,7 +17,9 @@
     "build": "node scripts/prismaGenerate.js",
     "vercel-build": "node scripts/prismaGenerate.js",
     "postinstall": "node scripts/prismaGenerate.js",
-    "create-admin": "node scripts/createAdmin.js"
+    "create-admin": "node scripts/createAdmin.js",
+    "import:selected-sub-brands": "node scripts/importSelectedSubBrands.js",
+    "import:selected-locations": "node scripts/importSelectedLocations.js"
   },
   "keywords": [],
   "author": "",
