@@ -76,7 +76,6 @@ Content-Type: application/json
   - `POST /api/admin/sync/customers`
   - `POST /api/admin/sync/points`
   - `POST /api/admin/sync/products`
-  - `POST /api/admin/sync/redeem-menu`
   - `POST /api/admin/sync/brands`
   - `POST /api/admin/sync/locations`
   - `POST /api/admin/sync/promos`
@@ -94,5 +93,5 @@ If a route/controller imports `runchiseService`, that is a regression against th
 ## Performance notes
 
 - Public catalog and promo responses are cached in memory for 5 minutes by default.
-- Master sync reuses one Runchise `/products` fetch for product sync and redeem-menu sync.
+- Master sync memperbarui katalog produk; konfigurasi redeem hanya dikelola melalui dashboard admin/marketing.
 - Database indexes exist for common catalog, promo, and registration lookup paths.

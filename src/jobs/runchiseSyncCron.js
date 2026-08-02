@@ -3,7 +3,7 @@ const {
   syncCustomers,
   syncCustomerPointsFromStaging,
   syncSalesTransactionReports,
-  syncProductsAndRedeemMenu,
+  syncProducts,
   syncBrands,
   syncLocations,
   syncPromos,
@@ -49,7 +49,7 @@ async function runRunchiseMasterSyncJob() {
 
     results.locations = await syncLocations(brandId);
     results.brands = await syncBrands();
-    Object.assign(results, await syncProductsAndRedeemMenu(brandId));
+    results.products = await syncProducts(brandId);
     results.customers = await runCustomerSyncJob();
     results.salesTransactionReports =
       await syncSalesTransactionReports(locationId);

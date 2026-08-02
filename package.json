@@ -20,7 +20,9 @@
     "create-admin": "node scripts/createAdmin.js",
     "import:selected-sub-brands": "node scripts/importSelectedSubBrands.js",
     "import:selected-locations": "node scripts/importSelectedLocations.js",
-    "import:selected-customers": "node scripts/importSelectedCustomers.js"
+    "import:selected-customers": "node scripts/importSelectedCustomers.js",
+    "import:selected-product-categories": "node scripts/importSelectedProductCategories.js",
+    "import:crisbar-category-mapping": "node scripts/importSelectedSubBrandProductCategories.js"
   },
   "keywords": [],
   "author": "",

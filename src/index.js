@@ -30,7 +30,6 @@ const pointRoutes = require('./routes/pointRoutes');
 const {
   syncCustomers,
   syncProducts,
-  syncCrisbroRedeemMenu,
   syncCustomerPoints,
   syncCustomerPointsFromStaging,
   syncSalesTransactionReports,
@@ -196,16 +195,6 @@ async function handleSyncProducts(req, res) {
   }
 }
 
-// Sync redeem menu
-async function handleSyncRedeemMenu(req, res) {
-  try {
-    const result = await syncCrisbroRedeemMenu();
-    res.json({ message: 'Sync menu redeem Crisbro selesai', ...result });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-}
-
 // Sync points
 //
 // Tanpa location_id, poin diturunkan dari tabel staging: mencakup ke-29 outlet
@@ -312,7 +301,6 @@ app.post(
   handleProcessCustomerTimestampSync,
 );
 app.post('/admin/sync/products', ...adminOnly, handleSyncProducts);
-app.post('/admin/sync/redeem-menu', ...adminOnly, handleSyncRedeemMenu);
 app.post('/admin/sync/points', ...adminOnly, handleSyncPoints);
 app.post('/admin/sync/brands', ...adminOnly, handleSyncBrands);
 app.post('/admin/sync/locations', ...adminOnly, handleSyncLocations);
@@ -351,7 +339,6 @@ app.post(
   handleProcessCustomerTimestampSync,
 );
 app.post('/api/admin/sync/products', ...adminOnly, handleSyncProducts);
-app.post('/api/admin/sync/redeem-menu', ...adminOnly, handleSyncRedeemMenu);
 app.post('/api/admin/sync/points', ...adminOnly, handleSyncPoints);
 app.post('/api/admin/sync/brands', ...adminOnly, handleSyncBrands);
 app.post('/api/admin/sync/locations', ...adminOnly, handleSyncLocations);

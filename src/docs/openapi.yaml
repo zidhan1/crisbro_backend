@@ -739,16 +739,6 @@ paths:
         "200":
           $ref: "#/components/responses/SyncResult"
 
-  /api/admin/sync/redeem-menu:
-    post:
-      tags: [Admin Sync]
-      summary: Sync Crisbro redeem menu from Runchise to local database
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          $ref: "#/components/responses/SyncResult"
-
   /api/admin/sync/points:
     post:
       tags: [Admin Sync]

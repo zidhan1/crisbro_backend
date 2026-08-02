@@ -194,7 +194,6 @@
 
   /admin/sync/customers
   /admin/sync/products
-  /admin/sync/redeem-menu
   /admin/sync/points
   /admin/sync/brands
   /admin/sync/locations
@@ -205,7 +204,6 @@
 
   /api/admin/sync/customers
   /api/admin/sync/products
-  /api/admin/sync/redeem-menu
   /api/admin/sync/points
   /api/admin/sync/brands
   /api/admin/sync/locations
