@@ -22,7 +22,8 @@
     "import:selected-locations": "node scripts/importSelectedLocations.js",
     "import:selected-customers": "node scripts/importSelectedCustomers.js",
     "import:selected-product-categories": "node scripts/importSelectedProductCategories.js",
-    "import:crisbar-category-mapping": "node scripts/importSelectedSubBrandProductCategories.js"
+    "import:crisbar-category-mapping": "node scripts/importSelectedSubBrandProductCategories.js",
+    "import:crisbar-products": "node scripts/importSelectedCrisbarProducts.js"
   },
   "keywords": [],
   "author": "",

@@ -3,6 +3,9 @@ const CRISBAR_SUB_BRAND_NAME = 'Crisbar';
 // Kategori operasional/internal, bukan kategori display produk
 const EXCLUDED_CRISBAR_CATEGORY_NAMES = new Set([
   'Bahan Baku',
+  'Sembunyikan',
+  'Topping',
+  'Option Set Nasi',
   'Option Set',
   'QPON',
   'BIG ORDER',

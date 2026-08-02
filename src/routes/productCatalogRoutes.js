@@ -16,6 +16,7 @@ async function getVisibleCrisbarProducts() {
   return prisma.menuItem.findMany({
     where: {
       is_active: true,
+      is_selectable: true,
       category: {
         name: { notIn: Array.from(EXCLUDED_CRISBAR_CATEGORY_NAMES) },
         sub_brand_links: {

@@ -9,12 +9,14 @@ const {
   fetchAllCustomers,
   fetchAllCustomersAcrossLocations,
   fetchAllSalesTransactions,
-  fetchAllProducts,
   fetchAllSubBrands,
   fetchAllLocations,
   fetchAllPromos,
 } = require('./runchiseService');
 const { getSubBrandMapping } = require('./subBrandService');
+const {
+  importProducts: importCrisbarProducts,
+} = require('../../scripts/importSelectedCrisbarProducts');
 
 const VISIBLE_PROMO_SUB_BRANDS = new Set(['Crisbar']);
 const DEFAULT_PROMO_LIFESPAN_DAYS = 90;
@@ -957,59 +959,11 @@ async function syncSalesTransactionReports(locationId = null, options = {}) {
 
 // ===================== SYNC PRODUCTS =====================
 
-// Sync product dari Runchise → menuItem lokal
-async function syncProducts(brandId = 1, products = null) {
-  const productList = products || (await fetchAllProducts());
-  let synced = 0;
-
-  for (const p of productList) {
-    // Pastikan category ada, atau buat baru jika belum ada
-    let category;
-    if (p.product_category?.id) {
-      category = await prisma.menuCategory.upsert({
-        where: { id: p.product_category.id },
-        update: { name: p.product_category.name },
-        create: {
-          id: p.product_category.id,
-          brand_id: brandId,
-          name: p.product_category.name,
-        },
-      });
-    } else {
-      // Produk tanpa kategori → masuk ke "Uncategorized"
-      category = await prisma.menuCategory.upsert({
-        where: { id: 9999 },
-        update: {},
-        create: { id: 9999, brand_id: brandId, name: 'Uncategorized' },
-      });
-    }
-
-    // Upsert menu item
-    await prisma.menuItem.upsert({
-      where: { runchise_id: p.id },
-      update: {
-        name: p.name,
-        description: p.description ?? null,
-        price: parseFloat(p.sell_price),
-        image_url: p.image_url || null,
-        is_active: p.status === 'activated',
-        category_id: category.id,
-      },
-      create: {
-        runchise_id: p.id,
-        brand_id: brandId,
-        category_id: category.id,
-        name: p.name,
-        description: p.description ?? null,
-        price: parseFloat(p.sell_price),
-        image_url: p.image_url || null,
-        is_active: p.status === 'activated',
-      },
-    });
-    synced++;
-  }
-
-  return { synced, total: productList.length };
+// Sinkronisasi katalog hanya untuk produk yang kategorinya terhubung ke
+// sub-brand Crisbar 1041. Implementasi yang sama dipakai CLI, endpoint admin,
+// dan cron agar tidak ada perilaku import yang berbeda.
+async function syncProducts() {
+  return importCrisbarProducts({ db: prisma, writeEnabled: true });
 }
 
 // ===================== SYNC BRANDS =====================

@@ -315,6 +315,22 @@ async function findCustomerByPhoneAcrossLocations(phoneNumber, excludedLocationI
 
 // ===================== PRODUCTS =====================
 
+async function fetchProductsPage({ page = 1, itemPerPage = 50, status } = {}) {
+  const params = { page, item_per_page: itemPerPage };
+  if (status) params.status = status;
+
+  const { data } = await requestWithRetry(
+    `Fetch products Runchise page ${page}`,
+    () => runchiseClient.get('/products', { params }),
+  );
+
+  if (!Array.isArray(data?.products) || !data?.paging) {
+    throw new Error(`Response products halaman ${page} tidak valid`);
+  }
+
+  return data;
+}
+
 // Mengambil semua produk dari Runchise (pagination otomatis)
 async function fetchAllProducts() {
   let allProducts = [];
@@ -322,13 +338,11 @@ async function fetchAllProducts() {
   let hasMore = true;
 
   while (hasMore) {
-    const { data } = await requestWithRetry(
-      `Fetch products Runchise page ${page}`,
-      () =>
-        runchiseClient.get('/products', {
-          params: { page, item_per_page: 100, status: 'activated' },
-        }),
-    );
+    const data = await fetchProductsPage({
+      page,
+      itemPerPage: 100,
+      status: 'activated',
+    });
 
     allProducts = allProducts.concat(data.products);
     hasMore = data.paging.next_page !== null;
@@ -471,6 +485,7 @@ module.exports = {
   findCustomerByPhone,
   findCustomerByPhoneAcrossLocations,
   normalizeIndonesianPhone,
+  fetchProductsPage,
   fetchAllProducts,
   fetchAllSubBrands,
   fetchAllLocations,

@@ -10,6 +10,7 @@ router.get('/', async (req, res) => {
     const items = await prisma.redeemMenuItem.findMany({
       where: {
         is_active: true,
+        menu_item: { is_active: true, is_selectable: true },
         category: { is_active: true },
         OR: [{ start_at: null }, { start_at: { lte: now } }],
         AND: [{ OR: [{ end_at: null }, { end_at: { gte: now } }] }],

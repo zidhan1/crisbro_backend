@@ -1964,6 +1964,7 @@ async function listCatalogMenuItems(req, res) {
     };
     const itemWhere = {
       category: categoryWhere,
+      is_selectable: true,
       ...(search && {
         name: { contains: search, mode: 'insensitive' },
       }),

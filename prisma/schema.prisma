@@ -339,6 +339,9 @@ model MenuItem {
   image_url   String?
   badge       String? // Best Seller | Pedas | Baru etc.
   is_active   Boolean  @default(true)
+  is_modifier Boolean  @default(false)
+  is_selectable Boolean @default(true)
+  variance_parent_product_id Int?
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt
 
@@ -349,6 +352,7 @@ model MenuItem {
   @@index([brand_id])
   @@index([category_id])
   @@index([is_active])
+  @@index([is_selectable])
 }
 
 model RedeemMenuCategory {
