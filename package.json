@@ -19,7 +19,8 @@
     "postinstall": "node scripts/prismaGenerate.js",
     "create-admin": "node scripts/createAdmin.js",
     "import:selected-sub-brands": "node scripts/importSelectedSubBrands.js",
-    "import:selected-locations": "node scripts/importSelectedLocations.js"
+    "import:selected-locations": "node scripts/importSelectedLocations.js",
+    "import:selected-customers": "node scripts/importSelectedCustomers.js"
   },
   "keywords": [],
   "author": "",

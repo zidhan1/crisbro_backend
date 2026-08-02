@@ -774,9 +774,10 @@ async function deleteAdminUser(req, res) {
   }
 }
 
-// Dashboard membaca snapshot Runchise dari database agar pagination, filter,
-// dan sorting tetap cepat. Field tanggal lokal tidak pernah dipakai sebagai
-// tanggal pendaftaran customer.
+// Dashboard membaca tabel canonical Customer. Importer selektif sengaja tidak
+// menyimpan ulang payload ke tabel staging agar penggunaan disk tetap kecil.
+// Pagination, filter, dan sorting tetap dikerjakan PostgreSQL; Prisma hanya
+// memuat maksimal satu halaman beserta relasi yang diperlukan UI.
 async function listAdminCustomers(req, res) {
   try {
     const search = parseOptionalString(req.query.search, 'search', 100);
@@ -801,30 +802,42 @@ async function listAdminCustomers(req, res) {
     if (search) {
       const pattern = `%${search}%`;
       filters.push(Prisma.sql`(
-        rlc."name" ILIKE ${pattern}
-        OR rlc."phone_number" ILIKE ${pattern}
-        OR rlc."email" ILIKE ${pattern}
-        OR rlc."runchise_customer_id"::text ILIKE ${pattern}
-        OR source_location."name" ILIKE ${pattern}
+        customer."name" ILIKE ${pattern}
+        OR customer."phone_number" ILIKE ${pattern}
+        OR customer_user."email" ILIKE ${pattern}
+        OR customer."runchise_id"::text ILIKE ${pattern}
+        OR EXISTS (
+          SELECT 1
+          FROM "CustomerLocation" search_customer_location
+          JOIN "Location" search_location
+            ON search_location."id" = search_customer_location."location_id"
+          WHERE search_customer_location."customer_id" = customer."id"
+            AND search_location."name" ILIKE ${pattern}
+        )
       )`);
     }
-    if (from) filters.push(Prisma.sql`rlc."runchise_created_at" >= ${from}`);
-    if (to) filters.push(Prisma.sql`rlc."runchise_created_at" <= ${to}`);
-    const extraFilterSql = filters.length
-      ? Prisma.sql`AND ${Prisma.join(filters, ' AND ')}`
+    if (from) {
+      filters.push(
+        Prisma.sql`COALESCE(customer."runchise_created_at", customer."created_at") >= ${from}`,
+      );
+    }
+    if (to) {
+      filters.push(
+        Prisma.sql`COALESCE(customer."runchise_created_at", customer."created_at") <= ${to}`,
+      );
+    }
+    const filterSql = filters.length
+      ? Prisma.sql`WHERE ${Prisma.join(filters, ' AND ')}`
       : Prisma.empty;
 
     const [countRow] = await prisma.$queryRaw`
       SELECT
-        COUNT(DISTINCT rlc."runchise_customer_id")::int AS total,
-        MIN(rlc."runchise_created_at") AS earliest,
-        MAX(rlc."runchise_created_at") AS latest
-      FROM "RunchiseLocationCustomer" rlc
-      JOIN "Location" source_location
-        ON source_location."runchise_id" = rlc."source_location_id"
-      WHERE source_location."is_outlet" = TRUE
-        AND source_location."runchise_id" IS NOT NULL
-        ${extraFilterSql}
+        COUNT(*)::int AS total,
+        MIN(COALESCE(customer."runchise_created_at", customer."created_at")) AS earliest,
+        MAX(COALESCE(customer."runchise_created_at", customer."created_at")) AS latest
+      FROM "Customer" customer
+      JOIN "User" customer_user ON customer_user."id" = customer."user_id"
+      ${filterSql}
     `;
     const total = countRow?.total ?? 0;
     const totalPages = Math.max(1, Math.ceil(total / limit));
@@ -836,144 +849,67 @@ async function listAdminCustomers(req, res) {
     );
     const direction = order === 'desc' ? Prisma.sql`DESC` : Prisma.sql`ASC`;
     const orderColumns = {
-      name: Prisma.sql`MAX(rlc."name")`,
-      email: Prisma.sql`MAX(COALESCE(customer_user."email", rlc."email"))`,
-      phone_number: Prisma.sql`MAX(rlc."phone_number")`,
-      outlet: Prisma.sql`MIN(source_location."name")`,
-      points: Prisma.sql`MAX(rlc."available_point")`,
-      status: Prisma.sql`MAX(rlc."status")`,
-      activation_status: Prisma.sql`MAX(customer_user."activation_status")`,
-      runchise_sync_status: Prisma.sql`MAX(customer."runchise_sync_status")`,
-      created_at: Prisma.sql`MAX(rlc."runchise_created_at")`,
-      updated_at: Prisma.sql`MAX(rlc."runchise_updated_at")`,
+      name: Prisma.sql`customer."name"`,
+      email: Prisma.sql`customer_user."email"`,
+      phone_number: Prisma.sql`customer."phone_number"`,
+      outlet: Prisma.sql`(
+        SELECT MIN(sort_location."name")
+        FROM "CustomerLocation" sort_customer_location
+        JOIN "Location" sort_location
+          ON sort_location."id" = sort_customer_location."location_id"
+        WHERE sort_customer_location."customer_id" = customer."id"
+      )`,
+      points: Prisma.sql`COALESCE(customer_point."available_point", 0)`,
+      status: Prisma.sql`customer."status"`,
+      activation_status: Prisma.sql`customer_user."activation_status"`,
+      runchise_sync_status: Prisma.sql`customer."runchise_sync_status"`,
+      created_at: Prisma.sql`COALESCE(customer."runchise_created_at", customer."created_at")`,
+      updated_at: Prisma.sql`COALESCE(customer."runchise_updated_at", customer."updated_at")`,
     };
     const orderColumn =
-      orderColumns[sortBy] ?? Prisma.sql`MAX(rlc."runchise_created_at")`;
+      orderColumns[sortBy] ??
+      Prisma.sql`COALESCE(customer."runchise_created_at", customer."created_at")`;
 
     const pageRows = await prisma.$queryRaw`
-      SELECT rlc."runchise_customer_id"
-      FROM "RunchiseLocationCustomer" rlc
-      JOIN "Location" source_location
-        ON source_location."runchise_id" = rlc."source_location_id"
-      LEFT JOIN "Customer" customer
-        ON customer."runchise_id" = rlc."runchise_customer_id"
-      LEFT JOIN "User" customer_user ON customer_user."id" = customer."user_id"
-      WHERE source_location."is_outlet" = TRUE
-        AND source_location."runchise_id" IS NOT NULL
-        ${extraFilterSql}
-      GROUP BY rlc."runchise_customer_id"
+      SELECT customer."id"
+      FROM "Customer" customer
+      JOIN "User" customer_user ON customer_user."id" = customer."user_id"
+      LEFT JOIN "CustomerPoint" customer_point
+        ON customer_point."customer_id" = customer."id"
+      ${filterSql}
       ORDER BY ${orderColumn} ${direction} NULLS LAST,
-        rlc."runchise_customer_id" ${direction}
+        customer."id" ${direction}
       OFFSET ${skip}
       LIMIT ${limit}
     `;
-    const runchiseIds = pageRows.map((row) => row.runchise_customer_id);
-    const [snapshots, linkedCustomers] = runchiseIds.length
-      ? await Promise.all([
-          prisma.runchiseLocationCustomer.findMany({
-            where: { runchise_customer_id: { in: runchiseIds } },
-            orderBy: [
-              { runchise_updated_at: 'desc' },
-              { imported_at: 'desc' },
-              { source_location_id: 'desc' },
-            ],
-          }),
-          prisma.customer.findMany({
-            where: { runchise_id: { in: runchiseIds } },
-            include: getAdminCustomerInclude(),
-          }),
-        ])
-      : [[], []];
-    const sourceLocationIds = [
-      ...new Set(snapshots.map((row) => row.source_location_id)),
-    ];
-    const ownerLocationIds = [
-      ...new Set(snapshots.map((row) => row.owner_location_id).filter(Boolean)),
-    ];
-    const locations = await prisma.location.findMany({
-      where: {
-        runchise_id: { in: [...new Set([...sourceLocationIds, ...ownerLocationIds])] },
-        is_outlet: true,
-      },
-      select: { id: true, name: true, city: true, runchise_id: true },
-    });
-    const locationByRunchiseId = new Map(
-      locations.map((location) => [location.runchise_id, location]),
-    );
-    const snapshotsByCustomer = new Map();
-    for (const snapshot of snapshots) {
-      const group = snapshotsByCustomer.get(snapshot.runchise_customer_id) ?? [];
-      group.push(snapshot);
-      snapshotsByCustomer.set(snapshot.runchise_customer_id, group);
-    }
-    const linkedByRunchiseId = new Map(
-      linkedCustomers.map((customer) => [customer.runchise_id, customer]),
-    );
+    const customerIds = pageRows.map((row) => row.id);
+    const customers = customerIds.length
+      ? await prisma.customer.findMany({
+          where: { id: { in: customerIds } },
+          include: getAdminCustomerInclude(),
+        })
+      : [];
+    const customerById = new Map(customers.map((customer) => [customer.id, customer]));
 
-    const items = runchiseIds.map((runchiseId) => {
-      const customerSnapshots = snapshotsByCustomer.get(runchiseId) ?? [];
-      const latest = customerSnapshots[0];
-      const linked = linkedByRunchiseId.get(runchiseId);
-      const customerLocations = [
-        ...new Map(
-          customerSnapshots
-            .map((snapshot) => locationByRunchiseId.get(snapshot.source_location_id))
-            .filter(Boolean)
-            .map((location) => [location.id, location]),
-        ).values(),
-      ].sort((a, b) => a.id - b.id);
-      const ownerLocation =
-        locationByRunchiseId.get(latest?.owner_location_id) ??
-        customerLocations[0] ??
-        null;
+    const items = customerIds.map((customerId) => {
+      const customer = customerById.get(customerId);
+      const customerLocations = [...(customer?.customer_locations ?? [])].sort(
+        (a, b) => a.location_id - b.location_id,
+      );
+      const hasRunchiseDate = Boolean(customer?.runchise_created_at);
 
       return {
-        id: linked?.id ?? 0,
-        user_id: linked?.user_id,
-        runchise_id: runchiseId,
-        name: latest?.name ?? '-',
-        phone_number: latest?.phone_number ?? null,
-        phone_number_country_code: latest?.phone_number_country_code ?? 62,
-        address: latest?.address ?? null,
-        province: latest?.province ?? null,
-        city: latest?.city ?? null,
-        country: latest?.country ?? null,
-        postal_code: latest?.postal_code ?? null,
-        dob: latest?.dob ?? null,
-        gender: latest?.gender ?? null,
-        status: latest?.status ?? null,
-        balance: latest?.balance ?? 0,
-        brand_id: latest?.brand_id ?? linked?.brand_id ?? null,
-        brand: linked?.brand,
-        owner_location_id: ownerLocation?.id ?? null,
-        owner_location: ownerLocation,
-        location_ids: customerLocations.map((location) => location.id),
-        customer_locations: customerLocations.map((location) => ({
-          location_id: location.id,
-          location,
-        })),
-        customer_point: {
-          total_point: latest?.total_point ?? 0,
-          available_point: latest?.available_point ?? 0,
+        ...customer,
+        location_ids: customerLocations.map((row) => row.location_id),
+        customer_locations: customerLocations,
+        customer_point: customer?.customer_point ?? {
+          total_point: 0,
+          available_point: 0,
           next_reward_threshold: DEFAULT_REWARD_THRESHOLD,
         },
-        user: linked?.user ?? {
-          id: null,
-          email: latest?.email ?? null,
-          phone_number: null,
-          role: 'customer',
-          activation_status: 'not_linked',
-          activated_at: null,
-        },
-        runchise_location_id: latest?.source_location_id ?? null,
-        runchise_sync_status: linked?.runchise_sync_status ?? 'not_linked',
-        runchise_sync_error: linked?.runchise_sync_error ?? null,
-        runchise_synced_at: linked?.runchise_synced_at ?? null,
-        runchise_created_at: latest?.runchise_created_at ?? null,
-        runchise_updated_at: latest?.runchise_updated_at ?? null,
-        created_at: latest?.runchise_created_at ?? null,
-        updated_at: latest?.runchise_updated_at ?? null,
-        date_source: 'runchise',
+        created_at: customer?.runchise_created_at ?? customer?.created_at ?? null,
+        updated_at: customer?.runchise_updated_at ?? customer?.updated_at ?? null,
+        date_source: hasRunchiseDate ? 'runchise_sync' : 'local',
       };
     });
 
@@ -986,7 +922,7 @@ async function listAdminCustomers(req, res) {
       registration_range: {
         earliest: countRow?.earliest ?? null,
         latest: countRow?.latest ?? null,
-        source: 'runchise',
+        source: 'canonical_customer',
       },
     });
   } catch (error) {
@@ -1707,16 +1643,20 @@ async function getSummary(req, res) {
         FROM "Location" l
         LEFT JOIN (
           SELECT
-            "source_location_id",
-            COUNT(*)::int AS stored_customers,
-            COUNT(*) FILTER (
-              WHERE COALESCE("available_point", 0) > 0
+            customer_location."location_id",
+            COUNT(DISTINCT customer_location."customer_id")::int AS stored_customers,
+            COUNT(DISTINCT customer_location."customer_id") FILTER (
+              WHERE COALESCE(customer_point."available_point", 0) > 0
             )::int AS customers_with_points,
-            MAX("imported_at") AS last_snapshot_at
-          FROM "RunchiseLocationCustomer"
-          GROUP BY "source_location_id"
+            MAX(COALESCE(customer."runchise_updated_at", customer."updated_at")) AS last_snapshot_at
+          FROM "CustomerLocation" customer_location
+          JOIN "Customer" customer
+            ON customer."id" = customer_location."customer_id"
+          LEFT JOIN "CustomerPoint" customer_point
+            ON customer_point."customer_id" = customer."id"
+          GROUP BY customer_location."location_id"
         ) customer_metric
-          ON customer_metric."source_location_id" = l."runchise_id"
+          ON customer_metric."location_id" = l."id"
         LEFT JOIN LATERAL (
           SELECT
             import_run."api_reported_total",
@@ -1731,15 +1671,16 @@ async function getSummary(req, res) {
           AND l."runchise_id" IS NOT NULL
         ORDER BY l."name" ASC
       `,
-      // Customer unik, bukan jumlah baris. Satu customer dapat terdaftar di
-      // beberapa outlet, sehingga menjumlahkan stored_customers per outlet
-      // menghitung orang yang sama berulang kali. Cakupan WHERE dibuat identik
-      // dengan query di atas agar kedua angka dapat dibandingkan.
+      // Customer unik secara global. Perhitungan per outlet di atas juga
+      // memakai CustomerLocation, sehingga satu customer tetap boleh muncul
+      // pada beberapa outlet tetapi tidak terhitung ganda di outlet yang sama.
       prisma.$queryRaw`
-        SELECT COUNT(DISTINCT rlc."runchise_customer_id")::int AS unique_customers
-        FROM "RunchiseLocationCustomer" rlc
+        SELECT COUNT(DISTINCT customer_location."customer_id")::int AS unique_customers
+        FROM "CustomerLocation" customer_location
+        JOIN "Customer" customer
+          ON customer."id" = customer_location."customer_id"
         JOIN "Location" l
-          ON l."runchise_id" = rlc."source_location_id"
+          ON l."id" = customer_location."location_id"
         WHERE l."is_outlet" = TRUE
           AND l."runchise_id" IS NOT NULL
       `,
