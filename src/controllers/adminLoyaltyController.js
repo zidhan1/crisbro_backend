@@ -1149,9 +1149,49 @@ async function listCustomerSalesTransactionReports(req, res) {
         orderBy: { nama_outlet: 'asc' },
       }),
     ]);
+    const reportTransactionIds = reports.map(
+      (report) => report.runchise_sales_transaction_id,
+    );
+    const rewardRedemptions = reportTransactionIds.length
+      ? await prisma.runchisePosRewardRedemption.findMany({
+          where: {
+            sale_transaction_id: { in: reportTransactionIds },
+            status: 'valid',
+          },
+          select: {
+            id: true,
+            sale_transaction_id: true,
+            runchise_product_id: true,
+            redeem_menu_item_id: true,
+            product_name: true,
+            quantity: true,
+            point_per_item: true,
+            points_spent: true,
+            is_managed_reward: true,
+          },
+          orderBy: [{ sale_transaction_id: 'asc' }, { id: 'asc' }],
+        })
+      : [];
+    const rewardsByTransactionId = new Map();
+    for (const reward of rewardRedemptions) {
+      const items = rewardsByTransactionId.get(reward.sale_transaction_id) ?? [];
+      items.push({
+        id: reward.id.toString(),
+        runchise_product_id: reward.runchise_product_id,
+        redeem_menu_item_id: reward.redeem_menu_item_id,
+        product_name: reward.product_name,
+        quantity: Number(reward.quantity),
+        point_per_item: reward.point_per_item,
+        points_spent: reward.points_spent,
+        is_managed_reward: reward.is_managed_reward,
+      });
+      rewardsByTransactionId.set(reward.sale_transaction_id, items);
+    }
     res.json({
       items: reports.map((report) => ({
         ...report,
+        redeemed_rewards:
+          rewardsByTransactionId.get(report.runchise_sales_transaction_id) ?? [],
         import_run_id:
           report.import_run_id === null || report.import_run_id === undefined
             ? null
