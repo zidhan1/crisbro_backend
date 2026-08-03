@@ -16,21 +16,21 @@ datasource db {
 // ───────────────────────────────────────────────
 
 model User {
-  id            Int      @id @default(autoincrement())
-  email         String?   @unique // Di DBML: not null, unique
-  password_hash String
-  phone_number  String? @unique // Di DBML: boleh null, unique
-  role          String // admin | staff | customer
-  activation_status String @default("active") // pending_activation | active
-  activated_at  DateTime?
-  created_at    DateTime @default(now())
-  updated_at    DateTime @updatedAt
+  id                Int       @id @default(autoincrement())
+  email             String?   @unique // Di DBML: not null, unique
+  password_hash     String
+  phone_number      String?   @unique // Di DBML: boleh null, unique
+  role              String // admin | staff | customer
+  activation_status String    @default("active") // pending_activation | active
+  activated_at      DateTime?
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
 
-  sessions          Session[]
-  activation_tokens AccountActivationToken[]
-  customer          Customer?  @relation("UserToCustomer")
-  created_customers Customer[] @relation("CreatedBy")
-  updated_customers Customer[] @relation("LastUpdatedBy")
+  sessions            Session[]
+  activation_tokens   AccountActivationToken[]
+  customer            Customer?                @relation("UserToCustomer")
+  created_customers   Customer[]               @relation("CreatedBy")
+  updated_customers   Customer[]               @relation("LastUpdatedBy")
   admin_activity_logs AdminActivityLog[]
 }
 
@@ -124,11 +124,12 @@ model Customer {
   created_by      User?     @relation("CreatedBy", fields: [created_by_id], references: [id])
   last_updated_by User?     @relation("LastUpdatedBy", fields: [last_updated_by_id], references: [id])
 
-  customer_locations CustomerLocation[]
-  customer_point     CustomerPoint?
-  point_histories    PointHistory[]
-  redemptions        RewardRedemption[]
+  customer_locations        CustomerLocation[]
+  customer_point            CustomerPoint?
+  point_histories           PointHistory[]
+  redemptions               RewardRedemption[]
   sales_transaction_reports CustomerSalesTransactionReport[]
+  runchise_pos_redemptions  RunchisePosRewardRedemption[]
 
   @@index([phone_number])
   @@index([normalized_phone_number])
@@ -165,42 +166,42 @@ model CustomerTimestampSyncJob {
 // Snapshot customer yang dikembalikan endpoint Runchise per lokasi.
 // Terpisah dari Customer aplikasi agar impor POS tidak membuat akun pengguna.
 model RunchiseLocationCustomer {
-  id                         BigInt   @id @default(autoincrement())
-  source_location_id         Int
-  runchise_customer_id       Int
-  name                       String?
-  phone_number               String?
-  phone_number_country_code  Int?
-  address                    String?  @db.Text
-  province                   String?
-  city                       String?
-  country                    String?
-  postal_code                String?
-  email                      String?
-  dob                        DateTime? @db.Date
-  gender                     String?
-  brand_id                   Int?
-  status                     String?
-  location_ids               Json
-  owner_location_id          Int?
-  owner_location_name        String?
-  balance                    Decimal? @db.Decimal(18, 2)
-  total_point                Int?
-  available_point            Int?
-  customer_category_id       Int?
-  customer_category_name     String?
-  food_alergy                String?  @db.Text
-  notes                      String?  @db.Text
-  customer_code              String?
-  created_by_id              Int?
-  last_updated_by_id         Int?
-  runchise_created_at        DateTime?
-  runchise_updated_at        DateTime?
-  last_visited_date          DateTime?
-  raw                        Json
-  last_import_run_id         BigInt?
-  imported_at                DateTime @default(now())
-  updated_at                 DateTime @updatedAt
+  id                        BigInt    @id @default(autoincrement())
+  source_location_id        Int
+  runchise_customer_id      Int
+  name                      String?
+  phone_number              String?
+  phone_number_country_code Int?
+  address                   String?   @db.Text
+  province                  String?
+  city                      String?
+  country                   String?
+  postal_code               String?
+  email                     String?
+  dob                       DateTime? @db.Date
+  gender                    String?
+  brand_id                  Int?
+  status                    String?
+  location_ids              Json
+  owner_location_id         Int?
+  owner_location_name       String?
+  balance                   Decimal?  @db.Decimal(18, 2)
+  total_point               Int?
+  available_point           Int?
+  customer_category_id      Int?
+  customer_category_name    String?
+  food_alergy               String?   @db.Text
+  notes                     String?   @db.Text
+  customer_code             String?
+  created_by_id             Int?
+  last_updated_by_id        Int?
+  runchise_created_at       DateTime?
+  runchise_updated_at       DateTime?
+  last_visited_date         DateTime?
+  raw                       Json
+  last_import_run_id        BigInt?
+  imported_at               DateTime  @default(now())
+  updated_at                DateTime  @updatedAt
 
   @@unique([source_location_id, runchise_customer_id])
   @@index([source_location_id])
@@ -308,9 +309,9 @@ model MenuCategory {
   sort_order Int     @default(0)
   is_active  Boolean @default(true)
 
-  brand            Brand                     @relation(fields: [brand_id], references: [id])
-  items            MenuItem[]
-  sub_brand_links  SubBrandProductCategory[]
+  brand           Brand                     @relation(fields: [brand_id], references: [id])
+  items           MenuItem[]
+  sub_brand_links SubBrandProductCategory[]
 
   @@index([name])
 }
@@ -329,24 +330,24 @@ model SubBrandProductCategory {
 }
 
 model MenuItem {
-  id          Int      @id @default(autoincrement())
-  brand_id    Int
-  runchise_id Int?     @unique
-  category_id Int
-  name        String
-  description String?  @db.Text
-  price       Decimal  @db.Decimal(10, 2)
-  image_url   String?
-  badge       String? // Best Seller | Pedas | Baru etc.
-  is_active   Boolean  @default(true)
-  is_modifier Boolean  @default(false)
-  is_selectable Boolean @default(true)
+  id                         Int      @id @default(autoincrement())
+  brand_id                   Int
+  runchise_id                Int?     @unique
+  category_id                Int
+  name                       String
+  description                String?  @db.Text
+  price                      Decimal  @db.Decimal(10, 2)
+  image_url                  String?
+  badge                      String? // Best Seller | Pedas | Baru etc.
+  is_active                  Boolean  @default(true)
+  is_modifier                Boolean  @default(false)
+  is_selectable              Boolean  @default(true)
   variance_parent_product_id Int?
-  created_at  DateTime @default(now())
-  updated_at  DateTime @updatedAt
+  created_at                 DateTime @default(now())
+  updated_at                 DateTime @updatedAt
 
-  brand    Brand        @relation(fields: [brand_id], references: [id])
-  category MenuCategory @relation(fields: [category_id], references: [id])
+  brand             Brand            @relation(fields: [brand_id], references: [id])
+  category          MenuCategory     @relation(fields: [category_id], references: [id])
   redeem_menu_items RedeemMenuItem[]
 
   @@index([brand_id])
@@ -370,22 +371,23 @@ model RedeemMenuCategory {
 }
 
 model RedeemMenuItem {
-  id                 Int       @id @default(autoincrement())
-  menu_item_id       Int
-  category_id        Int
-  points_required    Int
-  is_active          Boolean   @default(true)
-  badge              String?
-  sort_order         Int       @default(0)
-  start_at           DateTime?
-  end_at             DateTime?
-  stock_limit        Int?
-  daily_limit        Int?
-  created_at         DateTime  @default(now())
-  updated_at         DateTime  @updatedAt
+  id              Int       @id @default(autoincrement())
+  menu_item_id    Int
+  category_id     Int
+  points_required Int
+  is_active       Boolean   @default(true)
+  badge           String?
+  sort_order      Int       @default(0)
+  start_at        DateTime?
+  end_at          DateTime?
+  stock_limit     Int?
+  daily_limit     Int?
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
 
-  menu_item MenuItem           @relation(fields: [menu_item_id], references: [id])
-  category  RedeemMenuCategory @relation(fields: [category_id], references: [id])
+  menu_item                MenuItem                      @relation(fields: [menu_item_id], references: [id])
+  category                 RedeemMenuCategory            @relation(fields: [category_id], references: [id])
+  runchise_pos_redemptions RunchisePosRewardRedemption[]
 
   @@unique([menu_item_id])
   @@index([category_id])
@@ -437,26 +439,26 @@ model RewardsCatalog {
 }
 
 model Promo {
-  id                     Int      @id @default(autoincrement())
-  runchise_id            Int      @unique
+  id                     Int       @id @default(autoincrement())
+  runchise_id            Int       @unique
   name                   String
   status                 String?
   start_date             String?
   end_date               String?
   channel                String?
-  is_online_only         Boolean  @default(false)
-  is_all_outlets         Boolean  @default(false)
+  is_online_only         Boolean   @default(false)
+  is_all_outlets         Boolean   @default(false)
   locations              Json?
-  discount_amount        Decimal? @db.Decimal(12, 2)
-  discount_is_percentage Boolean  @default(false)
+  discount_amount        Decimal?  @db.Decimal(12, 2)
+  discount_is_percentage Boolean   @default(false)
   template               String?
   sub_brand              String?
-  is_pos_channel         Boolean  @default(false)
-  is_visible             Boolean  @default(true)
+  is_pos_channel         Boolean   @default(false)
+  is_visible             Boolean   @default(true)
   start_at               DateTime?
   raw                    Json?
-  created_at             DateTime @default(now())
-  updated_at             DateTime @updatedAt
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
 
   @@index([is_visible])
   @@index([start_at])
@@ -464,7 +466,7 @@ model Promo {
 }
 
 model CustomerSalesTransactionReport {
-  id                            Int      @id @default(autoincrement())
+  id                            Int       @id @default(autoincrement())
   source_location_id            Int
   runchise_sales_transaction_id Int
   runchise_customer_id          Int?
@@ -473,31 +475,32 @@ model CustomerSalesTransactionReport {
   nama_pelanggan                String?
   no_telepon                    String?
   lokasi_dibuat                 String?
-  pelanggan_sejak              DateTime?
-  poin_pelanggan                Int      @default(0)
-  tanggal_transaksi            DateTime?
-  nama_outlet                  String?
-  tipe_order                   String?
-  pembelian_per_order          Decimal  @default(0.0) @db.Decimal(12, 2)
-  penambahan_poin              Int      @default(0)
-  penggunaan_poin              Decimal  @default(0.0) @db.Decimal(12, 2)
+  pelanggan_sejak               DateTime?
+  poin_pelanggan                Int       @default(0)
+  tanggal_transaksi             DateTime?
+  nama_outlet                   String?
+  tipe_order                    String?
+  pembelian_per_order           Decimal   @default(0.0) @db.Decimal(12, 2)
+  penambahan_poin               Int       @default(0)
+  penggunaan_poin               Decimal   @default(0.0) @db.Decimal(12, 2)
   sales_no                      String?
   receipt_no                    String?
   status                        String?
-  is_deleted                    Boolean  @default(false)
-  nominal_transaksi             Decimal  @default(0.0) @db.Decimal(14, 2)
-  jumlah_diterima               Decimal  @default(0.0) @db.Decimal(14, 2)
-  jumlah_kembalian              Decimal  @default(0.0) @db.Decimal(14, 2)
+  is_deleted                    Boolean   @default(false)
+  nominal_transaksi             Decimal   @default(0.0) @db.Decimal(14, 2)
+  jumlah_diterima               Decimal   @default(0.0) @db.Decimal(14, 2)
+  jumlah_kembalian              Decimal   @default(0.0) @db.Decimal(14, 2)
   sumber_nominal                String?
   payment_methods               String?
   customer_snapshot_at          DateTime?
   import_run_id                 BigInt?
-  raw                          Json?
-  created_at                   DateTime @default(now())
-  updated_at                   DateTime @updatedAt
+  raw                           Json?
+  created_at                    DateTime  @default(now())
+  updated_at                    DateTime  @updatedAt
 
   customer Customer? @relation(fields: [customer_id], references: [id])
 
+  @@unique([source_location_id, runchise_sales_transaction_id])
   @@index([customer_id])
   @@index([source_location_id, tanggal_transaksi])
   @@index([source_location_id, runchise_customer_id])
@@ -507,29 +510,64 @@ model CustomerSalesTransactionReport {
   @@index([nama_outlet])
   @@index([status])
   @@index([import_run_id])
-  @@unique([source_location_id, runchise_sales_transaction_id])
+}
+
+model RunchisePosRewardRedemption {
+  id                         BigInt   @id @default(autoincrement())
+  sale_transaction_id        Int
+  sale_detail_transaction_id Int
+  runchise_product_id        Int
+  runchise_customer_id       Int?
+  customer_id                Int?
+  customer_name              String?
+  customer_phone_number      String?
+  redeem_menu_item_id        Int?
+  product_name               String
+  location_id                Int
+  location_name              String?
+  redeemed_at                DateTime
+  quantity                   Decimal  @db.Decimal(12, 3)
+  point_per_item             Int
+  points_spent               Int
+  selling_price              Decimal  @db.Decimal(14, 2)
+  status                     String   @default("valid")
+  is_managed_reward          Boolean  @default(false)
+  raw                        Json?
+  created_at                 DateTime @default(now())
+  updated_at                 DateTime @updatedAt
+
+  redeem_menu_item RedeemMenuItem? @relation(fields: [redeem_menu_item_id], references: [id], onDelete: SetNull)
+  customer         Customer?       @relation(fields: [customer_id], references: [id], onDelete: SetNull)
+
+  @@unique([sale_transaction_id, sale_detail_transaction_id])
+  @@index([is_managed_reward, status, redeemed_at])
+  @@index([runchise_product_id, redeemed_at])
+  @@index([location_id, redeemed_at])
+  @@index([redeem_menu_item_id])
+  @@index([customer_id])
+  @@index([runchise_customer_id])
 }
 
 model RunchiseSalesTransactionImportRun {
-  id                    BigInt    @id @default(autoincrement())
-  source_location_id    Int
-  source_location_name  String?
-  start_date            DateTime  @db.Date
-  end_date              DateTime  @db.Date
-  status                String    @default("running")
-  pages_fetched         Int       @default(0)
-  api_reported_total    Int?
-  rows_received         Int       @default(0)
-  unique_transactions   Int       @default(0)
-  inserted              Int       @default(0)
-  updated               Int       @default(0)
-  invalid               Int       @default(0)
-  location_mismatches   Int       @default(0)
-  out_of_range          Int       @default(0)
-  last_page             Int       @default(0)
-  error                 String?   @db.Text
-  started_at            DateTime  @default(now())
-  finished_at           DateTime?
+  id                   BigInt    @id @default(autoincrement())
+  source_location_id   Int
+  source_location_name String?
+  start_date           DateTime  @db.Date
+  end_date             DateTime  @db.Date
+  status               String    @default("running")
+  pages_fetched        Int       @default(0)
+  api_reported_total   Int?
+  rows_received        Int       @default(0)
+  unique_transactions  Int       @default(0)
+  inserted             Int       @default(0)
+  updated              Int       @default(0)
+  invalid              Int       @default(0)
+  location_mismatches  Int       @default(0)
+  out_of_range         Int       @default(0)
+  last_page            Int       @default(0)
+  error                String?   @db.Text
+  started_at           DateTime  @default(now())
+  finished_at          DateTime?
 
   @@index([source_location_id, start_date, end_date])
   @@index([status])

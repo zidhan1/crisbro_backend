@@ -11,6 +11,7 @@ const DEFAULT_START_DATE = '2024-01-01';
 const DEFAULT_END_DATE = '2024-08-31';
 const PAGE_SIZE = 100;
 const MAX_PAGES = 100000;
+const TARGET_SUB_BRAND_RUNCHISE_ID = 1041;
 
 const COLUMNS = [
   'source_location_id', 'runchise_sales_transaction_id', 'runchise_customer_id',
@@ -35,6 +36,40 @@ function number(value, fallback = 0) {
 
 function integer(value, fallback = 0) {
   return Math.trunc(number(value, fallback));
+}
+
+function isCrisbarSale(sale) {
+  const directIds = Array.isArray(sale?.sub_brand_ids)
+    ? sale.sub_brand_ids.map(Number)
+    : [];
+  const metadataIds = Array.isArray(sale?.metadata?.sub_brands)
+    ? sale.metadata.sub_brands.map((subBrand) => Number(subBrand?.id))
+    : [];
+
+  return (
+    directIds.includes(TARGET_SUB_BRAND_RUNCHISE_ID) ||
+    metadataIds.includes(TARGET_SUB_BRAND_RUNCHISE_ID)
+  );
+}
+
+function pointActivity(sale) {
+  return {
+    earned: integer(
+      sale?.metadata?.earned_point ??
+      sale?.metadata?.loyalty?.earned_point ??
+      sale?.loyalty?.earn_point,
+    ),
+    redeemed: number(
+      sale?.metadata?.redeemed_point ??
+      sale?.metadata?.loyalty?.redeemed_point ??
+      sale?.loyalty?.redeemed_point,
+    ),
+  };
+}
+
+function hasPositivePointActivity(sale) {
+  const points = pointActivity(sale);
+  return points.earned > 0 || points.redeemed > 0;
 }
 
 function isoDate(value) {
@@ -162,6 +197,15 @@ async function requestPage(api, url, page) {
   throw lastError;
 }
 
+async function fetchSaleTransactionDetail(api, saleId, requestNumber) {
+  const data = await requestPage(api, `/sale_transactions/${saleId}`, requestNumber);
+  const sale = data?.sale_transaction;
+  if (!sale || positiveInt(sale.id) !== saleId) {
+    throw new Error(`Response detail transaksi ${saleId} tidak valid`);
+  }
+  return sale;
+}
+
 function extractTransactions(data) {
   if (Array.isArray(data)) return data;
   return data?.sale_transactions ?? data?.sales_transactions ?? data?.transactions ?? data?.data ?? null;
@@ -178,6 +222,81 @@ function nextPageUrl(data, currentPage, receivedCount, pageLength, initialParams
   const params = new URLSearchParams(initialParams);
   params.set('page', String(currentPage + 1));
   return `/sale_transactions?${params.toString()}`;
+}
+
+async function previewSalesTransactions(locationId, startDate, endDate) {
+  if (!process.env.RUNCHISE_API_KEY) throw new Error('RUNCHISE_API_KEY tidak tersedia');
+  validateDateOnly(startDate, 'start_date');
+  validateDateOnly(endDate, 'end_date');
+  jakartaRange(startDate, endDate);
+
+  const api = axios.create({
+    baseURL: 'https://api.runchise.com/api/public',
+    timeout: Number(process.env.RUNCHISE_API_TIMEOUT_MS || 30000),
+    headers: { Accept: 'application/json', Authorization: process.env.RUNCHISE_API_KEY },
+  });
+  const metrics = {
+    api_rows: 0,
+    crisbar_rows: 0,
+    positive_point_rows: 0,
+    skipped_non_crisbar: 0,
+    skipped_zero_points: 0,
+    pages: 0,
+  };
+  const cursor = new Date(`${startDate}T00:00:00.000Z`);
+  const finalDay = new Date(`${endDate}T00:00:00.000Z`);
+
+  console.log('sale_id\tsales_no\ttanggal\tcustomer_id\tearned\tredeemed');
+  while (cursor <= finalDay) {
+    const windowDate = cursor.toISOString().slice(0, 10);
+    const initialParams = {
+      page: '1', item_per_page: String(PAGE_SIZE), location_id: String(locationId),
+      start_date: windowDate, end_date: windowDate,
+    };
+    let nextUrl = `/sale_transactions?${new URLSearchParams(initialParams).toString()}`;
+    let page = 0;
+    let received = 0;
+
+    while (nextUrl !== null) {
+      if (metrics.pages >= MAX_PAGES) throw new Error(`Melewati batas ${MAX_PAGES} halaman`);
+      const data = await requestPage(api, nextUrl, metrics.pages + 1);
+      const transactions = extractTransactions(data);
+      if (!Array.isArray(transactions)) throw new Error('Response tidak memiliki array sale_transactions');
+      metrics.pages++;
+      page++;
+      received += transactions.length;
+      metrics.api_rows += transactions.length;
+
+      for (const sale of transactions) {
+        if (!isCrisbarSale(sale)) {
+          metrics.skipped_non_crisbar++;
+          continue;
+        }
+        metrics.crisbar_rows++;
+        if (!hasPositivePointActivity(sale)) {
+          metrics.skipped_zero_points++;
+          continue;
+        }
+        metrics.positive_point_rows++;
+        const points = pointActivity(sale);
+        console.log([
+          sale.id,
+          sale.sales_no ?? '-',
+          sale.sales_time ?? sale.sales_time_date ?? sale.created_at ?? '-',
+          sale.customer_id ?? '-',
+          points.earned,
+          points.redeemed,
+        ].join('\t'));
+      }
+
+      nextUrl = nextPageUrl(data, page, received, transactions.length, initialParams);
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  console.log('\n=== RINGKASAN PREVIEW ===');
+  console.log(JSON.stringify(metrics, null, 2));
+  return metrics;
 }
 
 async function loadCustomerMaps(db, sourceLocationId) {
@@ -204,20 +323,23 @@ async function loadCustomerMaps(db, sourceLocationId) {
   };
 }
 
-async function upsertPage(db, rows, zeroPointSaleIds, sourceLocationId) {
-  let deletedZeroPoints = 0;
-  if (zeroPointSaleIds.length > 0) {
+async function deleteStoredSales(db, sourceLocationId, saleIds) {
+  if (saleIds.length === 0) return 0;
     const deleted = await db.query(
       `DELETE FROM "CustomerSalesTransactionReport"
        WHERE "source_location_id"=$1
          AND "runchise_sales_transaction_id"=ANY($2::int[])
        RETURNING "id"`,
-      [sourceLocationId, zeroPointSaleIds],
+      [sourceLocationId, saleIds],
     );
-    deletedZeroPoints = deleted.rowCount;
-  }
+  return deleted.rowCount;
+}
+
+async function upsertPage(db, rows, zeroPointSaleIds, nonCrisbarSaleIds, sourceLocationId) {
+  const deletedZeroPoints = await deleteStoredSales(db, sourceLocationId, zeroPointSaleIds);
+  const deletedNonCrisbar = await deleteStoredSales(db, sourceLocationId, nonCrisbarSaleIds);
   if (rows.length === 0) {
-    return { inserted: 0, updated: 0, deletedZeroPoints };
+    return { inserted: 0, updated: 0, deletedZeroPoints, deletedNonCrisbar };
   }
   const values = [];
   const tuples = rows.map((row) => `(${row.map((value) => {
@@ -238,7 +360,7 @@ async function upsertPage(db, rows, zeroPointSaleIds, sourceLocationId) {
     values,
   );
   const inserted = result.rows.filter((row) => row.inserted === true).length;
-  return { inserted, updated: result.rowCount - inserted, deletedZeroPoints };
+  return { inserted, updated: result.rowCount - inserted, deletedZeroPoints, deletedNonCrisbar };
 }
 
 async function importSalesTransactions(
@@ -273,7 +395,10 @@ async function importSalesTransactions(
   let inserted = 0;
   let updated = 0;
   let skippedZeroPoints = 0;
+  let skippedNonCrisbar = 0;
+  let deletedNonCrisbar = 0;
   let deletedZeroPoints = 0;
+  let detailsFetched = 0;
   let invalid = 0;
   let locationMismatches = 0;
   let outOfRange = 0;
@@ -327,6 +452,7 @@ async function importSalesTransactions(
 
         const rows = [];
         const zeroPointSaleIds = [];
+        const nonCrisbarSaleIds = [];
         for (const sale of transactions) {
         const saleId = positiveInt(sale?.id);
         if (!saleId || uniqueIds.has(saleId)) {
@@ -347,19 +473,34 @@ async function importSalesTransactions(
           outOfRange++;
           continue;
         }
-        const customerId = positiveInt(sale.customer_id);
-        const row = mapSale(
-          sale, locationId, customerMaps.staged.get(customerId),
-          customerMaps.local.get(customerId),
-          customerMaps.locations.get(positiveInt(sale.location_id)),
-          runId, snapshotAt,
-        );
-        // Indeks 14 dan 15 mengikuti COLUMNS: penambahan_poin dan
-        // penggunaan_poin. Salah satu nilai non-nol cukup untuk menyimpan baris.
-        if (number(row[14]) === 0 && number(row[15]) === 0) {
+        if (!isCrisbarSale(sale)) {
+          nonCrisbarSaleIds.push(saleId);
+          skippedNonCrisbar++;
+          continue;
+        }
+        if (!hasPositivePointActivity(sale)) {
           zeroPointSaleIds.push(saleId);
           skippedZeroPoints++;
         } else {
+          const detailedSale = await fetchSaleTransactionDetail(
+            api,
+            saleId,
+            pages + detailsFetched + 1,
+          );
+          detailsFetched++;
+          if (!isCrisbarSale(detailedSale)) {
+            throw new Error(`Detail transaksi ${saleId} bukan sub-brand Crisbar 1041`);
+          }
+          if (!hasPositivePointActivity(detailedSale)) {
+            throw new Error(`Detail transaksi ${saleId} tidak memiliki aktivitas poin positif`);
+          }
+          const customerId = positiveInt(detailedSale.customer_id);
+          const row = mapSale(
+            detailedSale, locationId, customerMaps.staged.get(customerId),
+            customerMaps.local.get(customerId),
+            customerMaps.locations.get(positiveInt(detailedSale.location_id)),
+            runId, snapshotAt,
+          );
           rows.push(row);
           retainedIds.add(saleId);
         }
@@ -372,11 +513,13 @@ async function importSalesTransactions(
           client,
           rows,
           zeroPointSaleIds,
+          nonCrisbarSaleIds,
           locationId,
         );
         inserted += result.inserted;
         updated += result.updated;
         deletedZeroPoints += result.deletedZeroPoints;
+        deletedNonCrisbar += result.deletedNonCrisbar;
         await client.query(
           `UPDATE "RunchiseSalesTransactionImportRun" SET
              "pages_fetched"=$2, "api_reported_total"=$3, "rows_received"=$4,
@@ -393,7 +536,7 @@ async function importSalesTransactions(
         } finally {
         client.release();
         }
-        console.log(`${windowDate} halaman ${windowPage}: diterima ${transactions.length}; disimpan ${rows.length}; nol-nol ${zeroPointSaleIds.length}; unik ${uniqueIds.size}`);
+        console.log(`${windowDate} halaman ${windowPage}: diterima ${transactions.length}; detail ${rows.length}; non-Crisbar ${nonCrisbarSaleIds.length}; tanpa poin positif ${zeroPointSaleIds.length}; unik ${uniqueIds.size}`);
         nextUrl = nextPageUrl(
           data, windowPage, windowRowsReceived, transactions.length, initialParams,
         );
@@ -453,16 +596,36 @@ async function importSalesTransactions(
        SET "status"=$2, "error"=$3, "finished_at"=CURRENT_TIMESTAMP WHERE "id"=$1`,
       [runId, status, mismatchReasons.length > 0 ? mismatchReasons.join('; ') : null],
     );
+    const redemptionEndExclusive = new Date(`${endDate}T00:00:00Z`);
+    redemptionEndExclusive.setUTCDate(redemptionEndExclusive.getUTCDate() + 1);
+    const { syncRunchisePosRewardRedemptions } = require(
+      '../src/services/runchisePosRewardRedemptionService'
+    );
+    const redemptionPrisma = require('../src/lib/prisma');
+    let rewardRedemptions;
+    try {
+      rewardRedemptions = await syncRunchisePosRewardRedemptions({
+        locationId,
+        startDate,
+        endDate: redemptionEndExclusive.toISOString().slice(0, 10),
+      });
+    } finally {
+      await redemptionPrisma.$disconnect();
+    }
     const result = {
       run_id: String(runId), location_id: locationId, location_name: locationName,
       start_date: startDate, end_date: endDate, pages_fetched: pages,
       api_reported_total: apiTotal, rows_received: rowsReceived,
       unique_transactions: uniqueIds.size, inserted, updated, invalid,
+      details_fetched: detailsFetched,
       skipped_zero_points: skippedZeroPoints,
+      skipped_non_crisbar: skippedNonCrisbar,
       deleted_zero_points: deletedZeroPoints,
+      reconciled_non_crisbar: deletedNonCrisbar,
       location_mismatches: locationMismatches, out_of_range: outOfRange,
       expected_total: expectedTotal, status, mismatch_reasons: mismatchReasons,
       customer_import: customerImport, verification: verificationResult,
+      reward_redemptions: rewardRedemptions,
       complete: status === 'completed',
     };
     console.log('\n=== IMPORT TRANSAKSI SELESAI ===');
@@ -483,11 +646,16 @@ async function importSalesTransactions(
 }
 
 async function main() {
-  const locationId = positiveInt(process.argv[2] ?? DEFAULT_LOCATION_ID);
-  if (!locationId) throw new Error(`location_id tidak valid: ${process.argv[2]}`);
-  const startDate = process.argv[3] ?? DEFAULT_START_DATE;
-  const endDate = process.argv[4] ?? DEFAULT_END_DATE;
-  const locationName = process.argv[5] ?? (locationId === 4453 ? 'Antapani' : null);
+  const positionalArgs = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
+  const locationId = positiveInt(positionalArgs[0] ?? DEFAULT_LOCATION_ID);
+  if (!locationId) throw new Error(`location_id tidak valid: ${positionalArgs[0]}`);
+  const startDate = positionalArgs[1] ?? DEFAULT_START_DATE;
+  const endDate = positionalArgs[2] ?? DEFAULT_END_DATE;
+  const locationName = positionalArgs[3] ?? (locationId === 4453 ? 'Antapani' : null);
+  if (process.argv.includes('--preview')) {
+    await previewSalesTransactions(locationId, startDate, endDate);
+    return;
+  }
   await importSalesTransactions(locationId, locationName, startDate, endDate, {
     refreshCustomers: !process.argv.includes('--skip-customers'),
   });
@@ -501,5 +669,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  formatPhone, jakartaRange, mapSale, transactionNominal, importSalesTransactions,
+  formatPhone, hasPositivePointActivity, isCrisbarSale, jakartaRange, mapSale,
+  pointActivity, previewSalesTransactions, transactionNominal, importSalesTransactions,
 };

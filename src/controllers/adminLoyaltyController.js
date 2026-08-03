@@ -1538,13 +1538,22 @@ async function getSummary(req, res) {
     const outletId = parsePositiveInt(req.query.outlet_id, 'outlet_id', {
       required: false,
     });
-    const redemptionDateWhere = {
+    const selectedOutlet = outletId
+      ? await prisma.location.findUnique({
+          where: { id: outletId },
+          select: { runchise_id: true },
+        })
+      : null;
+    const posRedemptionWhere = {
+      status: 'valid',
+      is_managed_reward: true,
       redeemed_at: {
-        not: null,
         ...(redemptionFrom ? { gte: redemptionFrom } : {}),
         ...(redemptionTo ? { lte: redemptionTo } : {}),
       },
-      ...(outletId ? { customer: { owner_location_id: outletId } } : {}),
+      ...(selectedOutlet?.runchise_id
+        ? { location_id: selectedOutlet.runchise_id }
+        : {}),
     };
     const [
       totalMembers,
@@ -1557,7 +1566,7 @@ async function getSummary(req, res) {
       claimedRedemptions,
       topRewards,
       activatedCustomersByOutlet,
-      redemptionsByCustomer,
+      redemptionsByOutlet,
       redemptionHistory,
       runchiseCustomersByOutlet,
       runchiseCustomersUnique,
@@ -1590,14 +1599,15 @@ async function getSummary(req, res) {
         where: { points_change: { lt: 0 } },
         _sum: { points_change: true },
       }),
-      prisma.rewardRedemption.count(),
+      prisma.runchisePosRewardRedemption.count({ where: posRedemptionWhere }),
       prisma.rewardRedemption.count({ where: { status: 'pending' } }),
       prisma.rewardRedemption.count({ where: { status: 'claimed' } }),
-      prisma.rewardRedemption.groupBy({
-        by: ['reward_id'],
-        _count: { reward_id: true },
-        _sum: { points_spent: true },
-        orderBy: { _count: { reward_id: 'desc' } },
+      prisma.runchisePosRewardRedemption.groupBy({
+        by: ['runchise_product_id', 'product_name', 'redeem_menu_item_id'],
+        where: posRedemptionWhere,
+        _sum: { quantity: true, points_spent: true },
+        _count: { id: true },
+        orderBy: { _sum: { quantity: 'desc' } },
         take: 5,
       }),
       prisma.customer.groupBy({
@@ -1609,21 +1619,17 @@ async function getSummary(req, res) {
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
       }),
-      prisma.rewardRedemption.groupBy({
-        by: ['customer_id'],
+      prisma.runchisePosRewardRedemption.groupBy({
+        by: ['location_id', 'location_name'],
+        where: posRedemptionWhere,
         _count: { id: true },
-        _sum: { points_spent: true },
+        _sum: { quantity: true, points_spent: true },
       }),
-      prisma.rewardRedemption.findMany({
-        where: redemptionDateWhere,
+      prisma.runchisePosRewardRedemption.findMany({
+        where: posRedemptionWhere,
         include: {
-          reward: { select: { id: true, name: true, points_required: true } },
-          customer: {
-            select: {
-              id: true,
-              name: true,
-              owner_location: { select: { id: true, name: true, city: true } },
-            },
+          redeem_menu_item: {
+            select: { id: true, menu_item: { select: { id: true, name: true } } },
           },
         },
         orderBy: { redeemed_at: 'desc' },
@@ -1686,50 +1692,27 @@ async function getSummary(req, res) {
       `,
     ]);
 
-    const rewardIds = topRewards.map((item) => item.reward_id);
     const outletIds = activatedCustomersByOutlet
       .map((item) => item.owner_location_id)
       .filter(Boolean);
-    const redemptionCustomerIds = redemptionsByCustomer.map(
-      (item) => item.customer_id,
-    );
-    const [rewards, outlets, redemptionCustomers, redeemMenuItemsForReport] =
+    const redemptionLocationIds = redemptionsByOutlet.map((item) => item.location_id);
+    const [outlets, redemptionLocations] =
       await Promise.all([
-        prisma.rewardsCatalog.findMany({
-          where: { id: { in: rewardIds } },
-          select: { id: true, name: true },
-        }),
         prisma.location.findMany({
           where: { id: { in: outletIds } },
           select: { id: true, name: true, city: true },
         }),
-        prisma.customer.findMany({
-          where: { id: { in: redemptionCustomerIds } },
-          select: {
-            id: true,
-            owner_location_id: true,
-            owner_location: { select: { id: true, name: true, city: true } },
-          },
-        }),
-        prisma.redeemMenuItem.findMany({
-          select: { menu_item: { select: { name: true, price: true } } },
+        prisma.location.findMany({
+          where: { runchise_id: { in: redemptionLocationIds } },
+          select: { id: true, runchise_id: true, name: true, city: true },
         }),
       ]);
-    const rewardById = new Map(rewards.map((reward) => [reward.id, reward]));
     const outletById = new Map(outlets.map((outlet) => [outlet.id, outlet]));
-    const customerById = new Map(
-      redemptionCustomers.map((customer) => [customer.id, customer]),
+    const redemptionLocationByRunchiseId = new Map(
+      redemptionLocations.map((location) => [location.runchise_id, location]),
     );
     const outletRedemptionById = new Map();
     const redemptionTrendByDate = new Map();
-    const redeemMenuByName = new Map(
-      redeemMenuItemsForReport.map((item) => [
-        normalizeReportName(item.menu_item.name),
-        {
-          menu_price: Number(item.menu_item.price),
-        },
-      ]),
-    );
     const customerMetricsByOutlet = runchiseCustomersByOutlet.map((outlet) => {
       const apiReportedTotal = outlet.api_reported_total ?? null;
       const rowsReceived = outlet.rows_received ?? 0;
@@ -1754,22 +1737,23 @@ async function getSummary(req, res) {
       };
     });
 
-    for (const redemption of redemptionsByCustomer) {
-      const customer = customerById.get(redemption.customer_id);
-      const outlet = customer?.owner_location;
-      if (!outlet) continue;
+    for (const redemption of redemptionsByOutlet) {
+      const outlet = redemptionLocationByRunchiseId.get(redemption.location_id);
 
-      const current = outletRedemptionById.get(outlet.id) ?? {
-        outlet_id: outlet.id,
-        outlet_name: outlet.name,
-        city: outlet.city,
+      const current = outletRedemptionById.get(redemption.location_id) ?? {
+        outlet_id: outlet?.id ?? null,
+        runchise_location_id: redemption.location_id,
+        outlet_name: redemption.location_name ?? outlet?.name ?? 'Outlet tidak diketahui',
+        city: outlet?.city ?? null,
         redemption_count: 0,
+        redeemed_quantity: 0,
         points_spent: 0,
       };
 
       current.redemption_count += redemption._count.id;
+      current.redeemed_quantity += Number(redemption._sum.quantity ?? 0);
       current.points_spent += redemption._sum.points_spent ?? 0;
-      outletRedemptionById.set(outlet.id, current);
+      outletRedemptionById.set(redemption.location_id, current);
     }
 
     for (const redemption of redemptionHistory) {
@@ -1782,7 +1766,7 @@ async function getSummary(req, res) {
         points_spent: 0,
       };
 
-      current.redemption_count += 1;
+      current.redemption_count += Number(redemption.quantity);
       current.points_spent += redemption.points_spent;
       redemptionTrendByDate.set(date, current);
     }
@@ -1817,9 +1801,11 @@ async function getSummary(req, res) {
         runchiseCustomersUnique?.[0]?.unique_customers ?? 0,
       runchise_customers_by_outlet: customerMetricsByOutlet,
       top_rewards: topRewards.map((item) => ({
-        reward_id: item.reward_id,
-        reward_name: rewardById.get(item.reward_id)?.name ?? 'Reward',
-        redemption_count: item._count.reward_id,
+        reward_id: item.redeem_menu_item_id,
+        runchise_product_id: item.runchise_product_id,
+        reward_name: item.product_name,
+        redemption_count: Number(item._sum.quantity ?? 0),
+        transaction_line_count: item._count.id,
         points_spent: item._sum.points_spent ?? 0,
       })),
       activation_by_outlet: activatedCustomersByOutlet.map((item) => {
@@ -1839,17 +1825,24 @@ async function getSummary(req, res) {
         (a, b) => a.date.localeCompare(b.date),
       ),
       redemption_history: redemptionHistory.map((redemption) => ({
-        id: redemption.id,
-        reward_id: redemption.reward_id,
-        reward_name: redemption.reward.name,
+        id: String(redemption.id),
+        reward_id: redemption.redeem_menu_item_id,
+        runchise_product_id: redemption.runchise_product_id,
+        reward_name: redemption.product_name,
+        customer_id: redemption.customer_id,
+        runchise_customer_id: redemption.runchise_customer_id,
+        customer_name: redemption.customer_name,
+        customer_phone_number: redemption.customer_phone_number,
+        quantity: Number(redemption.quantity),
+        point_per_item: redemption.point_per_item,
         points_spent: redemption.points_spent,
-        menu_price:
-          redeemMenuByName.get(normalizeReportName(redemption.reward.name))
-            ?.menu_price ?? null,
-        outlet_id: redemption.customer.owner_location?.id ?? null,
-        outlet_name:
-          redemption.customer.owner_location?.name ?? 'Outlet tidak diketahui',
-        outlet_city: redemption.customer.owner_location?.city ?? null,
+        menu_price: Number(redemption.selling_price),
+        outlet_id:
+          redemptionLocationByRunchiseId.get(redemption.location_id)?.id ?? null,
+        runchise_location_id: redemption.location_id,
+        outlet_name: redemption.location_name ?? 'Outlet tidak diketahui',
+        outlet_city:
+          redemptionLocationByRunchiseId.get(redemption.location_id)?.city ?? null,
         redeemed_at: redemption.redeemed_at,
       })),
     });
