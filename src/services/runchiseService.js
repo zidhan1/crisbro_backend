@@ -413,6 +413,23 @@ async function fetchAllLocations() {
 
 // ===================== PROMOS =====================
 
+async function fetchPromosPage({ page = 1, itemPerPage = 50 } = {}) {
+  const { data } = await requestWithRetry(
+    `Fetch promos Runchise page ${page}`,
+    () =>
+      runchiseClient.get('/promos', {
+        params: { page, item_per_page: itemPerPage },
+      }),
+    { retries: 3 },
+  );
+
+  if (!Array.isArray(data?.promos) || !data?.paging) {
+    throw new Error(`Response promos halaman ${page} tidak valid`);
+  }
+
+  return data;
+}
+
 // Mengambil semua promo dari Runchise
 async function fetchAllPromos() {
   let allPromos = [];
@@ -420,13 +437,7 @@ async function fetchAllPromos() {
   let hasMore = true;
 
   while (hasMore) {
-    const { data } = await requestWithRetry(
-      `Fetch promos Runchise page ${page}`,
-      () =>
-        runchiseClient.get('/promos', {
-          params: { page, item_per_page: 100 },
-        }),
-    );
+    const data = await fetchPromosPage({ page, itemPerPage: 100 });
 
     allPromos = allPromos.concat(data.promos);
     hasMore = data.paging.next_page !== null;
@@ -489,6 +500,7 @@ module.exports = {
   fetchAllProducts,
   fetchAllSubBrands,
   fetchAllLocations,
+  fetchPromosPage,
   fetchAllPromos,
   createCustomer,
   updateCustomer,

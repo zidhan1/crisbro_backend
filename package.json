@@ -23,7 +23,8 @@
     "import:selected-customers": "node scripts/importSelectedCustomers.js",
     "import:selected-product-categories": "node scripts/importSelectedProductCategories.js",
     "import:crisbar-category-mapping": "node scripts/importSelectedSubBrandProductCategories.js",
-    "import:crisbar-products": "node scripts/importSelectedCrisbarProducts.js"
+    "import:crisbar-products": "node scripts/importSelectedCrisbarProducts.js",
+    "import:promos": "node scripts/importRunchisePromos.js"
   },
   "keywords": [],
   "author": "",

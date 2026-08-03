@@ -11,16 +11,21 @@ const {
   fetchAllSalesTransactions,
   fetchAllSubBrands,
   fetchAllLocations,
-  fetchAllPromos,
+  fetchPromosPage,
 } = require('./runchiseService');
-const { getSubBrandMapping } = require('./subBrandService');
 const {
   importProducts: importCrisbarProducts,
 } = require('../../scripts/importSelectedCrisbarProducts');
 
-const VISIBLE_PROMO_SUB_BRANDS = new Set(['Crisbar']);
 const DEFAULT_PROMO_LIFESPAN_DAYS = 90;
 const POS_CHANNEL = 'pos';
+const TARGET_PROMO_PARENT_BRAND_RUNCHISE_ID = 750;
+const TARGET_PROMO_SUB_BRAND_RUNCHISE_ID = 1041;
+const TARGET_PROMO_SUB_BRAND_IDS = new Set([TARGET_PROMO_SUB_BRAND_RUNCHISE_ID]);
+const CUSTOMER_PROMO_CHANNELS = new Set(['grabfood', 'gofood', 'shopeefood']);
+const PROMO_PAGE_SIZE = 50;
+const PROMO_WRITE_CHUNK_SIZE = 20;
+const PROMO_MAX_PAGES = 1000;
 
 // Sama dengan default kolom CustomerPoint.next_reward_threshold di schema.
 const DEFAULT_NEXT_REWARD_THRESHOLD = 2000;
@@ -144,40 +149,6 @@ function getEffectivePromoStatus(promo, now) {
   if (start && start.getTime() > now.getTime()) return 'inactive';
 
   return promo.status || 'active';
-}
-
-function detectPromoSubBrand(promo, categoryIdToSubBrand) {
-  const rule = promo.promo_rule;
-  if (!rule) return 'Crisbar';
-
-  for (const category of rule.product_categories ?? []) {
-    const subBrand = categoryIdToSubBrand.get(category.id);
-    if (subBrand) return subBrand;
-  }
-
-  const productNames = [
-    ...(rule.products ?? []).map((product) => product.name),
-    ...(promo.promo_reward?.get_products ?? []).map((product) => product.name),
-  ];
-  const lowerNames = productNames.map((name) => name.toLowerCase());
-
-  if (
-    lowerNames.some(
-      (name) => name.includes('jeong bok') || name.includes('bokki'),
-    )
-  ) {
-    return 'Jeong Bok Chicken';
-  }
-  if (
-    lowerNames.some((name) => name.includes('jaya') || name.includes('sambal'))
-  ) {
-    return 'Green Jaya';
-  }
-  if (lowerNames.some((name) => name.includes('warkop'))) {
-    return 'Warkop CBR';
-  }
-
-  return 'Crisbar';
 }
 
 // ===================== SYNC CUSTOMERS =====================
@@ -957,6 +928,10 @@ async function syncSalesTransactionReports(locationId = null, options = {}) {
   };
 }
 
+function isCustomerPromoChannel(channel) {
+  return CUSTOMER_PROMO_CHANNELS.has(normalizeChannel(channel));
+}
+
 // ===================== SYNC PRODUCTS =====================
 
 // Sinkronisasi katalog hanya untuk produk yang kategorinya terhubung ke
@@ -1198,97 +1173,227 @@ async function ensureLocalLocationRunchiseMapping(localLocationId, brandId = 1) 
 
 // ===================== SYNC PROMOS =====================
 
-async function syncPromos() {
-  const [promos, { categoryIdToSubBrand }] = await Promise.all([
-    fetchAllPromos(),
-    getSubBrandMapping(),
-  ]);
-  const now = new Date();
-  const syncedPromoIds = [];
-  let synced = 0;
+function positiveRunchiseId(value) {
+  const parsed = Number(value?.id ?? value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
 
-  for (const promo of promos) {
-    const status = getEffectivePromoStatus(promo, now);
-    const subBrand = detectPromoSubBrand(promo, categoryIdToSubBrand);
-    const posChannel = isPosChannel(promo.channel);
-    const isVisible =
-      status !== 'completed' &&
-      status !== 'inactive' &&
-      VISIBLE_PROMO_SUB_BRANDS.has(subBrand) &&
-      !posChannel;
-    const startAt = parseRunchiseDate(promo.start_date, false);
+function hasMatchingId(items, allowedIds) {
+  return Array.isArray(items) && items.some((item) => allowedIds.has(positiveRunchiseId(item)));
+}
 
-    await prisma.promo.upsert({
-      where: { runchise_id: promo.id },
-      update: {
-        name: promo.name,
-        status,
-        start_date: promo.start_date ?? null,
-        end_date: promo.end_date ?? null,
-        channel: promo.channel ?? null,
-        is_online_only: isOnlineChannel(promo.channel),
-        is_all_outlets: promo.is_select_all_location === true,
-        locations:
-          promo.is_select_all_location === true
-            ? []
-            : (promo.locations ?? []).map((location) => ({
-                id: location.id,
-                name: location.name,
-              })),
-        discount_amount: promo.promo_reward?.discount_amount
-          ? parseFloat(promo.promo_reward.discount_amount)
-          : null,
-        discount_is_percentage:
-          promo.promo_reward?.discount_is_percentage ?? false,
-        template: promo.promo_reward?.template ?? null,
-        sub_brand: subBrand,
-        is_pos_channel: posChannel,
-        is_visible: isVisible,
-        start_at: startAt,
-        raw: promo,
-      },
-      create: {
-        runchise_id: promo.id,
-        name: promo.name,
-        status,
-        start_date: promo.start_date ?? null,
-        end_date: promo.end_date ?? null,
-        channel: promo.channel ?? null,
-        is_online_only: isOnlineChannel(promo.channel),
-        is_all_outlets: promo.is_select_all_location === true,
-        locations:
-          promo.is_select_all_location === true
-            ? []
-            : (promo.locations ?? []).map((location) => ({
-                id: location.id,
-                name: location.name,
-              })),
-        discount_amount: promo.promo_reward?.discount_amount
-          ? parseFloat(promo.promo_reward.discount_amount)
-          : null,
-        discount_is_percentage:
-          promo.promo_reward?.discount_is_percentage ?? false,
-        template: promo.promo_reward?.template ?? null,
-        sub_brand: subBrand,
-        is_pos_channel: posChannel,
-        is_visible: isVisible,
-        start_at: startAt,
-        raw: promo,
-      },
-    });
-
-    syncedPromoIds.push(promo.id);
-    synced++;
-  }
-
-  await prisma.promo.updateMany({
-    where: {
-      runchise_id: { notIn: syncedPromoIds },
+async function loadCrisbarPromoContext() {
+  const subBrand = await prisma.subBrand.findUnique({
+    where: { runchise_id: TARGET_PROMO_SUB_BRAND_RUNCHISE_ID },
+    select: {
+      name: true,
+      brand: { select: { runchise_id: true } },
+      product_categories: { select: { menu_category_id: true } },
     },
-    data: { is_visible: false },
   });
 
-  return { synced, total: promos.length };
+  if (!subBrand) {
+    throw new Error(`Sub-brand Crisbar ${TARGET_PROMO_SUB_BRAND_RUNCHISE_ID} tidak ditemukan`);
+  }
+  if (subBrand.brand.runchise_id !== TARGET_PROMO_PARENT_BRAND_RUNCHISE_ID) {
+    throw new Error('Parent brand sub-brand Crisbar tidak sesuai');
+  }
+
+  const categoryIds = new Set(
+    subBrand.product_categories.map((link) => link.menu_category_id),
+  );
+  if (categoryIds.size === 0) {
+    throw new Error('Mapping kategori sub-brand Crisbar kosong');
+  }
+
+  const products = await prisma.menuItem.findMany({
+    where: {
+      category_id: { in: [...categoryIds] },
+      runchise_id: { not: null },
+    },
+    select: { runchise_id: true },
+  });
+
+  return {
+    name: subBrand.name,
+    categoryIds,
+    productIds: new Set(products.map((product) => product.runchise_id)),
+  };
+}
+
+function getCrisbarPromoEvidence(promo, context) {
+  if (
+    hasMatchingId(promo?.sub_brands, TARGET_PROMO_SUB_BRAND_IDS)
+  ) {
+    return 'sub_brand';
+  }
+
+  const rule = promo?.promo_rule ?? {};
+  const reward = promo?.promo_reward ?? {};
+  const categoryLists = [
+    rule.product_categories,
+    rule.required_purchase_product_categories,
+    rule.maximum_qty_applied_to_product_categories,
+    reward.get_product_categories,
+  ];
+  if (categoryLists.some((items) => hasMatchingId(items, context.categoryIds))) {
+    return 'category';
+  }
+
+  const productLists = [
+    rule.products,
+    rule.required_purchase_products,
+    rule.maximum_qty_applied_to_products,
+    reward.get_products,
+    reward.get_reward_products,
+  ];
+  if (productLists.some((items) => hasMatchingId(items, context.productIds))) {
+    return 'product';
+  }
+
+  return null;
+}
+
+function mapRunchisePromoToLocalData(promo, context, now) {
+  const runchiseId = Number(promo?.id);
+  const name = String(promo?.name ?? '').trim();
+  if (!Number.isInteger(runchiseId) || runchiseId <= 0 || !name) {
+    throw new Error(`Promo Runchise tidak valid: id=${promo?.id ?? 'null'}`);
+  }
+
+  const status = getEffectivePromoStatus(promo, now);
+  const posChannel = isPosChannel(promo.channel);
+  const discountAmount = promo.promo_reward?.discount_amount;
+  const parsedDiscount = discountAmount == null ? null : Number(discountAmount);
+
+  if (parsedDiscount !== null && !Number.isFinite(parsedDiscount)) {
+    throw new Error(`Nilai diskon promo ${runchiseId} tidak valid`);
+  }
+
+  return {
+    runchise_id: runchiseId,
+    name,
+    status,
+    start_date: promo.start_date ?? null,
+    end_date: promo.end_date ?? null,
+    channel: normalizeChannel(promo.channel) || null,
+    is_online_only: isOnlineChannel(promo.channel),
+    is_all_outlets: promo.is_select_all_location === true,
+    locations:
+      promo.is_select_all_location === true
+        ? []
+        : (promo.locations ?? []).map((location) => ({
+            id: location.id,
+            name: location.name,
+          })),
+    discount_amount: parsedDiscount,
+    discount_is_percentage:
+      promo.promo_reward?.discount_is_percentage === true,
+    template: promo.promo_reward?.template ?? null,
+    sub_brand: context.name,
+    is_pos_channel: posChannel,
+    is_visible:
+      status === 'active' &&
+      isCustomerPromoChannel(promo.channel),
+    start_at: parseRunchiseDate(promo.start_date, false),
+    raw: promo,
+  };
+}
+
+async function upsertPromoChunk(promos) {
+  if (promos.length === 0) return;
+
+  await prisma.$transaction(
+    promos.map((promo) =>
+      prisma.promo.upsert({
+        where: { runchise_id: promo.runchise_id },
+        update: promo,
+        create: promo,
+      }),
+    ),
+  );
+}
+
+async function syncPromos() {
+  const context = await loadCrisbarPromoContext();
+  const now = new Date();
+  const scannedPromoIds = new Set();
+  const matchedPromoIds = new Set();
+  let reportedTotal = null;
+  let pagesProcessed = 0;
+  let visible = 0;
+  const evidenceCounts = { sub_brand: 0, category: 0, product: 0 };
+
+  for (let page = 1; page <= PROMO_MAX_PAGES; page++) {
+    const data = await fetchPromosPage({ page, itemPerPage: PROMO_PAGE_SIZE });
+    const pageTotal = Number(data.paging.total_item);
+    if (Number.isFinite(pageTotal)) {
+      if (reportedTotal === null) reportedTotal = pageTotal;
+      if (reportedTotal !== pageTotal) {
+        throw new Error(`total_item promo berubah: ${reportedTotal} -> ${pageTotal}`);
+      }
+    }
+
+    const mappedPromos = [];
+    for (const rawPromo of data.promos) {
+      const promoId = positiveRunchiseId(rawPromo?.id);
+      if (!promoId) throw new Error(`Promo Runchise tidak valid: id=${rawPromo?.id ?? 'null'}`);
+      if (scannedPromoIds.has(promoId)) {
+        throw new Error(`Promo duplikat antar halaman: ${promoId}`);
+      }
+      scannedPromoIds.add(promoId);
+
+      const evidence = getCrisbarPromoEvidence(rawPromo, context);
+      if (!evidence) continue;
+
+      const promo = mapRunchisePromoToLocalData(rawPromo, context, now);
+      mappedPromos.push(promo);
+      matchedPromoIds.add(promo.runchise_id);
+      evidenceCounts[evidence]++;
+      if (promo.is_visible) visible++;
+    }
+
+    for (let offset = 0; offset < mappedPromos.length; offset += PROMO_WRITE_CHUNK_SIZE) {
+      await upsertPromoChunk(mappedPromos.slice(offset, offset + PROMO_WRITE_CHUNK_SIZE));
+    }
+
+    pagesProcessed++;
+    console.log(
+      `Promo halaman ${page}: API=${data.promos.length}, Crisbar=${mappedPromos.length}, total Crisbar=${matchedPromoIds.size}`,
+    );
+
+    if (data.paging.next_page === null || data.promos.length === 0) break;
+    if (page === PROMO_MAX_PAGES) {
+      throw new Error(`Pagination promo melebihi ${PROMO_MAX_PAGES} halaman`);
+    }
+  }
+
+  if (scannedPromoIds.size === 0) {
+    throw new Error('API tidak menghasilkan promo; rekonsiliasi dibatalkan');
+  }
+  if (reportedTotal !== null && scannedPromoIds.size !== reportedTotal) {
+    throw new Error(`Pagination promo tidak lengkap: ${scannedPromoIds.size}/${reportedTotal}`);
+  }
+  if (matchedPromoIds.size === 0) {
+    throw new Error('Tidak ada promo dengan bukti eksplisit Crisbar; pembersihan dibatalkan');
+  }
+
+  const removed = await prisma.promo.deleteMany({
+    where: {
+      runchise_id: { notIn: [...matchedPromoIds] },
+    },
+  });
+
+  return {
+    api_scanned: scannedPromoIds.size,
+    synced: matchedPromoIds.size,
+    total: matchedPromoIds.size,
+    pages_processed: pagesProcessed,
+    visible_for_customer: visible,
+    rejected_non_crisbar_or_ambiguous: scannedPromoIds.size - matchedPromoIds.size,
+    removed_from_local_cache: removed.count,
+    matched_by: evidenceCounts,
+  };
 }
 
 module.exports = {
@@ -1301,5 +1406,8 @@ module.exports = {
   syncBrands,
   syncLocations,
   ensureLocalLocationRunchiseMapping,
+  getCrisbarPromoEvidence,
+  loadCrisbarPromoContext,
+  mapRunchisePromoToLocalData,
   syncPromos,
 };
