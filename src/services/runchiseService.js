@@ -213,28 +213,60 @@ async function fetchAllCustomersAcrossLocations() {
   return [...customerById.values()];
 }
 
-// Mencari customer berdasarkan nomor HP
+// Daftar location_id tempat customer Runchise terdaftar, termasuk outlet
+// pemiliknya.
+function getCustomerLocationIds(customer) {
+  return [
+    ...new Set(
+      [Number(customer?.owner_location_id), ...(customer?.location_ids ?? [])]
+        .map(Number)
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  ];
+}
+
+// Endpoint customer menerima filter phone_number, sehingga pencocokan nomor
+// cukup satu request. Tanpa filter ini paging berhenti di halaman 100 (API
+// selalu melaporkan total_item 10000 per outlet), jadi satu pencarian nomor
+// yang tidak ketemu memakan 100 request per outlet.
+//
+// Dua sifat filter ini wajib diperhatikan:
+// 1. Tidak dibatasi lokasi pada path — hasilnya bisa customer outlet lain.
+// 2. Bila nomornya tidak ada, API tetap mengembalikan customer lain yang tidak
+//    berhubungan, bukan daftar kosong.
+// Karena itu hasilnya selalu diverifikasi ulang di sini.
+async function lookupCustomersByPhone(locationId, normalizedPhone) {
+  const { data } = await requestWithRetry(
+    `Cari customer Runchise dengan nomor ${normalizedPhone}`,
+    () =>
+      runchiseClient.get(`/locations/${locationId}/customers`, {
+        params: {
+          page: 1,
+          item_per_page: RUNCHISE_PAGE_SIZE,
+          phone_number: normalizedPhone,
+        },
+      }),
+  );
+
+  return (data?.customers ?? []).filter(
+    (customer) =>
+      normalizeIndonesianPhone(customer.phone_number) === normalizedPhone,
+  );
+}
+
+// Mencari customer berdasarkan nomor HP di satu outlet
 async function findCustomerByPhone(locationId, phoneNumber) {
   const normalizedPhone = normalizeIndonesianPhone(phoneNumber);
   if (!normalizedPhone) return null;
 
-  let page = 1;
-  let hasMore = true;
+  const targetLocationId = Number(locationId);
+  const matches = await lookupCustomersByPhone(targetLocationId, normalizedPhone);
 
-  while (hasMore) {
-    const data = await fetchCustomersPage(locationId, page);
-    const customer = data.customers.find(
-      (customer) =>
-        normalizeIndonesianPhone(customer.phone_number) === normalizedPhone,
-    );
-
-    if (customer) return customer;
-
-    hasMore = data.paging.next_page !== null;
-    page++;
-  }
-
-  return null;
+  return (
+    matches.find((customer) =>
+      getCustomerLocationIds(customer).includes(targetLocationId),
+    ) ?? null
+  );
 }
 
 // ===================== SALES TRANSACTIONS =====================
@@ -292,21 +324,33 @@ async function fetchAllSalesTransactions(params = {}) {
   return allTransactions;
 }
 
+// Filter phone_number berlaku lintas outlet, jadi satu request sudah mewakili
+// seluruh lokasi. Versi lama memindai setiap lokasi halaman demi halaman
+// (32 outlet x 100 halaman = ~3.200 request, belasan menit per customer baru).
 async function findCustomerByPhoneAcrossLocations(phoneNumber, excludedLocationId = null) {
   const normalizedPhone = normalizeIndonesianPhone(phoneNumber);
   if (!normalizedPhone) return null;
 
   const excludedId = Number(excludedLocationId);
-  const locations = await fetchAllLocations();
+  const hasExcludedId = Number.isInteger(excludedId) && excludedId > 0;
+  // Path lokasi hanya menentukan alamat endpoint, bukan cakupan pencarian.
+  const lookupLocationId = hasExcludedId
+    ? excludedId
+    : (await fetchAllLocations())
+        .map((location) => Number(location.id))
+        .find((id) => Number.isInteger(id) && id > 0);
 
-  for (const location of locations) {
-    const locationId = Number(location.id);
-    if (!Number.isInteger(locationId) || locationId <= 0) continue;
-    if (Number.isInteger(excludedId) && locationId === excludedId) continue;
+  if (!lookupLocationId) return null;
 
-    const customer = await findCustomerByPhone(locationId, normalizedPhone);
-    if (customer) {
-      return { customer, location_id: locationId };
+  const matches = await lookupCustomersByPhone(lookupLocationId, normalizedPhone);
+
+  for (const customer of matches) {
+    const otherLocationId = getCustomerLocationIds(customer).find(
+      (id) => !hasExcludedId || id !== excludedId,
+    );
+
+    if (otherLocationId) {
+      return { customer, location_id: otherLocationId };
     }
   }
 

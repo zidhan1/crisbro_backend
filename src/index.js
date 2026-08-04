@@ -28,7 +28,6 @@ const pointRoutes = require('./routes/pointRoutes');
 
 // Sync services (ETL dari Runchise → DB lokal)
 const {
-  syncCustomers,
   syncProducts,
   syncCustomerPoints,
   syncCustomerPointsFromStaging,
@@ -48,6 +47,11 @@ const {
   getCustomerTimestampSyncJob,
   processCustomerTimestampSyncJob,
 } = require('./services/customerTimestampSyncService');
+const {
+  createCustomerImportSyncJob,
+  getCustomerImportSyncJob,
+  processCustomerImportSyncJob,
+} = require('./services/customerImportSyncService');
 
 // ===================== APP SETUP =====================
 const app = express();
@@ -118,28 +122,51 @@ app.post('/redeem/:id', auth, (req, res) => {
 
 // ===================== SYNC HANDLERS (WRAPPER API) =====================
 
-// Sync customers dari Runchise → DB lokal
+// Sync customers dari Runchise → DB lokal.
+//
+// Impor penuh mencakup 29 outlet x 100 halaman API, jadi tidak muat dalam satu
+// request serverless. Endpoint ini hanya membuat job; kemajuannya dilaporkan
+// lewat /sync/customers/status dan dieksekusi bertahap oleh
+// /sync/customers/process.
 async function handleSyncCustomers(req, res) {
   try {
-    // Tanpa fallback ke 1: outlet itu tidak ada di Runchise, dan memakainya
-    // membuat customer tanpa owner_location dipetakan ke outlet palsu.
-    const locationId = req.query.location_id || null;
-    const result = await syncCustomers(locationId);
-    res.json({ message: 'Sync customers selesai', ...result });
+    const result = await createCustomerImportSyncJob();
+    res.status(result.created ? 202 : 200).json({
+      message: result.created
+        ? 'Job sinkronisasi customer Runchise dimulai'
+        : 'Job sinkronisasi customer Runchise sudah berjalan',
+      ...result,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error('Gagal membuat job impor customer Runchise:', error);
+    res.status(500).json({
+      message: 'Gagal memulai sinkronisasi customer Runchise',
+      error: error.message,
+    });
   }
 }
 
-// Endpoint kompatibilitas untuk frontend yang memeriksa background customer job.
-// Sync customer saat ini masih dijalankan langsung oleh POST /sync/customers,
-// sehingga tidak ada job persisten yang perlu dilaporkan atau diproses terpisah.
 async function handleCustomerSyncStatus(req, res) {
-  res.json({ job: null });
+  try {
+    res.json({ job: await getCustomerImportSyncJob() });
+  } catch (error) {
+    res.status(500).json({
+      message: 'Gagal membaca status sinkronisasi customer',
+      error: error.message,
+    });
+  }
 }
 
 async function handleProcessCustomerSync(req, res) {
-  res.json({ status: 'idle', job: null });
+  try {
+    res.json(await processCustomerImportSyncJob());
+  } catch (error) {
+    console.error('Worker impor customer Runchise gagal:', error);
+    res.status(500).json({
+      message: 'Worker sinkronisasi customer gagal',
+      error: error.message,
+    });
+  }
 }
 
 async function handleStartCustomerTimestampSync(req, res) {

@@ -164,192 +164,13 @@ async function syncCustomers(locationId = null) {
   let skippedConflicts = 0;
 
   for (const c of customers) {
-    // Pastikan brand sudah ada di database
-    await prisma.brand.upsert({
-      where: { id: c.brand_id },
-      update: {},
-      create: { id: c.brand_id, name: `Brand ${c.brand_id}` },
-    });
+    const result = await upsertRunchiseCustomer(c, fallbackLocationId);
 
-    const ownerLocationId = Number(c.owner_location_id) || fallbackLocationId;
-    const ownerLocationName = c.owner_location?.name ?? `Outlet ${ownerLocationId}`;
-    const locationIds = [
-      ...new Set([
-        ...(c.location_ids ?? []),
-        ...(ownerLocationId ? [ownerLocationId] : []),
-      ].map(Number).filter((id) => Number.isInteger(id) && id > 0)),
-    ];
-
-    for (const locationId of locationIds) {
-      await prisma.location.upsert({
-        where: { id: locationId },
-        update: {
-          ...(locationId === ownerLocationId && { name: ownerLocationName }),
-          brand_id: c.brand_id,
-          runchise_id: locationId,
-        },
-        create: {
-          id: locationId,
-          brand_id: c.brand_id,
-          runchise_id: locationId,
-          name:
-            locationId === ownerLocationId
-              ? ownerLocationName
-              : `Outlet ${locationId}`,
-          is_active: true,
-          is_outlet: true,
-        },
-      });
-    }
-
-    const normalizedPhone = normalizePhone(c.phone_number);
-    const phoneNumberVariants = phoneVariants(normalizedPhone);
-    const syncedAt = new Date();
-
-    // Mapping data customer dari Runchise ke format lokal
-    const payload = {
-      runchise_id: Number(c.id),
-      runchise_location_id: ownerLocationId,
-      runchise_sync_status: 'synced',
-      runchise_sync_error: null,
-      runchise_synced_at: syncedAt,
-      runchise_created_at: parseIsoDate(c.created_at),
-      runchise_updated_at: parseIsoDate(c.updated_at),
-      name: c.name,
-      phone_number: normalizedPhone,
-      normalized_phone_number: normalizedPhone,
-      phone_number_country_code: c.phone_number_country_code ?? 62,
-      address: c.address ?? null,
-      province: c.province ?? null,
-      city: c.city ?? null,
-      country: c.country ?? null,
-      postal_code: c.postal_code ?? null,
-      dob: c.dob && !isNaN(new Date(c.dob)) ? new Date(c.dob) : null,
-      gender: c.gender ?? 'unknown',
-      status: c.status ?? 'active',
-      balance: parseFloat(c.balance ?? 0),
-      brand_id: c.brand_id,
-      owner_location_id: ownerLocationId,
-    };
-
-    const [
-      existingByRunchiseId,
-      existingCustomerByPhone,
-      existingUserByPhone,
-    ] = await Promise.all([
-      prisma.customer.findFirst({
-        where: { runchise_id: c.id },
-        include: {
-          user: { select: { id: true, phone_number: true, role: true } },
-        },
-      }),
-      phoneNumberVariants.length > 0
-        ? prisma.customer.findFirst({
-            where: {
-              OR: [
-                { phone_number: { in: phoneNumberVariants } },
-                { user: { phone_number: { in: phoneNumberVariants } } },
-              ],
-            },
-          })
-        : null,
-      phoneNumberVariants.length > 0
-        ? prisma.user.findFirst({
-            where: { phone_number: { in: phoneNumberVariants } },
-            include: { customer: true },
-          })
-        : null,
-    ]);
-
-    const existingByPhone =
-      existingCustomerByPhone || existingUserByPhone?.customer || null;
-
-    if (
-      existingUserByPhone &&
-      (!existingUserByPhone.customer ||
-        existingUserByPhone.customer.id !== existingByPhone?.id)
-    ) {
+    if (result.status === 'skipped_conflict') {
       skippedConflicts++;
-      console.warn(
-        `Sync customer skipped: phone=${normalizedPhone} sudah dipakai user_id=${existingUserByPhone.id} role=${existingUserByPhone.role} yang tidak cocok dengan customer Runchise.`,
-      );
-      continue;
-    }
-
-    if (
-      existingByRunchiseId &&
-      existingByPhone &&
-      existingByRunchiseId.id !== existingByPhone.id
-    ) {
-      skippedConflicts++;
-      console.warn(
-        `Sync customer skipped: runchise_id=${c.id} cocok dengan customer_id=${existingByRunchiseId.id}, tetapi phone cocok dengan customer_id=${existingByPhone.id}.`,
-      );
-      continue;
-    }
-
-    if (
-      existingByPhone &&
-      existingByPhone.runchise_id !== null &&
-      existingByPhone.runchise_id !== c.id
-    ) {
-      skippedConflicts++;
-      console.warn(
-        `Sync customer skipped: phone=${normalizedPhone} sudah terhubung ke runchise_id=${existingByPhone.runchise_id}, bukan ${c.id}.`,
-      );
-      continue;
-    }
-
-    const existing = existingByRunchiseId || existingByPhone;
-
-    // Update jika sudah ada, create jika belum
-    if (existing) {
-      const operations = [
-        prisma.customer.update({
-          where: { id: existing.id },
-          data: payload,
-        }),
-        prisma.user.update({
-          where: { id: existing.user_id },
-          data: { phone_number: payload.phone_number },
-        }),
-        prisma.customerLocation.deleteMany({
-          where: { customer_id: existing.id },
-        }),
-      ];
-      if (locationIds.length > 0) {
-        operations.push(
-          prisma.customerLocation.createMany({
-            data: locationIds.map((location_id) => ({
-              customer_id: existing.id,
-              location_id,
-            })),
-            skipDuplicates: true,
-          }),
-        );
-      }
-      await prisma.$transaction(operations);
     } else {
-      await prisma.user.create({
-        data: {
-          phone_number: normalizedPhone,
-          password_hash: '',
-          activation_status: 'pending_activation',
-          role: 'customer',
-          customer: {
-            create: {
-              ...payload,
-              ...(locationIds.length > 0 && {
-                customer_locations: {
-                  create: locationIds.map((location_id) => ({ location_id })),
-                },
-              }),
-            },
-          },
-        },
-      });
+      synced++;
     }
-    synced++;
   }
 
   return {
@@ -357,6 +178,201 @@ async function syncCustomers(locationId = null) {
     total: customers.length,
     skipped_conflicts: skippedConflicts,
   };
+}
+
+// Upsert satu customer Runchise ke database lokal.
+//
+// Dipakai baik oleh syncCustomers (impor penuh lewat CLI) maupun worker job
+// customerImportSyncService yang memproses satu halaman API per request agar
+// muat di batas waktu serverless.
+async function upsertRunchiseCustomer(c, fallbackLocationId = null) {
+  // Pastikan brand sudah ada di database
+  await prisma.brand.upsert({
+    where: { id: c.brand_id },
+    update: {},
+    create: { id: c.brand_id, name: `Brand ${c.brand_id}` },
+  });
+
+  const ownerLocationId = Number(c.owner_location_id) || fallbackLocationId;
+  const ownerLocationName = c.owner_location?.name ?? `Outlet ${ownerLocationId}`;
+  const locationIds = [
+    ...new Set([
+      ...(c.location_ids ?? []),
+      ...(ownerLocationId ? [ownerLocationId] : []),
+    ].map(Number).filter((id) => Number.isInteger(id) && id > 0)),
+  ];
+
+  for (const locationId of locationIds) {
+    await prisma.location.upsert({
+      where: { id: locationId },
+      update: {
+        ...(locationId === ownerLocationId && { name: ownerLocationName }),
+        brand_id: c.brand_id,
+        runchise_id: locationId,
+      },
+      create: {
+        id: locationId,
+        brand_id: c.brand_id,
+        runchise_id: locationId,
+        name:
+          locationId === ownerLocationId
+            ? ownerLocationName
+            : `Outlet ${locationId}`,
+        is_active: true,
+        is_outlet: true,
+      },
+    });
+  }
+
+  const normalizedPhone = normalizePhone(c.phone_number);
+  const phoneNumberVariants = phoneVariants(normalizedPhone);
+  const syncedAt = new Date();
+
+  // Mapping data customer dari Runchise ke format lokal
+  const payload = {
+    runchise_id: Number(c.id),
+    runchise_location_id: ownerLocationId,
+    runchise_sync_status: 'synced',
+    runchise_sync_error: null,
+    runchise_synced_at: syncedAt,
+    runchise_created_at: parseIsoDate(c.created_at),
+    runchise_updated_at: parseIsoDate(c.updated_at),
+    name: c.name,
+    phone_number: normalizedPhone,
+    normalized_phone_number: normalizedPhone,
+    phone_number_country_code: c.phone_number_country_code ?? 62,
+    address: c.address ?? null,
+    province: c.province ?? null,
+    city: c.city ?? null,
+    country: c.country ?? null,
+    postal_code: c.postal_code ?? null,
+    dob: c.dob && !isNaN(new Date(c.dob)) ? new Date(c.dob) : null,
+    gender: c.gender ?? 'unknown',
+    status: c.status ?? 'active',
+    balance: parseFloat(c.balance ?? 0),
+    brand_id: c.brand_id,
+    owner_location_id: ownerLocationId,
+  };
+
+  const [
+    existingByRunchiseId,
+    existingCustomerByPhone,
+    existingUserByPhone,
+  ] = await Promise.all([
+    prisma.customer.findFirst({
+      where: { runchise_id: c.id },
+      include: {
+        user: { select: { id: true, phone_number: true, role: true } },
+      },
+    }),
+    phoneNumberVariants.length > 0
+      ? prisma.customer.findFirst({
+          where: {
+            OR: [
+              { phone_number: { in: phoneNumberVariants } },
+              { user: { phone_number: { in: phoneNumberVariants } } },
+            ],
+          },
+        })
+      : null,
+    phoneNumberVariants.length > 0
+      ? prisma.user.findFirst({
+          where: { phone_number: { in: phoneNumberVariants } },
+          include: { customer: true },
+        })
+      : null,
+  ]);
+
+  const existingByPhone =
+    existingCustomerByPhone || existingUserByPhone?.customer || null;
+
+  if (
+    existingUserByPhone &&
+    (!existingUserByPhone.customer ||
+      existingUserByPhone.customer.id !== existingByPhone?.id)
+  ) {
+    console.warn(
+      `Sync customer skipped: phone=${normalizedPhone} sudah dipakai user_id=${existingUserByPhone.id} role=${existingUserByPhone.role} yang tidak cocok dengan customer Runchise.`,
+    );
+    return { status: 'skipped_conflict', reason: 'phone_used_by_other_user' };
+  }
+
+  if (
+    existingByRunchiseId &&
+    existingByPhone &&
+    existingByRunchiseId.id !== existingByPhone.id
+  ) {
+    console.warn(
+      `Sync customer skipped: runchise_id=${c.id} cocok dengan customer_id=${existingByRunchiseId.id}, tetapi phone cocok dengan customer_id=${existingByPhone.id}.`,
+    );
+    return { status: 'skipped_conflict', reason: 'runchise_id_phone_mismatch' };
+  }
+
+  if (
+    existingByPhone &&
+    existingByPhone.runchise_id !== null &&
+    existingByPhone.runchise_id !== c.id
+  ) {
+    console.warn(
+      `Sync customer skipped: phone=${normalizedPhone} sudah terhubung ke runchise_id=${existingByPhone.runchise_id}, bukan ${c.id}.`,
+    );
+    return { status: 'skipped_conflict', reason: 'phone_linked_to_other_runchise_id' };
+  }
+
+  const existing = existingByRunchiseId || existingByPhone;
+
+  // Update jika sudah ada, create jika belum
+  if (existing) {
+    const operations = [
+      prisma.customer.update({
+        where: { id: existing.id },
+        data: payload,
+      }),
+      prisma.user.update({
+        where: { id: existing.user_id },
+        data: { phone_number: payload.phone_number },
+      }),
+      prisma.customerLocation.deleteMany({
+        where: { customer_id: existing.id },
+      }),
+    ];
+    if (locationIds.length > 0) {
+      operations.push(
+        prisma.customerLocation.createMany({
+          data: locationIds.map((location_id) => ({
+            customer_id: existing.id,
+            location_id,
+          })),
+          skipDuplicates: true,
+        }),
+      );
+    }
+    await prisma.$transaction(operations);
+
+    return { status: 'updated', customer_id: existing.id };
+  }
+
+  const createdUser = await prisma.user.create({
+    data: {
+      phone_number: normalizedPhone,
+      password_hash: '',
+      activation_status: 'pending_activation',
+      role: 'customer',
+      customer: {
+        create: {
+          ...payload,
+          ...(locationIds.length > 0 && {
+            customer_locations: {
+              create: locationIds.map((location_id) => ({ location_id })),
+            },
+          }),
+        },
+      },
+    },
+    include: { customer: { select: { id: true } } },
+  });
+
+  return { status: 'created', customer_id: createdUser.customer?.id ?? null };
 }
 
 function parseIsoDate(value) {
@@ -1398,6 +1414,7 @@ async function syncPromos() {
 
 module.exports = {
   syncCustomers,
+  upsertRunchiseCustomer,
   syncProducts,
   syncCustomerPoints,
   syncCustomerPointsFromStaging,

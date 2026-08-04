@@ -163,6 +163,36 @@ model CustomerTimestampSyncJob {
   @@index([started_at])
 }
 
+// Job impor customer Runchise -> Customer aplikasi. Dieksekusi bertahap
+// (satu halaman API per request worker) agar muat di batas waktu serverless;
+// impor sinkron sebelumnya menahan request belasan menit sampai timeout.
+model CustomerImportSyncJob {
+  id                         Int       @id @default(autoincrement())
+  status                     String    @default("queued")
+  source                     String    @default("dashboard")
+  phase                      String    @default("recent")
+  location_ids               Json
+  current_location_index     Int       @default(0)
+  current_location           Int?
+  current_page               Int       @default(1)
+  total_api                  Int       @default(0)
+  processed                  Int       @default(0)
+  created                    Int       @default(0)
+  updated                    Int       @default(0)
+  unchanged                  Int       @default(0)
+  skipped_conflicts          Int       @default(0)
+  failed                     Int       @default(0)
+  latest_runchise_created_at DateTime?
+  latest_local_created_at    DateTime?
+  error                      String?   @db.Text
+  started_at                 DateTime  @default(now())
+  heartbeat_at               DateTime  @default(now())
+  finished_at                DateTime?
+
+  @@index([status])
+  @@index([started_at])
+}
+
 // Snapshot customer yang dikembalikan endpoint Runchise per lokasi.
 // Terpisah dari Customer aplikasi agar impor POS tidak membuat akun pengguna.
 model RunchiseLocationCustomer {

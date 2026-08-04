@@ -715,19 +715,19 @@ paths:
   /api/admin/sync/customers:
     post:
       tags: [Admin Sync]
-      summary: Sync customers from Runchise to local database
-      description: Ambil data customer dari Runchise lalu upsert ke database lokal.
+      summary: Start Runchise customer import job
+      description: >-
+        Membuat job impor customer Runchise. Impor tidak dijalankan langsung
+        karena mencakup 29 outlet x 100 halaman API. Pantau lewat
+        /api/admin/sync/customers/status dan jalankan bertahap lewat
+        /api/admin/sync/customers/process.
       security:
         - bearerAuth: []
-      parameters:
-        - in: query
-          name: location_id
-          schema:
-            type: integer
-            default: 1
       responses:
         "200":
-          $ref: "#/components/responses/SyncResult"
+          description: Job impor sudah berjalan sebelumnya
+        "202":
+          description: Job impor baru dibuat
 
   /api/admin/sync/products:
     post:
