@@ -6,6 +6,7 @@ const getJwtSecret = require('../lib/jwtSecret');
 const {
   hashActivationToken,
 } = require('../services/accountActivationService');
+const { getNextReward } = require('../services/nextRewardService');
 
 // Konfigurasi masa berlaku token login
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
@@ -470,7 +471,22 @@ async function profile(req, res) {
       return res.status(404).json({ message: 'User tidak ditemukan' });
     }
 
-    res.json(serializeAuthUser(user));
+    const serialized = serializeAuthUser(user);
+
+    if (!serialized.customer) {
+      return res.json(serialized);
+    }
+
+    // Target reward berikutnya dihitung di sini supaya dashboard tidak perlu
+    // menebak ambang poin sendiri maupun menambah request ke katalog.
+    const nextReward = await getNextReward(
+      serialized.customer.customer_point?.available_point ?? 0,
+    );
+
+    res.json({
+      ...serialized,
+      customer: { ...serialized.customer, ...nextReward },
+    });
   } catch (error) {
     // Menangani error
     res.status(500).json({ error: error.message });
