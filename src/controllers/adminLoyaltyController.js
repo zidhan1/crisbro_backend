@@ -1837,6 +1837,12 @@ async function getSummary(req, res) {
         (total, outlet) => total + outlet.stored_customers,
         0,
       ),
+      // Sama dengan penjumlahan kolom "Customer Berpoin" pada tabel
+      // jumlah customer Runchise per outlet.
+      runchise_customers_with_points: customerMetricsByOutlet.reduce(
+        (total, outlet) => total + outlet.customers_with_points,
+        0,
+      ),
       runchise_customers_unique:
         runchiseCustomersUnique?.[0]?.unique_customers ?? 0,
       runchise_customers_by_outlet: customerMetricsByOutlet,
