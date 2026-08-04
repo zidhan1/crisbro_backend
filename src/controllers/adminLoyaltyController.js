@@ -1610,6 +1610,7 @@ async function getSummary(req, res) {
       redemptionHistory,
       runchiseCustomersByOutlet,
       runchiseCustomersUnique,
+      salesPointUsageByOutlet,
     ] = await Promise.all([
       prisma.customer.count(),
       // "Member aktif" berarti akun aplikasinya sudah diaktivasi, bukan status
@@ -1730,6 +1731,14 @@ async function getSummary(req, res) {
         WHERE l."is_outlet" = TRUE
           AND l."runchise_id" IS NOT NULL
       `,
+      // Sumber kolom "Jumlah Poin yang Diredeem" pada tabel customer per
+      // outlet: total kolom "Penggunaan Poin" di Crisbro Transaction Report.
+      // Sengaja tanpa filter tanggal/outlet supaya angkanya sama dengan
+      // penjumlahan tabel transaksi tanpa filter.
+      prisma.customerSalesTransactionReport.groupBy({
+        by: ['source_location_id'],
+        _sum: { penggunaan_poin: true },
+      }),
     ]);
 
     const outletIds = activatedCustomersByOutlet
@@ -1753,30 +1762,6 @@ async function getSummary(req, res) {
     );
     const outletRedemptionById = new Map();
     const redemptionTrendByDate = new Map();
-    const customerMetricsByOutlet = runchiseCustomersByOutlet.map((outlet) => {
-      const apiReportedTotal = outlet.api_reported_total ?? null;
-      const rowsReceived = outlet.rows_received ?? 0;
-      const isCapped = rowsReceived >= 10000;
-      const hasMismatch =
-        apiReportedTotal !== null && apiReportedTotal !== rowsReceived;
-
-      return {
-        outlet_id: outlet.outlet_id,
-        source_location_id: outlet.source_location_id,
-        outlet_name: outlet.outlet_name,
-        city: outlet.city,
-        stored_customers: outlet.stored_customers,
-        customers_with_points: outlet.customers_with_points,
-        api_reported_total: apiReportedTotal,
-        last_snapshot_at: outlet.last_snapshot_at,
-        status: hasMismatch
-          ? 'mismatch'
-          : isCapped
-            ? 'capped'
-            : outlet.import_status ?? (outlet.stored_customers > 0 ? 'available' : 'empty'),
-      };
-    });
-
     for (const redemption of redemptionsByOutlet) {
       const outlet = redemptionLocationByRunchiseId.get(redemption.location_id);
 
@@ -1795,6 +1780,40 @@ async function getSummary(req, res) {
       current.points_spent += redemption._sum.points_spent ?? 0;
       outletRedemptionById.set(redemption.location_id, current);
     }
+
+    // source_location_id pada laporan transaksi adalah runchise_id outlet,
+    // sama dengan kolom source_location_id tabel customer per outlet.
+    const salesPointUsageByLocationId = new Map(
+      salesPointUsageByOutlet.map((row) => [
+        row.source_location_id,
+        Number(row._sum.penggunaan_poin ?? 0),
+      ]),
+    );
+    const customerMetricsByOutlet = runchiseCustomersByOutlet.map((outlet) => {
+      const apiReportedTotal = outlet.api_reported_total ?? null;
+      const rowsReceived = outlet.rows_received ?? 0;
+      const isCapped = rowsReceived >= 10000;
+      const hasMismatch =
+        apiReportedTotal !== null && apiReportedTotal !== rowsReceived;
+
+      return {
+        outlet_id: outlet.outlet_id,
+        source_location_id: outlet.source_location_id,
+        outlet_name: outlet.outlet_name,
+        city: outlet.city,
+        stored_customers: outlet.stored_customers,
+        customers_with_points: outlet.customers_with_points,
+        points_redeemed:
+          salesPointUsageByLocationId.get(outlet.source_location_id) ?? 0,
+        api_reported_total: apiReportedTotal,
+        last_snapshot_at: outlet.last_snapshot_at,
+        status: hasMismatch
+          ? 'mismatch'
+          : isCapped
+            ? 'capped'
+            : outlet.import_status ?? (outlet.stored_customers > 0 ? 'available' : 'empty'),
+      };
+    });
 
     for (const redemption of redemptionHistory) {
       if (!redemption.redeemed_at) continue;
