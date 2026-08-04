@@ -6,10 +6,13 @@ const { importLocationCustomers } = require('./importRunchiseLocationCustomers')
 
 dotenv.config({ path: path.resolve(__dirname, '..', '.env'), quiet: true });
 
-const DEFAULT_LOCATION_ID = 4453;
-const DEFAULT_START_DATE = '2024-01-01';
-const DEFAULT_END_DATE = '2024-08-31';
-const PAGE_SIZE = 100;
+const DEFAULT_LOCATION_ID = 4614;
+const DEFAULT_LOCATION_NAME = 'Widyatama';
+const DEFAULT_START_DATE = '2026-07-27';
+const DEFAULT_END_DATE = '2026-08-02';
+// Detail transaksi membawa raw JSON yang cukup besar. Batch kecil menjaga
+// penggunaan memori tetap konstan tanpa mengumpulkan seluruh periode.
+const PAGE_SIZE = 25;
 const MAX_PAGES = 100000;
 const TARGET_SUB_BRAND_RUNCHISE_ID = 1041;
 
@@ -70,6 +73,23 @@ function pointActivity(sale) {
 function hasPositivePointActivity(sale) {
   const points = pointActivity(sale);
   return points.earned > 0 || points.redeemed > 0;
+}
+
+function transactionDate(sale) {
+  const parsed = new Date(sale?.sales_time ?? sale?.sales_time_date ?? sale?.created_at);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function matchesImportCriteria(sale, locationId, range) {
+  const occurredAt = transactionDate(sale);
+  return (
+    positiveInt(sale?.location_id) === locationId &&
+    occurredAt !== null &&
+    occurredAt >= range.start &&
+    occurredAt < range.endExclusive &&
+    isCrisbarSale(sale) &&
+    hasPositivePointActivity(sale)
+  );
 }
 
 function isoDate(value) {
@@ -137,6 +157,7 @@ function mapSale(
   const change = salePayments.reduce((total, item) => total + number(item.change), 0);
   const nominal = transactionNominal(sale);
   const metadata = sale.metadata || {};
+  const points = pointActivity(sale);
   const transactionAt = isoDate(sale.sales_time ?? sale.sales_time_date ?? sale.created_at);
   const paymentMethods =
     sale.payment_method_names ??
@@ -160,8 +181,8 @@ function mapSale(
     canonicalOutletName ?? sale.location_name ?? sale.location?.name ?? null,
     sale.order_type_name ?? null,
     salePayments.length > 0 ? amountReceived : nominal.value,
-    integer(metadata.earned_point),
-    number(metadata.redeemed_point),
+    points.earned,
+    points.redeemed,
     sale.sales_no ?? null,
     sale.receipt_no ?? null,
     sale.status ?? null,
@@ -403,8 +424,8 @@ async function importSalesTransactions(
   let locationMismatches = 0;
   let outOfRange = 0;
   let apiTotal = 0;
-  const uniqueIds = new Set();
-  const retainedIds = new Set();
+  let uniqueTransactions = 0;
+  let retainedTransactions = 0;
 
   try {
     const run = await pool.query(
@@ -416,7 +437,6 @@ async function importSalesTransactions(
     runId = run.rows[0].id;
     const customerMaps = await loadCustomerMaps(pool, locationId);
     const snapshotAt = new Date().toISOString();
-    const visitedUrls = new Set();
     const cursor = new Date(`${startDate}T00:00:00.000Z`);
     const finalDay = new Date(`${endDate}T00:00:00.000Z`);
 
@@ -433,6 +453,10 @@ async function importSalesTransactions(
       let windowPage = 0;
       let windowRowsReceived = 0;
       let windowApiTotal = null;
+      // Window harian membuat kedua Set ini dapat dibuang setiap pergantian
+      // tanggal, sehingga pemakaian memori tidak bertambah selama satu bulan.
+      const windowUniqueIds = new Set();
+      const visitedUrls = new Set();
 
       while (nextUrl !== null) {
         if (pages >= MAX_PAGES) throw new Error(`Melewati batas ${MAX_PAGES} halaman`);
@@ -455,17 +479,18 @@ async function importSalesTransactions(
         const nonCrisbarSaleIds = [];
         for (const sale of transactions) {
         const saleId = positiveInt(sale?.id);
-        if (!saleId || uniqueIds.has(saleId)) {
+        if (!saleId || windowUniqueIds.has(saleId)) {
           invalid++;
           continue;
         }
-        uniqueIds.add(saleId);
+        windowUniqueIds.add(saleId);
+        uniqueTransactions++;
         if (positiveInt(sale.location_id) !== locationId) {
           locationMismatches++;
           continue;
         }
-        const transactionAt = new Date(sale.sales_time ?? sale.sales_time_date ?? sale.created_at);
-        if (Number.isNaN(transactionAt.getTime())) {
+        const transactionAt = transactionDate(sale);
+        if (transactionAt === null) {
           invalid++;
           continue;
         }
@@ -488,11 +513,19 @@ async function importSalesTransactions(
             pages + detailsFetched + 1,
           );
           detailsFetched++;
-          if (!isCrisbarSale(detailedSale)) {
-            throw new Error(`Detail transaksi ${saleId} bukan sub-brand Crisbar 1041`);
-          }
-          if (!hasPositivePointActivity(detailedSale)) {
-            throw new Error(`Detail transaksi ${saleId} tidak memiliki aktivitas poin positif`);
+          // Payload daftar hanya dipakai sebagai pra-filter untuk menghemat
+          // request. Keputusan insert selalu berdasarkan payload detail.
+          if (!matchesImportCriteria(detailedSale, locationId, range)) {
+            // Hapus kemungkinan data lama untuk ID yang ternyata tidak lolos
+            // validasi detail, lalu lanjutkan transaksi berikutnya.
+            nonCrisbarSaleIds.push(saleId);
+            if (positiveInt(detailedSale.location_id) !== locationId) locationMismatches++;
+            const detailedAt = transactionDate(detailedSale);
+            if (detailedAt === null) invalid++;
+            else if (detailedAt < range.start || detailedAt >= range.endExclusive) outOfRange++;
+            if (!isCrisbarSale(detailedSale)) skippedNonCrisbar++;
+            if (!hasPositivePointActivity(detailedSale)) skippedZeroPoints++;
+            continue;
           }
           const customerId = positiveInt(detailedSale.customer_id);
           const row = mapSale(
@@ -502,7 +535,7 @@ async function importSalesTransactions(
             runId, snapshotAt,
           );
           rows.push(row);
-          retainedIds.add(saleId);
+          retainedTransactions++;
         }
         }
 
@@ -526,7 +559,7 @@ async function importSalesTransactions(
              "unique_transactions"=$5, "inserted"=$6, "updated"=$7,
              "invalid"=$8, "location_mismatches"=$9, "out_of_range"=$10,
              "last_page"=$2 WHERE "id"=$1`,
-          [runId, pages, apiTotal, rowsReceived, uniqueIds.size, inserted, updated,
+          [runId, pages, apiTotal, rowsReceived, uniqueTransactions, inserted, updated,
             invalid, locationMismatches, outOfRange],
         );
         await client.query('COMMIT');
@@ -536,7 +569,7 @@ async function importSalesTransactions(
         } finally {
         client.release();
         }
-        console.log(`${windowDate} halaman ${windowPage}: diterima ${transactions.length}; detail ${rows.length}; non-Crisbar ${nonCrisbarSaleIds.length}; tanpa poin positif ${zeroPointSaleIds.length}; unik ${uniqueIds.size}`);
+        console.log(`${windowDate} halaman ${windowPage}: diterima ${transactions.length}; detail ${rows.length}; non-Crisbar ${nonCrisbarSaleIds.length}; tanpa poin positif ${zeroPointSaleIds.length}; unik ${uniqueTransactions}`);
         nextUrl = nextPageUrl(
           data, windowPage, windowRowsReceived, transactions.length, initialParams,
         );
@@ -578,9 +611,9 @@ async function importSalesTransactions(
     if (rowsReceived !== apiTotal) {
       mismatchReasons.push(`api=${apiTotal}, diterima=${rowsReceived}`);
     }
-    if (retainedIds.size !== Number(verificationResult.unique_stored)) {
+    if (retainedTransactions !== Number(verificationResult.unique_stored)) {
       mismatchReasons.push(
-        `unik_berpoin=${retainedIds.size}, unik_database=${verificationResult.unique_stored}`,
+        `unik_berpoin=${retainedTransactions}, unik_database=${verificationResult.unique_stored}`,
       );
     }
     if (invalid > 0 || locationMismatches > 0 || outOfRange > 0) {
@@ -616,7 +649,7 @@ async function importSalesTransactions(
       run_id: String(runId), location_id: locationId, location_name: locationName,
       start_date: startDate, end_date: endDate, pages_fetched: pages,
       api_reported_total: apiTotal, rows_received: rowsReceived,
-      unique_transactions: uniqueIds.size, inserted, updated, invalid,
+       unique_transactions: uniqueTransactions, inserted, updated, invalid,
       details_fetched: detailsFetched,
       skipped_zero_points: skippedZeroPoints,
       skipped_non_crisbar: skippedNonCrisbar,
@@ -651,7 +684,9 @@ async function main() {
   if (!locationId) throw new Error(`location_id tidak valid: ${positionalArgs[0]}`);
   const startDate = positionalArgs[1] ?? DEFAULT_START_DATE;
   const endDate = positionalArgs[2] ?? DEFAULT_END_DATE;
-  const locationName = positionalArgs[3] ?? (locationId === 4453 ? 'Antapani' : null);
+  const locationName = positionalArgs[3] ?? (
+    locationId === DEFAULT_LOCATION_ID ? DEFAULT_LOCATION_NAME : null
+  );
   if (process.argv.includes('--preview')) {
     await previewSalesTransactions(locationId, startDate, endDate);
     return;
@@ -670,5 +705,6 @@ if (require.main === module) {
 
 module.exports = {
   formatPhone, hasPositivePointActivity, isCrisbarSale, jakartaRange, mapSale,
+  matchesImportCriteria, transactionDate,
   pointActivity, previewSalesTransactions, transactionNominal, importSalesTransactions,
 };

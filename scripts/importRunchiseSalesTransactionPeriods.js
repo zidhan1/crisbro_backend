@@ -13,24 +13,10 @@ const {
  */
 const IMPORT_JOBS = [
   {
-    location_name: 'Cisitu',
-    source_location_id: 4616,
-    start_date: '2026-04-01',
-    end_date: '2026-04-30',
-    expected_total: null,
-  },
-  {
-    location_name: 'Cisitu',
-    source_location_id: 4616,
-    start_date: '2026-05-01',
-    end_date: '2026-05-31',
-    expected_total: null,
-  },
-  {
-    location_name: 'Cisitu',
-    source_location_id: 4616,
-    start_date: '2026-06-01',
-    end_date: '2026-06-30',
+    location_name: 'Widyatama',
+    source_location_id: 4614,
+    start_date: '2026-07-27',
+    end_date: '2026-08-02',
     expected_total: null,
   },
 
