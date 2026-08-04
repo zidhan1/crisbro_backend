@@ -296,7 +296,7 @@ async function login(req, res) {
     if (isSyncedPlaceholderUser(user)) {
       return res.status(409).json({
         message:
-          'Akun belum aktif. Silakan buka link aktivasi untuk membuat password.',
+          'Akun belum aktif. Silakan hubungi Admin untuk aktivasi akun.',
       });
     }
 
