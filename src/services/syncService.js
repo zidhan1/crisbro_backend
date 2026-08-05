@@ -11,6 +11,7 @@ const {
   fetchAllSalesTransactions,
   fetchAllSubBrands,
   fetchAllLocations,
+  fetchCustomersPage,
   fetchPromosPage,
 } = require('./runchiseService');
 const {
@@ -157,25 +158,87 @@ function getEffectivePromoStatus(promo, now) {
 // locationId hanya menjadi cadangan owner_location_id ketika Runchise tidak
 // mengirimkannya. Default lama 1 membuat customer tanpa outlet dipetakan ke
 // outlet yang tidak ada, sekaligus membuat baris Location id 1 palsu.
+// Daftar outlet Runchise yang akan disapu, dengan cadangan bila endpoint
+// locations tidak terbaca.
+async function getRunchiseSyncLocationIds() {
+  const locations = await fetchAllLocations();
+  const locationIds = [
+    ...new Set(
+      locations
+        .map((location) => Number(location.id))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  ];
+
+  if (locationIds.length > 0) return locationIds;
+
+  // Fallback lama ke ID 1 menunjuk outlet yang tidak dimiliki Crisbar, sehingga
+  // sync tampak sukses padahal tidak memproses satu customer pun.
+  const fallbackLocationId = Number(process.env.RUNCHISE_SYNC_LOCATION_ID);
+
+  if (!Number.isInteger(fallbackLocationId) || fallbackLocationId <= 0) {
+    throw new Error(
+      'Tidak ada lokasi Runchise yang dapat dibaca dan RUNCHISE_SYNC_LOCATION_ID belum diisi',
+    );
+  }
+
+  return [fallbackLocationId];
+}
+
 async function syncCustomers(locationId = null) {
-  const customers = await fetchAllCustomersAcrossLocations();
   const fallbackLocationId = parseRunchiseId(locationId);
+  const locationIds = await getRunchiseSyncLocationIds();
+
+  // Hanya ID customer yang disimpan, bukan objeknya. Versi lama memanggil
+  // fetchAllCustomersAcrossLocations() yang menumpuk seluruh hasil lebih dulu:
+  // endpoint Runchise melayani sampai 10.000 baris per outlet, jadi 32 outlet
+  // berarti hingga 320.000 objek customer sekaligus di memori sebelum satu pun
+  // diproses. Di function serverless yang memorinya terbatas itu berisiko
+  // crash. Sekarang tiap halaman langsung diproses lalu dilepas.
+  //
+  // Dedupe tetap dibutuhkan karena satu customer bisa muncul di beberapa outlet.
+  // Aman diproses per halaman: API mengembalikan location_ids yang lengkap pada
+  // setiap respons, apa pun outlet yang ditanya, sehingga keanggotaan outlet
+  // tidak hilang walau customernya hanya diproses sekali.
+  const processedCustomerIds = new Set();
   let synced = 0;
   let skippedConflicts = 0;
 
-  for (const c of customers) {
-    const result = await upsertRunchiseCustomer(c, fallbackLocationId);
+  for (const outletId of locationIds) {
+    let page = 1;
+    let hasMore = true;
 
-    if (result.status === 'skipped_conflict') {
-      skippedConflicts++;
-    } else {
-      synced++;
+    while (hasMore) {
+      const data = await fetchCustomersPage(outletId, page);
+      const customers = Array.isArray(data.customers) ? data.customers : [];
+
+      for (const customer of customers) {
+        const runchiseId = Number(customer.id);
+        if (!Number.isInteger(runchiseId) || runchiseId <= 0) continue;
+        if (processedCustomerIds.has(runchiseId)) continue;
+
+        processedCustomerIds.add(runchiseId);
+
+        const result = await upsertRunchiseCustomer(
+          customer,
+          fallbackLocationId,
+        );
+
+        if (result.status === 'skipped_conflict') {
+          skippedConflicts++;
+        } else {
+          synced++;
+        }
+      }
+
+      hasMore = data.paging?.next_page != null;
+      page++;
     }
   }
 
   return {
     synced,
-    total: customers.length,
+    total: processedCustomerIds.size,
     skipped_conflicts: skippedConflicts,
   };
 }
