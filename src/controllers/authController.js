@@ -488,9 +488,49 @@ async function changePassword(req, res) {
 }
 
 // Mengekspor fungsi agar dapat digunakan oleh file route
+// ===================== LOGOUT =====================
+// Mencabut sesi milik token yang sedang dipakai.
+//
+// Sebelumnya tidak ada endpoint ini: frontend hanya menghapus localStorage,
+// sedangkan baris Session tetap hidup sampai kedaluwarsa. Middleware auth
+// memvalidasi token terhadap tabel Session, jadi token yang sempat tersalin
+// masih diterima sampai sepekan walau penggunanya sudah menekan "Keluar".
+async function logout(req, res) {
+  try {
+    // Hanya sesi perangkat ini yang dihapus; perangkat lain milik user yang
+    // sama tetap login.
+    await prisma.session.deleteMany({ where: { token: req.sessionToken } });
+
+    return res.json({ message: 'Berhasil keluar' });
+  } catch (error) {
+    console.error('Logout gagal:', error);
+    return res.status(500).json({ message: 'Gagal keluar dari sesi ini' });
+  }
+}
+
+// Mengeluarkan seluruh perangkat milik user yang sedang login. Dipakai saat
+// pengguna menduga akunnya dipakai orang lain.
+async function logoutAllSessions(req, res) {
+  try {
+    const result = await prisma.session.deleteMany({
+      where: { user_id: req.user.id },
+    });
+
+    return res.json({
+      message: 'Berhasil keluar dari semua perangkat',
+      revoked_sessions: result.count,
+    });
+  } catch (error) {
+    console.error('Logout semua perangkat gagal:', error);
+    return res.status(500).json({ message: 'Gagal keluar dari semua perangkat' });
+  }
+}
+
 module.exports = {
   register,
   login,
+  logout,
+  logoutAllSessions,
   profile,
   validateActivationToken,
   activateAccount,

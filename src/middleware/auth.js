@@ -41,6 +41,9 @@ module.exports = async (req, res, next) => {
 
     // Menyimpan data hasil decode ke request agar dapat digunakan di controller
     req.user = decoded;
+    // Dipakai handler logout untuk menghapus baris sesi milik token ini saja,
+    // tanpa mengeluarkan perangkat lain milik user yang sama.
+    req.sessionToken = token;
   } catch (error) {
     // Menangani jika JWT_SECRET belum dikonfigurasi
     if (error.code === 'JWT_SECRET_MISSING') {

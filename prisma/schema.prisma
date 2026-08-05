@@ -163,6 +163,18 @@ model CustomerTimestampSyncJob {
   @@index([started_at])
 }
 
+// Hitungan rate limit. Disimpan di database, bukan memori, karena backend
+// berjalan sebagai serverless function: tiap instance punya memori sendiri,
+// sehingga batas berbasis memori bisa dilipatgandakan penyerang dan hilang
+// setiap cold start.
+model RateLimitCounter {
+  key        String   @id
+  hits       Int      @default(0)
+  expires_at DateTime
+
+  @@index([expires_at])
+}
+
 // Job impor customer Runchise -> Customer aplikasi. Dieksekusi bertahap
 // (satu halaman API per request worker) agar muat di batas waktu serverless;
 // impor sinkron sebelumnya menahan request belasan menit sampai timeout.

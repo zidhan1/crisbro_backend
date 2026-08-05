@@ -4,8 +4,13 @@ require('dotenv').config({ quiet: true });
 // Core dependencies
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const crypto = require('crypto');
 const { openApiSpec, renderSwaggerHtml } = require('./docs/swagger');
+const {
+  globalLimiter,
+  pruneRateLimitCounters,
+} = require('./lib/rateLimit');
 
 // Prisma ORM (database client)
 const prisma = require('./lib/prisma');
@@ -55,8 +60,83 @@ const {
 
 // ===================== APP SETUP =====================
 const app = express();
-app.use(cors());
-app.use(express.json());
+
+// Vercel menaruh satu proxy di depan function. Tanpa ini req.ip berisi alamat
+// proxy, sehingga seluruh pengunjung terhitung sebagai satu IP dan rate limit
+// jadi salah sasaran. Angka 1 dipakai, bukan true, karena mempercayai seluruh
+// rantai X-Forwarded-For membuat IP gampang dipalsukan.
+app.set('trust proxy', 1);
+
+// Header keamanan dasar. Content-Security-Policy dimatikan karena halaman
+// Swagger yang dilayani backend memakai skrip inline; API JSON tidak
+// membutuhkannya.
+app.use(helmet({ contentSecurityPolicy: false }));
+
+// Hanya origin yang dikenal yang boleh memanggil API dari browser. Sebelumnya
+// cors() tanpa argumen mengizinkan semua origin.
+//
+// Permintaan tanpa header Origin sengaja diizinkan: itu bukan permintaan lintas
+// origin dari browser, melainkan cron Vercel, health check, dan curl.
+const allowedOrigins = new Set(
+  [
+    process.env.FRONTEND_URL,
+    ...String(process.env.CORS_ORIGINS || '')
+      .split(',')
+      .map((origin) => origin.trim()),
+  ]
+    .filter(Boolean)
+    .map((origin) => origin.replace(/\/$/, '')),
+);
+
+const isProduction = process.env.NODE_ENV === 'production';
+
+// Di luar produksi, seluruh port localhost diizinkan. Menuliskan daftar port
+// tetap terbukti rapuh: dev server proyek ini berjalan di 8080, sementara
+// tooling lain memakai 5173, 3000, atau port acak.
+//
+// Pengecekan memakai URL parser, bukan pencocokan awalan string, supaya
+// domain seperti http://localhost.situs-penyerang.com tidak ikut lolos.
+function isLocalhostOrigin(origin) {
+  try {
+    const { hostname } = new URL(origin);
+    return (
+      hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedOrigin(origin) {
+  if (allowedOrigins.has(origin.replace(/\/$/, ''))) return true;
+
+  return !isProduction && isLocalhostOrigin(origin);
+}
+
+// Origin asing ditolak di depan dengan 403 yang bersih. Melempar Error dari
+// dalam callback cors membuat Express membalas 500 beserta stack trace, yang
+// membingungkan sekaligus membocorkan detail internal.
+app.use((req, res, next) => {
+  const origin = req.get('origin');
+
+  if (origin && !isAllowedOrigin(origin)) {
+    return res
+      .status(403)
+      .json({ message: 'Origin tidak diizinkan oleh kebijakan CORS' });
+  }
+
+  return next();
+});
+
+// Sampai di sini origin sudah pasti dikenal, jadi aman untuk dipantulkan.
+app.use(cors({ origin: true, credentials: true }));
+
+// Batas ukuran body. Default express.json() adalah 100kb, ditegaskan di sini
+// supaya tidak berubah diam-diam mengikuti versi express.
+app.use(express.json({ limit: '100kb' }));
+
+// Batas laju umum untuk seluruh API.
+app.use(globalLimiter);
 app.get('/api/docs/openapi.json', (req, res) => res.json(openApiSpec));
 app.get(['/api/docs', '/api/docs/'], (req, res) => {
   res.set('Cache-Control', 'no-store').type('html').send(renderSwaggerHtml());
@@ -486,6 +566,34 @@ app.post(
   '/api/cron/runchise-sync/points',
   requireCronSecret,
   createCronSyncHandler('runchise-points', runCustomerPointsSyncJob),
+);
+
+// Pembersihan berkala. Sesi yang sudah kedaluwarsa dan hitungan rate limit yang
+// jendelanya lewat tidak pernah dihapus siapa pun, sehingga kedua tabel terus
+// menumpuk. Sesi kedaluwarsa memang sudah ditolak middleware auth, tetapi
+// menyimpan token yang tidak terpakai tanpa batas waktu tidak ada gunanya.
+async function runMaintenanceJob() {
+  const now = new Date();
+  const [expiredSessions, rateLimitRows] = await Promise.all([
+    prisma.session.deleteMany({ where: { expires_at: { lte: now } } }),
+    pruneRateLimitCounters(),
+  ]);
+
+  return {
+    expired_sessions_removed: expiredSessions.count,
+    rate_limit_rows_removed: Number(rateLimitRows),
+  };
+}
+
+app.get(
+  '/api/cron/maintenance',
+  requireCronSecret,
+  createCronSyncHandler('maintenance', runMaintenanceJob),
+);
+app.post(
+  '/api/cron/maintenance',
+  requireCronSecret,
+  createCronSyncHandler('maintenance', runMaintenanceJob),
 );
 
 // ===================== START SERVER =====================
