@@ -4,12 +4,24 @@ const jwt = require('jsonwebtoken');
 const prisma = require('../lib/prisma');
 const getJwtSecret = require('../lib/jwtSecret');
 const {
+  createAccountActivationToken,
   hashActivationToken,
 } = require('../services/accountActivationService');
+const { sendActivationEmail } = require('../services/emailService');
 const { getNextReward } = require('../services/nextRewardService');
 
 // Konfigurasi masa berlaku token login
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+
+// Satu pesan untuk semua kegagalan login, apa pun sebabnya.
+const INVALID_CREDENTIALS_MESSAGE =
+  'Nomor telepon atau password salah. Bila akun Anda belum pernah diaktivasi, hubungi Admin untuk menerima tautan aktivasi.';
+
+// Hash bcrypt dari string acak yang tidak pernah dipakai siapa pun. Gunanya
+// hanya agar bcrypt.compare tetap berjalan ketika nomor tidak ditemukan,
+// sehingga durasi respons login seragam.
+const DUMMY_PASSWORD_HASH =
+  '$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
 
 // Mengecek apakah user hasil sinkronisasi dan belum memiliki password
 function isSyncedPlaceholderUser(user) {
@@ -67,192 +79,92 @@ function serializeAuthUser(user) {
 }
 
 // ===================== REGISTER =====================
-// Menangani proses registrasi customer
+// Balasan seragam untuk /register. Wajib identik pada semua kondisi supaya
+// endpoint ini tidak bisa dipakai memetakan nomor mana yang terdaftar.
+const REGISTER_GENERIC_RESPONSE = {
+  message:
+    'Jika nomor tersebut terdaftar sebagai member, instruksi aktivasi akan dikirim ke email yang tercatat pada akun. Belum menerima instruksi? Hubungi Admin.',
+  whatsappUrl:
+    'https://wa.me/6282121214145?text=Halo%20Admin,%20saya%20ingin%20mengaktifkan%20akun%20member%20Crisbar.%20Mohon%20bantuannya.',
+};
+
+// Menangani permintaan aktivasi akun customer.
+//
+// PENTING - endpoint ini TIDAK BOLEH menyetel password.
+//
+// Versi sebelumnya mengaktifkan akun hanya bermodalkan nomor telepon: siapa pun
+// yang menebak nomor member bisa memasang password pilihannya dan mengambil
+// alih akun beserta poinnya, sekaligus menempelkan email sembarang yang membuka
+// jalan reset password. Nomor telepon bukan bukti kepemilikan, dan aplikasi
+// belum punya kanal OTP untuk membuktikannya.
+//
+// Satu-satunya jalur aktivasi yang sah adalah token aktivasi bertanda tangan
+// (accountActivationService): token acak 32 byte, disimpan sebagai hash SHA-256,
+// berlaku terbatas, dan dikirim ke email yang sudah tercatat pada akun. Fungsi
+// ini hanya memicu pengiriman token tersebut.
 async function register(req, res) {
   try {
-    const { email, password, name } = req.body;
+    const name = typeof req.body.name === 'string' ? req.body.name.trim() : '';
     const phone_number = normalizePhone(req.body.phone_number);
 
-    // Memvalidasi data registrasi
-    if (!phone_number || !phone_number.startsWith('8') || !password || !name) {
+    if (!phone_number || !phone_number.startsWith('8') || !name) {
       return res.status(400).json({
-        message: 'Nama, nomor telepon (diawali 8), dan password wajib diisi',
+        message: 'Nama dan nomor telepon (diawali 8) wajib diisi',
       });
     }
 
-    const phoneNumberVariants = phoneVariants(phone_number);
-
-    const registeredCustomer = await prisma.customer.findFirst({
+    const user = await prisma.user.findFirst({
       where: {
-        phone_number: { in: phoneNumberVariants },
+        phone_number: { in: phoneVariants(phone_number) },
       },
-      include: {
-        user: true,
-        customer_point: true,
-      },
-    });
-
-    // Jika customer belum ada di database lokal maka registrasi ditolak
-    if (!registeredCustomer) {
-      return res.status(404).json({
-        message:
-          'Nomor telepon belum terdaftar. Silakan hubungi Admin untuk melakukan pendaftaran.',
-        whatsappUrl:
-          'https://wa.me/6282121214145?text=Halo%20Admin,%20nomor%20telepon%20saya%20belum%20terdaftar.%20Mohon%20bantuannya.',
-      });
-    }
-
-    // Mencari user berdasarkan nomor telepon
-    const existingUserByPhone = await prisma.user.findFirst({
-      where: { phone_number: { in: phoneNumberVariants } },
-      include: {
-        customer: {
-          include: { customer_point: true },
-        },
+      select: {
+        id: true,
+        email: true,
+        password_hash: true,
+        activation_status: true,
       },
     });
 
-    // Mencari user berdasarkan ID Runchise
-    const existingUserByRunchiseId = registeredCustomer.runchise_id
-      ? await prisma.user.findFirst({
-          where: {
-            customer: {
-              runchise_id: registeredCustomer.runchise_id,
-            },
-          },
-          include: {
-            customer: {
-              include: { customer_point: true },
-            },
-          },
-        })
-      : null;
-
-    const existingUser = existingUserByPhone || existingUserByRunchiseId;
-
-    if (
-      registeredCustomer.user &&
-      existingUser &&
-      registeredCustomer.user.id !== existingUser.id
-    ) {
-      return res.status(409).json({
-        message:
-          'Nomor telepon sudah terhubung ke akun lain. Silakan hubungi Admin.',
-      });
-    }
-
-    // Mengecek apakah akun sudah pernah melakukan registrasi
-    const registeredExistingUser = [
-      existingUserByPhone,
-      existingUserByRunchiseId,
-      registeredCustomer.user,
-    ].find((user) => user && !isSyncedPlaceholderUser(user));
-
-    if (registeredExistingUser) {
-      return res.status(400).json({ message: 'Nomor telepon sudah terdaftar' });
-    }
-
-    const userToActivate = existingUser || registeredCustomer.user;
-
-    if (!userToActivate) {
-      return res.status(404).json({
-        message:
-          'Nomor telepon belum terdaftar. Silakan hubungi Admin untuk melakukan pendaftaran.',
-        whatsappUrl:
-          'https://wa.me/6282121214145?text=Halo%20Admin,%20nomor%20telepon%20saya%20belum%20terdaftar.%20Mohon%20bantuannya.',
-      });
-    }
-
-    const sourceCustomer = userToActivate.customer || registeredCustomer;
-
-    // Mengenkripsi password sebelum disimpan
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    // Menentukan brand customer
-    const brandId =
-      sourceCustomer.brand_id ?? userToActivate.customer?.brand_id ?? 1;
-
-    // Membuat data brand jika belum tersedia
-    await prisma.brand.upsert({
-      where: { id: brandId },
-      update: {},
-      create: { id: brandId, name: `Brand ${brandId}` },
-    });
-
-    // Aktifkan user placeholder yang dibuat dari admin atau sync Runchise.
-    const user = await prisma.$transaction(async (tx) => {
-      const updatedUser = await tx.user.update({
-        where: { id: userToActivate.id },
-        data: {
-          email,
-          phone_number,
-          password_hash: hashedPassword,
-          activation_status: 'active',
-          activated_at: new Date(),
-          customer: userToActivate.customer
-            ? {
-                update: {
-                  name,
-                  phone_number,
-                  status: 'active',
-                },
-              }
-            : {
-                create: {
-                  runchise_id: sourceCustomer.runchise_id,
-                  name,
-                  phone_number,
-                  phone_number_country_code:
-                    sourceCustomer.phone_number_country_code,
-                  address: sourceCustomer.address,
-                  province: sourceCustomer.province,
-                  city: sourceCustomer.city,
-                  country: sourceCustomer.country,
-                  postal_code: sourceCustomer.postal_code,
-                  dob: sourceCustomer.dob,
-                  gender: sourceCustomer.gender,
-                  status: 'active',
-                  balance: sourceCustomer.balance,
-                  brand_id: brandId,
-                  owner_location_id: sourceCustomer.owner_location_id,
-                },
-              },
-        },
-        include: {
-          customer: {
-            include: { customer_point: true },
-          },
+    // Hanya akun yang memang belum pernah aktivasi dan punya email tercatat
+    // yang bisa dikirimi tautan. Selain itu tidak ada tindakan apa pun, tetapi
+    // balasannya tetap sama supaya keberadaan nomor tidak terungkap.
+    if (user && isSyncedPlaceholderUser(user) && user.email) {
+      const now = new Date();
+      const activeToken = await prisma.accountActivationToken.findFirst({
+        where: {
+          user_id: user.id,
+          purpose: 'activation',
+          used_at: null,
+          expires_at: { gt: now },
         },
       });
 
-      if (!updatedUser.customer.customer_point) {
-        await tx.customerPoint.create({
-          data: {
-            customer_id: updatedUser.customer.id,
-            total_point: sourceCustomer.customer_point?.total_point ?? 0,
-            available_point:
-              sourceCustomer.customer_point?.available_point ?? 0,
-            next_reward_threshold: 2000,
-          },
-        });
+      // Token yang masih berlaku sengaja tidak diganti agar endpoint ini tidak
+      // bisa dipakai membanjiri email seseorang dengan permintaan berulang.
+      if (!activeToken) {
+        const { activationUrl, expiresAt } = await createAccountActivationToken(
+          user.id,
+          'activation',
+        );
 
-        return tx.user.findUnique({
-          where: { id: updatedUser.id },
-          include: {
-            customer: {
-              include: { customer_point: true },
-            },
-          },
+        await sendActivationEmail({
+          to: user.email,
+          customerName: name,
+          phoneNumber: phone_number,
+          activationUrl,
+          expiresAt,
+        }).catch((error) => {
+          console.error('Gagal mengirim email aktivasi:', error.message);
         });
       }
+    }
 
-      return updatedUser;
-    });
-
-    return res.status(200).json(serializeAuthUser(user));
+    return res.status(202).json(REGISTER_GENERIC_RESPONSE);
   } catch (error) {
-    // Menangani error yang tidak terduga
-    return res.status(500).json({ error: error.message });
+    console.error('Permintaan aktivasi gagal:', error);
+    // Pesan tetap seragam agar kegagalan internal pun tidak membocorkan status
+    // nomor yang dikirim.
+    return res.status(202).json(REGISTER_GENERIC_RESPONSE);
   }
 }
 
@@ -275,37 +187,49 @@ async function login(req, res) {
       });
     }
 
-    // Mencari user di database lokal
-    let user = await prisma.user.findUnique({
+    // Tahap 1: ambil kolom seadanya untuk verifikasi kredensial.
+    //
+    // Relasi customer sengaja BELUM dimuat di sini. Memuatnya lebih dulu membuat
+    // permintaan dengan nomor yang terdaftar berjalan ~145 ms lebih lama
+    // daripada nomor yang tidak ada, dan selisih itu konsisten sehingga tetap
+    // bisa dipakai memetakan nomor walau pesan balasannya sudah diseragamkan.
+    const credentials = await prisma.user.findUnique({
       where: { phone_number },
+      select: {
+        id: true,
+        role: true,
+        password_hash: true,
+        activation_status: true,
+      },
+    });
+
+    // Nomor tidak dikenal, akun belum aktivasi, dan password salah dibalas
+    // identik. Versi sebelumnya membedakannya (444 / 409 / 401), sehingga siapa
+    // pun bisa menyapu rentang nomor dan memetakan mana yang terdaftar serta
+    // mana yang belum aktivasi.
+    //
+    // bcrypt.compare tetap dijalankan walau user tidak ada, memakai hash boneka,
+    // agar beban kerjanya sama pada semua cabang penolakan.
+    const isActivated =
+      Boolean(credentials) && !isSyncedPlaceholderUser(credentials);
+    const validPassword = await bcrypt.compare(
+      password,
+      isActivated ? credentials.password_hash : DUMMY_PASSWORD_HASH,
+    );
+
+    if (!isActivated || !validPassword) {
+      return res.status(401).json({ message: INVALID_CREDENTIALS_MESSAGE });
+    }
+
+    // Tahap 2: kredensial sudah terbukti, barulah data profil dimuat.
+    const user = await prisma.user.findUnique({
+      where: { id: credentials.id },
       include: {
         customer: {
           include: { customer_point: true },
         },
       },
     });
-
-    // Jika user belum ada di database lokal
-    if (!user) {
-      return res.status(444).json({
-        message:
-          'Nomor terdaftar di pusat, silahkan lakukan Registrasi untuk membuat password akun aplikasi ini.',
-      });
-    }
-
-    // Jika akun hanya hasil sinkronisasi dan belum memiliki password
-    if (isSyncedPlaceholderUser(user)) {
-      return res.status(409).json({
-        message:
-          'Akun belum aktif. Silakan hubungi Admin untuk aktivasi akun.',
-      });
-    }
-
-    // Memverifikasi password
-    const validPassword = await bcrypt.compare(password, user.password_hash);
-    if (!validPassword) {
-      return res.status(401).json({ message: 'Password salah' });
-    }
 
     // Membuat JWT Token untuk autentikasi
     const token = jwt.sign({ id: user.id, role: user.role }, getJwtSecret(), {

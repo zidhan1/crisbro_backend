@@ -41,10 +41,13 @@ paths:
   /api/register:
     post:
       tags: [Auth]
-      summary: Register customer account
-      description: >
-        Registrasi hanya berhasil jika nomor telepon sudah ada pada customer
-        lokal hasil sinkronisasi Runchise.
+      summary: Request an account activation link
+      description: >-
+        Meminta tautan aktivasi dikirim ke email yang tercatat pada akun.
+        Endpoint ini TIDAK menyetel password dan tidak mengaktifkan akun:
+        nomor telepon bukan bukti kepemilikan. Password hanya dapat dibuat lewat
+        POST /api/activate memakai token dari tautan tersebut.
+        Balasannya selalu sama untuk nomor yang terdaftar maupun tidak.
       requestBody:
         required: true
         content:
@@ -52,20 +55,16 @@ paths:
             schema:
               $ref: "#/components/schemas/RegisterRequest"
       responses:
-        "201":
-          description: Registered
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "404":
-          description: Phone number is not available from synced Runchise data
+        "202":
+          description: >-
+            Permintaan diterima. Balasan identik pada semua kondisi dan tidak
+            menyatakan apakah nomor tersebut terdaftar.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
   /api/login:
     post:
@@ -85,15 +84,11 @@ paths:
               schema:
                 $ref: "#/components/schemas/LoginResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
-        "409":
-          description: Account exists from sync but has not registered a password
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "444":
-          description: Number exists centrally and must register first
+          description: >-
+            Kredensial ditolak. Dipakai untuk semua sebab (nomor tidak
+            terdaftar, akun belum aktivasi, password salah) dengan pesan yang
+            identik, supaya endpoint ini tidak bisa dipakai memetakan nomor yang
+            terdaftar.
           content:
             application/json:
               schema:
@@ -862,7 +857,7 @@ components:
 
     RegisterRequest:
       type: object
-      required: [name, phone_number, password]
+      required: [name, phone_number]
       properties:
         name:
           type: string

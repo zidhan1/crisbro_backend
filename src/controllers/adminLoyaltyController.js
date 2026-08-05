@@ -793,12 +793,36 @@ async function listAdminCustomers(req, res) {
       return badRequest(res, 'from tidak boleh melebihi to');
     }
 
+    // Tautan aktivasi akun hanya bisa dikirim lewat email, sehingga customer
+    // tanpa email tidak akan pernah bisa mengaktifkan akunnya. Filter ini
+    // dipakai petugas outlet untuk memunculkan daftar siapa saja yang emailnya
+    // masih perlu dikumpulkan.
+    const emailStatus =
+      parseOptionalString(req.query.email_status, 'email_status', 20) ?? 'all';
+    if (!['all', 'missing', 'present'].includes(emailStatus)) {
+      return badRequest(
+        res,
+        'email_status hanya boleh all, missing, atau present',
+      );
+    }
+
     const page = parsePositiveInt(req.query.page ?? 1, 'page');
     const limit = Math.min(
       parsePositiveInt(req.query.limit ?? 20, 'limit'),
       100,
     );
     const filters = [];
+    // String kosong diperlakukan sama dengan NULL: keduanya berarti tidak ada
+    // alamat yang bisa dikirimi tautan aktivasi.
+    if (emailStatus === 'missing') {
+      filters.push(
+        Prisma.sql`(customer_user."email" IS NULL OR customer_user."email" = '')`,
+      );
+    } else if (emailStatus === 'present') {
+      filters.push(
+        Prisma.sql`(customer_user."email" IS NOT NULL AND customer_user."email" <> '')`,
+      );
+    }
     if (search) {
       const pattern = `%${search}%`;
       filters.push(Prisma.sql`(
