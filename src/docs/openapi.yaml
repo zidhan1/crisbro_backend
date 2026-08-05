@@ -443,6 +443,17 @@ paths:
           schema:
             type: integer
             default: 20
+        - in: query
+          name: email_status
+          description: >-
+            Menyaring berdasarkan ketersediaan email. Tautan aktivasi hanya bisa
+            dikirim lewat email, sehingga `missing` dipakai petugas outlet untuk
+            melihat customer mana yang emailnya masih perlu dikumpulkan. Nilai
+            kosong pada kolom email diperlakukan sama dengan NULL.
+          schema:
+            type: string
+            enum: [all, missing, present]
+            default: all
       responses:
         "200":
           description: Paged customer list
