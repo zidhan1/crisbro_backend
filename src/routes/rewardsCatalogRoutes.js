@@ -28,12 +28,12 @@ router.get('/:id', getOne);
 // ===================== ADMIN / STAFF ONLY =====================
 
 // Tambah reward baru (hanya admin/staff)
-router.post('/', auth, requireRole('admin', 'staff'), create);
+router.post('/', auth, requireRole('admin'), create);
 
 // Update reward (hanya admin/staff)
-router.put('/:id', auth, requireRole('admin', 'staff'), update);
+router.put('/:id', auth, requireRole('admin'), update);
 
 // Hapus reward (hanya admin/staff)
-router.delete('/:id', auth, requireRole('admin', 'staff'), remove);
+router.delete('/:id', auth, requireRole('admin'), remove);
 
 module.exports = router;

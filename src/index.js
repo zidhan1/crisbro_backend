@@ -30,6 +30,7 @@ const redeemMenuRoutes = require('./routes/redeemMenuRoutes');
 const promoRoutes = require('./routes/promoRoutes');
 const adminLoyaltyRoutes = require('./routes/adminLoyaltyRoutes');
 const pointRoutes = require('./routes/pointRoutes');
+const { respondWithServerError } = require('./lib/serverError');
 
 // Sync services (ETL dari Runchise → DB lokal)
 const {
@@ -168,7 +169,7 @@ app.get('/rewards', async (req, res) => {
     });
     res.json(rewards);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'index');
   }
 });
 
@@ -185,7 +186,7 @@ app.get('/api/my-points', auth, async (req, res) => {
       return res.status(404).json({ message: 'Customer tidak ditemukan' });
     res.json(customer.customer_point ?? { available_point: 0, total_point: 0 });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'index');
   }
 });
 
@@ -219,10 +220,7 @@ async function handleSyncCustomers(req, res) {
     });
   } catch (error) {
     console.error('Gagal membuat job impor customer Runchise:', error);
-    res.status(500).json({
-      message: 'Gagal memulai sinkronisasi customer Runchise',
-      error: error.message,
-    });
+    respondWithServerError(res, error, 'Gagal memulai sinkronisasi customer Runchise');
   }
 }
 
@@ -230,10 +228,7 @@ async function handleCustomerSyncStatus(req, res) {
   try {
     res.json({ job: await getCustomerImportSyncJob() });
   } catch (error) {
-    res.status(500).json({
-      message: 'Gagal membaca status sinkronisasi customer',
-      error: error.message,
-    });
+    respondWithServerError(res, error, 'Gagal membaca status sinkronisasi customer');
   }
 }
 
@@ -242,10 +237,7 @@ async function handleProcessCustomerSync(req, res) {
     res.json(await processCustomerImportSyncJob());
   } catch (error) {
     console.error('Worker impor customer Runchise gagal:', error);
-    res.status(500).json({
-      message: 'Worker sinkronisasi customer gagal',
-      error: error.message,
-    });
+    respondWithServerError(res, error, 'Worker sinkronisasi customer gagal');
   }
 }
 
@@ -260,10 +252,7 @@ async function handleStartCustomerTimestampSync(req, res) {
     });
   } catch (error) {
     console.error('Gagal membuat job timestamp customer Runchise:', error);
-    res.status(500).json({
-      message: 'Gagal memulai sinkronisasi tanggal customer Runchise',
-      error: error.message,
-    });
+    respondWithServerError(res, error, 'Gagal memulai sinkronisasi tanggal customer Runchise');
   }
 }
 
@@ -271,12 +260,7 @@ async function handleCustomerTimestampSyncStatus(req, res) {
   try {
     res.json({ job: await getCustomerTimestampSyncJob() });
   } catch (error) {
-    res
-      .status(500)
-      .json({
-        message: 'Gagal membaca status sinkronisasi',
-        error: error.message,
-      });
+    respondWithServerError(res, error, 'Gagal membaca status sinkronisasi');
   }
 }
 
@@ -285,10 +269,7 @@ async function handleProcessCustomerTimestampSync(req, res) {
     res.json(await processCustomerTimestampSyncJob());
   } catch (error) {
     console.error('Worker timestamp customer Runchise gagal:', error);
-    res.status(500).json({
-      message: 'Worker sinkronisasi tanggal customer gagal',
-      error: error.message,
-    });
+    respondWithServerError(res, error, 'Worker sinkronisasi tanggal customer gagal');
   }
 }
 
@@ -298,7 +279,7 @@ async function handleSyncProducts(req, res) {
     const result = await syncProducts();
     res.json({ message: 'Sync products selesai', ...result });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'index');
   }
 }
 
@@ -321,7 +302,7 @@ async function handleSyncPoints(req, res) {
 
     res.json({ message: 'Sync points selesai', ...result });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'index');
   }
 }
 
@@ -331,7 +312,7 @@ async function handleSyncBrands(req, res) {
     const result = await syncBrands();
     res.json({ message: 'Sync brands selesai', ...result });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'index');
   }
 }
 
@@ -341,7 +322,7 @@ async function handleSyncLocations(req, res) {
     const result = await syncLocations();
     res.json({ message: 'Sync locations selesai', ...result });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'index');
   }
 }
 
@@ -350,7 +331,7 @@ async function handleSyncPromos(req, res) {
     const result = await syncPromos();
     res.json({ message: 'Sync promos selesai', ...result });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'index');
   }
 }
 
@@ -369,42 +350,50 @@ async function handleSyncSalesTransactions(req, res) {
     });
     res.json({ message: 'Sync sales transactions selesai', ...result });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'index');
   }
 }
 
 // ===================== ADMIN MIDDLEWARE =====================
 
 // Middleware gabungan: login + role check
-const adminOnly = [auth, requireRole('admin', 'staff')];
+// Role yang benar-benar ada di database hanya customer, admin, dan marketing.
+// 'staff' tidak pernah dibuat, jadi menyebutnya hanya menyesatkan pembaca.
+const adminOnly = [auth, requireRole('admin')];
+
+// Sync data customer dibuka juga untuk marketing, selaras dengan hak kelola
+// customer penuh yang sudah mereka miliki di adminLoyaltyRoutes (buat, ubah,
+// hapus, kirim aktivasi, retry sync Runchise). Sync katalog dan master data
+// lain tetap admin saja karena di luar ranah kerja marketing.
+const adminOrMarketing = [auth, requireRole('admin', 'marketing')];
 
 // ===================== ADMIN SYNC ROUTES =====================
 
 // Endpoint sync (tanpa prefix /api)
-app.post('/admin/sync/customers', ...adminOnly, handleSyncCustomers);
+app.post('/admin/sync/customers', ...adminOrMarketing, handleSyncCustomers);
 app.get(
   '/admin/sync/customers/status',
-  ...adminOnly,
+  ...adminOrMarketing,
   handleCustomerSyncStatus,
 );
 app.post(
   '/admin/sync/customers/process',
-  ...adminOnly,
+  ...adminOrMarketing,
   handleProcessCustomerSync,
 );
 app.post(
   '/admin/sync/customer-timestamps',
-  ...adminOnly,
+  ...adminOrMarketing,
   handleStartCustomerTimestampSync,
 );
 app.get(
   '/admin/sync/customer-timestamps/status',
-  ...adminOnly,
+  ...adminOrMarketing,
   handleCustomerTimestampSyncStatus,
 );
 app.post(
   '/admin/sync/customer-timestamps/process',
-  ...adminOnly,
+  ...adminOrMarketing,
   handleProcessCustomerTimestampSync,
 );
 app.post('/admin/sync/products', ...adminOnly, handleSyncProducts);
@@ -419,30 +408,30 @@ app.post(
 );
 
 // Endpoint sync (dengan prefix /api)
-app.post('/api/admin/sync/customers', ...adminOnly, handleSyncCustomers);
+app.post('/api/admin/sync/customers', ...adminOrMarketing, handleSyncCustomers);
 app.get(
   '/api/admin/sync/customers/status',
-  ...adminOnly,
+  ...adminOrMarketing,
   handleCustomerSyncStatus,
 );
 app.post(
   '/api/admin/sync/customers/process',
-  ...adminOnly,
+  ...adminOrMarketing,
   handleProcessCustomerSync,
 );
 app.post(
   '/api/admin/sync/customer-timestamps',
-  ...adminOnly,
+  ...adminOrMarketing,
   handleStartCustomerTimestampSync,
 );
 app.get(
   '/api/admin/sync/customer-timestamps/status',
-  ...adminOnly,
+  ...adminOrMarketing,
   handleCustomerTimestampSyncStatus,
 );
 app.post(
   '/api/admin/sync/customer-timestamps/process',
-  ...adminOnly,
+  ...adminOrMarketing,
   handleProcessCustomerTimestampSync,
 );
 app.post('/api/admin/sync/products', ...adminOnly, handleSyncProducts);
@@ -513,12 +502,10 @@ function createCronSyncHandler(jobName, job) {
         result,
       });
     } catch (error) {
-      console.error(`[cron:${jobName}] failed:`, error);
-      res.status(500).json({
-        message: `Cron sync ${jobName} gagal`,
-        job: jobName,
-        error: error.message,
-      });
+      // Endpoint cron hanya dipanggil penjadwal, tetapi detail error tetap
+      // ditahan agar formatnya seragam dengan endpoint lain: penyebab aslinya
+      // ada di log server, ditandai error_id yang sama.
+      respondWithServerError(res, error, `cron:${jobName}`);
     }
   };
 }
