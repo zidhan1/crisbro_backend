@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
 const { createResponseCache } = require('../lib/responseCache');
+const { respondWithServerError } = require('../lib/serverError');
 
 const cache = createResponseCache(
   Number(process.env.PROMO_RESPONSE_CACHE_TTL_MS || 5 * 60 * 1000),
@@ -95,7 +96,7 @@ router.get('/', async (req, res) => {
     cache.set(cacheKey, result);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'promoRoutes');
   }
 });
 

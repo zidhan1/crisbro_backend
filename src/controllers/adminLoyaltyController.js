@@ -13,6 +13,7 @@ const {
   syncCustomerToRunchise,
 } = require('../services/runchiseCustomerSyncService');
 const { recordAdminActivity } = require('../services/adminActivityLogService');
+const { respondWithServerError } = require('../lib/serverError');
 
 const DEFAULT_PB1_RATE = 0.1;
 const DEFAULT_REWARD_THRESHOLD = 2000;
@@ -496,7 +497,7 @@ function handleError(res, error) {
     return res.status(404).json({ message: 'Data tidak ditemukan' });
   }
 
-  return res.status(500).json({ error: error.message });
+  return respondWithServerError(res, error, 'adminLoyaltyController');
 }
 
 async function listAdminUsers(req, res) {

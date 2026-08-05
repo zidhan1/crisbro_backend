@@ -1,4 +1,5 @@
 const prisma = require('../lib/prisma');
+const { respondWithServerError } = require('../lib/serverError');
 
 // Mengambil data poin customer yang sedang login
 async function getCustomerPoints(req, res) {
@@ -28,9 +29,7 @@ async function getCustomerPoints(req, res) {
     });
   } catch (error) {
     // Menangani error saat mengambil data
-    res.status(500).json({
-      error: error.message,
-    });
+    respondWithServerError(res, error, 'customerController');
   }
 }
 

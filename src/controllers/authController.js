@@ -9,6 +9,7 @@ const {
 } = require('../services/accountActivationService');
 const { sendActivationEmail } = require('../services/emailService');
 const { getNextReward } = require('../services/nextRewardService');
+const { respondWithServerError } = require('../lib/serverError');
 
 // Konfigurasi masa berlaku token login
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
@@ -264,7 +265,7 @@ async function login(req, res) {
     }
 
     // Menangani error lainnya
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'authController');
   }
 }
 
@@ -310,7 +311,7 @@ async function validateActivationToken(req, res) {
       expires_at: activationToken.expires_at,
     });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return respondWithServerError(res, error, 'authController');
   }
 }
 
@@ -370,7 +371,7 @@ async function activateAccount(req, res) {
       message: 'Akun berhasil diaktifkan. Silakan login.',
     });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return respondWithServerError(res, error, 'authController');
   }
 }
 
@@ -413,7 +414,7 @@ async function profile(req, res) {
     });
   } catch (error) {
     // Menangani error
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'authController');
   }
 }
 
@@ -483,7 +484,7 @@ async function changePassword(req, res) {
       message: 'Password berhasil diganti. Silakan login ulang.',
     });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return respondWithServerError(res, error, 'authController');
   }
 }
 

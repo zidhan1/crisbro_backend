@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
+const { respondWithServerError } = require('../lib/serverError');
 
 function decimalToNumber(value) {
   if (value === null || value === undefined) return null;
@@ -50,7 +51,7 @@ router.get('/', async (req, res) => {
 
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'locationRoutes');
   }
 });
 

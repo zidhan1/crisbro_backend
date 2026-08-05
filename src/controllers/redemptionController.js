@@ -1,4 +1,5 @@
 const prisma = require('../lib/prisma');
+const { respondWithServerError } = require('../lib/serverError');
 
 const RUNCHISE_POS_REDEEM_MESSAGE =
   'Penukaran reward dilakukan melalui kasir/POS Runchise. Aplikasi Crisbro hanya menampilkan estimasi penukaran.';
@@ -39,7 +40,7 @@ async function getMyRedemptions(req, res) {
     res.json(redemptions);
   } catch (error) {
     // Menangani error saat mengambil data
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'redemptionController');
   }
 }
 

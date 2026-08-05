@@ -1,5 +1,6 @@
 const express = require('express');
 const prisma = require('../lib/prisma');
+const { respondWithServerError } = require('../lib/serverError');
 
 const router = express.Router();
 
@@ -61,7 +62,7 @@ router.get('/', async (req, res) => {
 
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'redeemMenuRoutes');
   }
 });
 

@@ -1,4 +1,5 @@
 const prisma = require('../lib/prisma');
+const { respondWithServerError } = require('../lib/serverError');
 
 // Memvalidasi agar nilai berupa bilangan bulat positif
 function parsePositiveInt(value, fieldName) {
@@ -58,7 +59,7 @@ async function getAll(req, res) {
     }
 
     // Menangani error lainnya
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'rewardsCatalogController');
   }
 }
 
@@ -89,7 +90,7 @@ async function getOne(req, res) {
       return validationError(res, error);
     }
 
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'rewardsCatalogController');
   }
 }
 
@@ -147,7 +148,7 @@ async function create(req, res) {
     if (error.code === 'P2003') {
       return res.status(400).json({ message: 'brand_id tidak valid' });
     }
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'rewardsCatalogController');
   }
 }
 
@@ -204,7 +205,7 @@ async function update(req, res) {
     if (error.code === 'P2003') {
       return res.status(400).json({ message: 'brand_id tidak valid' });
     }
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'rewardsCatalogController');
   }
 }
 
@@ -240,7 +241,7 @@ async function remove(req, res) {
           'Reward tidak bisa dihapus karena masih ada data redemption terkait',
       });
     }
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'rewardsCatalogController');
   }
 }
 

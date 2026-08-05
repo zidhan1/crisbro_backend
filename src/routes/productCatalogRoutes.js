@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
 const { createResponseCache } = require('../lib/responseCache');
+const { respondWithServerError } = require('../lib/serverError');
 
 const {
   CRISBAR_SUB_BRAND_NAME,
@@ -70,7 +71,7 @@ router.get('/', async (req, res) => {
     cache.set(cacheKey, result);
     res.json(result);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'productCatalogRoutes');
   }
 });
 
@@ -108,7 +109,7 @@ router.get('/categories', async (req, res) => {
     cache.set(cacheKey, categories);
     res.json(categories);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    respondWithServerError(res, error, 'productCatalogRoutes');
   }
 });
 

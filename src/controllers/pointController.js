@@ -1,4 +1,5 @@
 const prisma = require('../lib/prisma');
+const { respondWithServerError } = require('../lib/serverError');
 
 const HISTORY_LIMIT = 50;
 
@@ -82,7 +83,7 @@ async function getMyPointHistory(req, res) {
       })),
     });
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return respondWithServerError(res, error, 'pointController');
   }
 }
 
