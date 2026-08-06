@@ -23,6 +23,13 @@ const DEFAULT_PB1_RATE = 0.1;
 const DEFAULT_REWARD_THRESHOLD = 2000;
 const DEFAULT_RUNCHISE_PARENT_BRAND_ID = 750;
 const DEFAULT_RUNCHISE_REDEEM_SUB_BRAND_ID = 1041;
+const ADMIN_USER_ROLES = new Set(['admin', 'marketing']);
+const ADMIN_USER_UPDATE_FIELDS = new Set([
+  'email',
+  'phone_number',
+  'password',
+  'role',
+]);
 
 function getPositiveEnvInt(name, fallback) {
   const value = Number(process.env[name] ?? fallback);
@@ -375,9 +382,8 @@ function normalizePhone(raw) {
 
 function parseAdminUserRole(value) {
   const role = parseRequiredString(value ?? 'marketing', 'role', 30);
-  const allowedRoles = new Set(['admin', 'marketing']);
 
-  if (!allowedRoles.has(role)) {
+  if (!ADMIN_USER_ROLES.has(role)) {
     throw new Error('role harus admin atau marketing');
   }
 
@@ -670,6 +676,43 @@ async function createAdminUser(req, res) {
 async function updateAdminUser(req, res) {
   try {
     const id = parsePositiveInt(req.params.id, 'id');
+    const unexpectedFields = Object.keys(req.body).filter(
+      (field) => !ADMIN_USER_UPDATE_FIELDS.has(field),
+    );
+    if (unexpectedFields.length > 0) {
+      return badRequest(
+        res,
+        `Field tidak diizinkan: ${unexpectedFields.join(', ')}`,
+      );
+    }
+
+    // Guard target dijalankan sebelum parsing password/bcrypt dan sebelum
+    // mutasi apa pun. Endpoint staff tidak boleh menjadi jalur modifikasi atau
+    // promosi akun customer walaupun caller mengetahui ID user tersebut.
+    const before = await prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        email: true,
+        phone_number: true,
+        role: true,
+        created_at: true,
+        updated_at: true,
+        customer: { select: { id: true } },
+      },
+    });
+
+    if (!before) {
+      return res.status(404).json({ message: 'User tidak ditemukan' });
+    }
+
+    if (!ADMIN_USER_ROLES.has(before.role) || before.customer) {
+      return badRequest(
+        res,
+        'Hanya akun staff admin atau marketing yang dapat diubah dari menu ini',
+      );
+    }
+
     const data = {};
 
     if (req.body.email !== undefined)
@@ -695,39 +738,67 @@ async function updateAdminUser(req, res) {
       return badRequest(res, 'Admin tidak dapat mengubah role akun sendiri');
     }
 
-    const before = await prisma.user.findUnique({
-      where: { id },
-      select: {
-        id: true,
-        email: true,
-        phone_number: true,
-        role: true,
-        created_at: true,
-        updated_at: true,
-      },
-    });
+    const mustRevokeSessions =
+      data.password_hash !== undefined ||
+      (data.role !== undefined && data.role !== before.role);
+    const transactionResult = await prisma.$transaction(async (tx) => {
+      // Guard diulang dalam WHERE mutasi untuk mencegah race antara pembacaan
+      // `before` dan update. updateMany memberi count tanpa melempar P2025.
+      const updateResult = await tx.user.updateMany({
+        where: {
+          id,
+          role: { in: [...ADMIN_USER_ROLES] },
+          customer: { is: null },
+        },
+        data,
+      });
 
-    const user = await prisma.user.update({
-      where: { id },
-      data,
-      select: {
-        id: true,
-        email: true,
-        phone_number: true,
-        role: true,
-        created_at: true,
-        updated_at: true,
-      },
+      if (updateResult.count !== 1) return { conflict: true, user: null };
+
+      if (mustRevokeSessions) {
+        await tx.session.deleteMany({ where: { user_id: id } });
+      }
+
+      const user = await tx.user.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          email: true,
+          phone_number: true,
+          role: true,
+          created_at: true,
+          updated_at: true,
+        },
+      });
+
+      return { conflict: false, user };
     });
+    const user = transactionResult.user;
+
+    if (transactionResult.conflict || !user) {
+      return res.status(409).json({
+        message: 'Target berubah saat diproses; silakan muat ulang dan coba lagi',
+      });
+    }
 
     await recordAdminActivity({
       req,
       action: 'update_admin_user',
       entityType: 'user',
       entityId: user.id,
-      before,
+      before: {
+        id: before.id,
+        email: before.email,
+        phone_number: before.phone_number,
+        role: before.role,
+        created_at: before.created_at,
+        updated_at: before.updated_at,
+      },
       after: user,
-      metadata: { changed_fields: Object.keys(data) },
+      metadata: {
+        changed_fields: Object.keys(data),
+        sessions_revoked: mustRevokeSessions,
+      },
     });
 
     res.json(user);
