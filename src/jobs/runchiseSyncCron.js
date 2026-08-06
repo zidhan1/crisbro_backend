@@ -12,6 +12,10 @@ const {
   createCustomerImportSyncJob,
   processCustomerImportSyncJob,
 } = require('../services/customerImportSyncService');
+const {
+  RUNCHISE_CRON_LOCK_IDS,
+  withDistributedCronLock,
+} = require('../lib/distributedCronLock');
 
 // C-1: Memecah master sync menjadi job terpisah dengan cron, mutex, checkpoint, dan worker berbasis cursor agar setiap tahap berjalan independen serta mencegah timeout Vercel menghentikan seluruh proses sinkronisasi.
 const DEFAULT_LOCATIONS_CRON = '0 12 * * *';
@@ -23,14 +27,24 @@ const DEFAULT_PROMOS_CRON = '25 12 * * *';
 const DEFAULT_POINTS_CRON = '30 12 * * *';
 
 let started = false;
-let locationsRunning = false;
-let brandsRunning = false;
-let productsRunning = false;
-let customersRunning = false; // syncCustomers penuh: dipakai CLI/manual saja, tidak dijadwalkan.
-let customerImportRunning = false; // worker berbasis cursor: ini yang dijadwalkan.
-let salesRunning = false;
-let promosRunning = false;
-let pointsRunning = false;
+
+async function runLockedJob(name, lockId, job) {
+  const result = await withDistributedCronLock({
+    jobName: `runchise-sync:${name}`,
+    lockId,
+    run: async () => {
+      console.log(`[runchise-sync:${name}] started`);
+      const jobResult = await job();
+      console.log(`[runchise-sync:${name}] finished`, jobResult);
+      return jobResult;
+    },
+  });
+
+  if (result?.skipped) {
+    console.log(`[runchise-sync:${name}] skipped`, result);
+  }
+  return result;
+}
 
 function getSyncConfig() {
   const rawLocationId = Number(process.env.RUNCHISE_SYNC_LOCATION_ID);
@@ -46,78 +60,22 @@ function getSyncConfig() {
 }
 
 async function runSyncLocationsJob() {
-  if (locationsRunning) {
-    console.log(
-      '[runchise-sync:locations] skipped because previous run is still active',
-    );
-    return { skipped: true };
-  }
-
-  locationsRunning = true;
   const { brandId } = getSyncConfig();
-
-  try {
-    console.log('[runchise-sync:locations] started');
-    const result = await syncLocations(brandId);
-    console.log('[runchise-sync:locations] finished', result);
-    return result;
-  } finally {
-    locationsRunning = false;
-  }
+  return runLockedJob('locations', RUNCHISE_CRON_LOCK_IDS.locations, () =>
+    syncLocations(brandId),
+  );
 }
 
 async function runSyncBrandsJob() {
-  if (brandsRunning) {
-    console.log(
-      '[runchise-sync:brands] skipped because previous run is still active',
-    );
-    return { skipped: true };
-  }
-
-  brandsRunning = true;
-
-  try {
-    console.log('[runchise-sync:brands] started');
-    const result = await syncBrands();
-    console.log('[runchise-sync:brands] finished', result);
-    return result;
-  } finally {
-    brandsRunning = false;
-  }
+  return runLockedJob('brands', RUNCHISE_CRON_LOCK_IDS.brands, syncBrands);
 }
 
 async function runSyncProductsJob() {
-  if (productsRunning) {
-    console.log(
-      '[runchise-sync:products] skipped because previous run is still active',
-    );
-    return { skipped: true };
-  }
-
-  productsRunning = true;
-
-  try {
-    console.log('[runchise-sync:products] started');
-    const result = await syncProducts();
-    console.log('[runchise-sync:products] finished', result);
-    return result;
-  } finally {
-    productsRunning = false;
-  }
+  return runLockedJob('products', RUNCHISE_CRON_LOCK_IDS.products, syncProducts);
 }
 
 async function runSyncSalesTransactionReportsJob() {
-  if (salesRunning) {
-    console.log(
-      '[runchise-sync:sales] skipped because previous run is still active',
-    );
-    return { skipped: true };
-  }
-
-  salesRunning = true;
-
-  try {
-    console.log('[runchise-sync:sales] started');
+  return runLockedJob('sales', RUNCHISE_CRON_LOCK_IDS.sales, async () => {
     // Tanpa locationId eksplisit, service mengambil dan mengiterasi seluruh
     // outlet Runchise. RUNCHISE_SYNC_LOCATION_ID hanya menjadi fallback bila
     // daftar lokasi dari API tidak tersedia, bukan pembatas coverage cron.
@@ -127,69 +85,30 @@ async function runSyncSalesTransactionReportsJob() {
         `[runchise-sync:sales] completed with ${result.locations_failed}/${result.locations_total} outlet failed`,
       );
     }
-    console.log('[runchise-sync:sales] finished', result);
     return result;
-  } finally {
-    salesRunning = false;
-  }
+  });
 }
 
 async function runSyncPromosJob() {
-  if (promosRunning) {
-    console.log(
-      '[runchise-sync:promos] skipped because previous run is still active',
-    );
-    return { skipped: true };
-  }
-
-  promosRunning = true;
-
-  try {
-    console.log('[runchise-sync:promos] started');
-    const result = await syncPromos();
-    console.log('[runchise-sync:promos] finished', result);
-    return result;
-  } finally {
-    promosRunning = false;
-  }
+  return runLockedJob('promos', RUNCHISE_CRON_LOCK_IDS.promos, syncPromos);
 }
 
 // Impor customer penuh hanya untuk eksekusi manual/CLI, bukan cron, guna menghindari risiko timeout pada lingkungan serverless.
 async function runCustomerSyncJob() {
-  if (customersRunning) {
-    console.log(
-      '[runchise-sync:customers-full] skipped because previous run is still active',
-    );
-    return { skipped: true };
-  }
-
-  customersRunning = true;
   const { locationId } = getSyncConfig();
-
-  try {
-    console.log('[runchise-sync:customers-full] started');
-    const result = await syncCustomers(locationId);
-    console.log('[runchise-sync:customers-full] finished', result);
-    return result;
-  } finally {
-    customersRunning = false;
-  }
+  return runLockedJob(
+    'customers-full',
+    RUNCHISE_CRON_LOCK_IDS.customersFull,
+    () => syncCustomers(locationId),
+  );
 }
 
 // Sinkronisasi customer terjadwal menggunakan worker berbasis cursor agar pemrosesan bertahap dapat dilanjutkan dari checkpoint terakhir tanpa berisiko timeout.
 async function runCustomerImportWorkerJob() {
-  if (customerImportRunning) {
-    console.log(
-      '[runchise-sync:customers-import] skipped because previous run is still active',
-    );
-    return { skipped: true };
-  }
-
-  customerImportRunning = true;
-
-  try {
-    console.log('[runchise-sync:customers-import] started');
-
+  return runLockedJob(
+    'customers-import',
+    RUNCHISE_CRON_LOCK_IDS.customersImport,
+    async () => {
     const { created, job } = await createCustomerImportSyncJob({
       source: 'cron',
     });
@@ -198,26 +117,13 @@ async function runCustomerImportWorkerJob() {
     }
 
     const result = await processCustomerImportSyncJob();
-    console.log('[runchise-sync:customers-import] finished', result);
     return result;
-  } finally {
-    customerImportRunning = false;
-  }
+    },
+  );
 }
 
 async function runCustomerPointsSyncJob() {
-  if (pointsRunning) {
-    console.log(
-      '[runchise-sync:points] skipped because previous run is still active',
-    );
-    return { skipped: true };
-  }
-
-  pointsRunning = true;
-
-  try {
-    console.log('[runchise-sync:points] started');
-
+  return runLockedJob('points', RUNCHISE_CRON_LOCK_IDS.points, async () => {
     // Sinkronisasi poin customer dijalankan dari tabel staging agar aman untuk cron serverless, sedangkan refresh penuh dari API dilakukan secara manual.
     const result = await syncCustomerPointsFromStaging();
 
@@ -227,11 +133,8 @@ async function runCustomerPointsSyncJob() {
       );
     }
 
-    console.log('[runchise-sync:points] finished', result);
     return result;
-  } finally {
-    pointsRunning = false;
-  }
+  });
 }
 
 // Scheduler lokal hanya aktif pada proses persisten/non-serverless, sedangkan production menggunakan Vercel Cron yang menjalankan setiap tahap sinkronisasi secara independen.

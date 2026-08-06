@@ -465,9 +465,13 @@ function createCronSyncHandler(jobName, job) {
 
     try {
       const result = await job();
+      const status = result?.skipped ? 'skipped' : 'completed';
 
       res.json({
-        message: `Cron sync ${jobName} selesai`,
+        message: result?.skipped
+          ? `Cron sync ${jobName} dilewati karena job masih aktif`
+          : `Cron sync ${jobName} selesai`,
+        status,
         job: jobName,
         started_at: startedAt,
         finished_at: new Date(),
