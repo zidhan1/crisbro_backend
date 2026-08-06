@@ -10,6 +10,7 @@ const {
 const { sendActivationEmail } = require('../services/emailService');
 const { getNextReward } = require('../services/nextRewardService');
 const { respondWithServerError } = require('../lib/serverError');
+const { setSessionCookie, clearSessionCookie } = require('../lib/sessionCookie');
 
 // Konfigurasi masa berlaku token login
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
@@ -250,9 +251,9 @@ async function login(req, res) {
       },
     });
 
-    // Mengirim token dan data user
+    // Token sesi tidak diekspos ke JavaScript browser.
+    setSessionCookie(res, token, expiresAt);
     res.json({
-      token,
       expiresIn: JWT_EXPIRES_IN,
       user: serializeAuthUser(user),
     });
@@ -501,9 +502,11 @@ async function logout(req, res) {
     // Hanya sesi perangkat ini yang dihapus; perangkat lain milik user yang
     // sama tetap login.
     await prisma.session.deleteMany({ where: { token: req.sessionToken } });
+    clearSessionCookie(res);
 
     return res.json({ message: 'Berhasil keluar' });
   } catch (error) {
+    clearSessionCookie(res);
     console.error('Logout gagal:', error);
     return res.status(500).json({ message: 'Gagal keluar dari sesi ini' });
   }
@@ -516,12 +519,14 @@ async function logoutAllSessions(req, res) {
     const result = await prisma.session.deleteMany({
       where: { user_id: req.user.id },
     });
+    clearSessionCookie(res);
 
     return res.json({
       message: 'Berhasil keluar dari semua perangkat',
       revoked_sessions: result.count,
     });
   } catch (error) {
+    clearSessionCookie(res);
     console.error('Logout semua perangkat gagal:', error);
     return res.status(500).json({ message: 'Gagal keluar dari semua perangkat' });
   }

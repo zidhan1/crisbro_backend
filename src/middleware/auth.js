@@ -2,20 +2,18 @@
 const jwt = require('jsonwebtoken');
 const getJwtSecret = require('../lib/jwtSecret');
 const prisma = require('../lib/prisma');
+const { getSessionCookie, clearSessionCookie } = require('../lib/sessionCookie');
 
 // Middleware untuk memverifikasi token JWT pada setiap request
 module.exports = async (req, res, next) => {
   const header = req.headers.authorization;
-
-  // Jika header tidak ada, akses ditolak
-  if (!header) {
-    return res.status(401).json({
-      message: 'Unauthorized',
-    });
-  }
-
-  // Mengambil token dari format "Bearer <token>"
-  const token = header.split(' ')[1];
+  const bearerToken =
+    typeof header === 'string' && header.startsWith('Bearer ')
+      ? header.slice(7).trim()
+      : null;
+  const cookieToken = getSessionCookie(req);
+  // Cookie diprioritaskan untuk browser; Bearer dipertahankan bagi tooling API.
+  const token = cookieToken || bearerToken;
 
   // Jika token tidak ditemukan, akses ditolak
   if (!token) {
@@ -34,6 +32,7 @@ module.exports = async (req, res, next) => {
     });
 
     if (!session || session.user_id !== decoded.id || session.expires_at <= new Date()) {
+      if (cookieToken) clearSessionCookie(res);
       return res.status(401).json({
         message: 'Session tidak valid atau sudah berakhir',
       });
@@ -45,6 +44,7 @@ module.exports = async (req, res, next) => {
     // tanpa mengeluarkan perangkat lain milik user yang sama.
     req.sessionToken = token;
   } catch (error) {
+    if (cookieToken) clearSessionCookie(res);
     // Menangani jika JWT_SECRET belum dikonfigurasi
     if (error.code === 'JWT_SECRET_MISSING') {
       return res.status(500).json({
