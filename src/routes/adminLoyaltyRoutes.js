@@ -9,6 +9,7 @@ const {
   deleteAdminUser,
   listAdminCustomers,
   listCustomerSalesTransactionReports,
+  listCustomerSalesTransactionReportOutlets,
   createAdminCustomer,
   updateAdminCustomer,
   adjustCustomerLoyalty,
@@ -53,11 +54,29 @@ router.get(
   adminOrMarketing,
   listCustomerSalesTransactionReports,
 );
+// M-8: memindahkan daftar outlet filter ke endpoint terpisah agar tidak melakukan distinct scan berulang pada tabel besar setiap perubahan page/filter.
+router.get(
+  '/customer-sales-transaction-reports/outlets',
+  adminOrMarketing,
+  listCustomerSalesTransactionReportOutlets,
+);
 router.post('/customers', adminOrMarketing, createAdminCustomer);
 router.put('/customers/:id', adminOrMarketing, updateAdminCustomer);
-router.post('/customers/:id/loyalty-adjustment', adminOnly, adjustCustomerLoyalty);
-router.post('/customers/:id/activation', adminOrMarketing, resendCustomerActivation);
-router.post('/customers/:id/runchise-sync', adminOrMarketing, retryCustomerRunchiseSync);
+router.post(
+  '/customers/:id/loyalty-adjustment',
+  adminOnly,
+  adjustCustomerLoyalty,
+);
+router.post(
+  '/customers/:id/activation',
+  adminOrMarketing,
+  resendCustomerActivation,
+);
+router.post(
+  '/customers/:id/runchise-sync',
+  adminOrMarketing,
+  retryCustomerRunchiseSync,
+);
 router.delete('/customers/:id', adminOrMarketing, deleteAdminCustomer);
 
 router.get('/brands', adminOrMarketing, listAdminBrands);
@@ -73,7 +92,11 @@ router.get('/catalog/menu-items', adminOrMarketing, listCatalogMenuItems);
 
 router.get('/redeem-menu/categories', adminOrMarketing, listRedeemCategories);
 router.post('/redeem-menu/categories', adminOrMarketing, createRedeemCategory);
-router.put('/redeem-menu/categories/:id', adminOrMarketing, updateRedeemCategory);
+router.put(
+  '/redeem-menu/categories/:id',
+  adminOrMarketing,
+  updateRedeemCategory,
+);
 
 router.get('/redeem-menu/items', adminOrMarketing, listRedeemItems);
 router.post('/redeem-menu/items', adminOrMarketing, createRedeemItem);

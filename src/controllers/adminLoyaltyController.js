@@ -540,6 +540,8 @@ async function listAdminUsers(req, res) {
         updated_at: true,
       },
       orderBy: buildAdminUserOrderBy(sortBy, sortOrder),
+      // M-8: Batas jumlah data diterapkan sebagai pengaman query karena jumlah akun admin/marketing kecil dan dikelola manual, sehingga pagination tidak diperlukan.
+      take: 1000,
     });
 
     res.json(users);
@@ -1233,20 +1235,12 @@ async function listCustomerSalesTransactionReports(req, res) {
     const total = await prisma.customerSalesTransactionReport.count({ where });
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const clampedPage = Math.min(page, totalPages);
-    const [reports, outletRows] = await prisma.$transaction([
-      prisma.customerSalesTransactionReport.findMany({
-        where,
-        orderBy: [{ tanggal_transaksi: 'desc' }, { id: 'desc' }],
-        skip: (clampedPage - 1) * limit,
-        take: limit,
-      }),
-      prisma.customerSalesTransactionReport.findMany({
-        where: { nama_outlet: { not: null } },
-        distinct: ['nama_outlet'],
-        select: { nama_outlet: true },
-        orderBy: { nama_outlet: 'asc' },
-      }),
-    ]);
+    const reports = await prisma.customerSalesTransactionReport.findMany({
+      where,
+      orderBy: [{ tanggal_transaksi: 'desc' }, { id: 'desc' }],
+      skip: (clampedPage - 1) * limit,
+      take: limit,
+    });
     const reportTransactionIds = reports.map(
       (report) => report.runchise_sales_transaction_id,
     );
@@ -1301,8 +1295,23 @@ async function listCustomerSalesTransactionReports(req, res) {
       limit,
       total,
       total_pages: totalPages,
-      outlets: outletRows.map((row) => row.nama_outlet).filter(Boolean),
     });
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+// M-8: Daftar outlet dipisahkan ke endpoint khusus agar dimuat sekali saja dan tidak menghitung ulang tabel transaksi pada setiap permintaan.
+async function listCustomerSalesTransactionReportOutlets(req, res) {
+  try {
+    const outletRows = await prisma.customerSalesTransactionReport.findMany({
+      where: { nama_outlet: { not: null } },
+      distinct: ['nama_outlet'],
+      select: { nama_outlet: true },
+      orderBy: { nama_outlet: 'asc' },
+    });
+
+    res.json(outletRows.map((row) => row.nama_outlet).filter(Boolean));
   } catch (error) {
     handleError(res, error);
   }
@@ -2201,6 +2210,9 @@ async function listRewards(req, res) {
     const rewards = await prisma.rewardsCatalog.findMany({
       include: { brand: { select: { id: true, name: true } } },
       orderBy: [{ is_active: 'desc' }, { created_at: 'desc' }],
+      // M-8: katalog reward dikelola manual lewat panel admin, bukan data
+      // transaksional -- batas ini jaring pengaman, bukan pagination.
+      take: 1000,
     });
 
     res.json(rewards);
@@ -2352,6 +2364,9 @@ async function listRedeemCategories(req, res) {
   try {
     const categories = await prisma.redeemMenuCategory.findMany({
       orderBy: [{ sort_order: 'asc' }, { name: 'asc' }],
+      // M-8: kategori redeem menu dikelola manual lewat panel admin --
+      // batas ini jaring pengaman, bukan pagination.
+      take: 1000,
     });
     res.json(categories);
   } catch (error) {
@@ -2453,6 +2468,9 @@ async function listRedeemItems(req, res) {
         },
       },
       orderBy: buildRedeemItemOrderBy(sortBy, sortOrder),
+      // M-8: item redeem menu dikelola manual lewat panel admin -- batas
+      // ini jaring pengaman, bukan pagination.
+      take: 1000,
     });
 
     res.json(items.map(addRedeemPriceBreakdown));
@@ -2653,6 +2671,7 @@ async function deleteRedeemItem(req, res) {
   }
 }
 
+// M-8: memperbaiki bug pagination pada redemption list yang sebelumnya hanya mengambil 200 data tanpa skip, sehingga data setelahnya tidak pernah bisa diakses; kini menggunakan pagination lengkap (page/limit/skip + total/total_pages).
 async function listRedemptions(req, res) {
   try {
     const status = parseOptionalString(req.query.status, 'status', 30);
@@ -2662,8 +2681,19 @@ async function listRedemptions(req, res) {
       return badRequest(res, 'status tidak valid');
     }
 
+    const page = parsePositiveInt(req.query.page ?? 1, 'page');
+    const limit = Math.min(
+      parsePositiveInt(req.query.limit ?? 50, 'limit'),
+      200,
+    );
+    const where = status ? { status } : {};
+
+    const total = await prisma.rewardRedemption.count({ where });
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const clampedPage = Math.min(page, totalPages);
+
     const redemptions = await prisma.rewardRedemption.findMany({
-      where: status ? { status } : {},
+      where,
       include: {
         reward: { select: { id: true, name: true, points_required: true } },
         customer: {
@@ -2676,10 +2706,17 @@ async function listRedemptions(req, res) {
         },
       },
       orderBy: { id: 'desc' },
-      take: 200,
+      skip: (clampedPage - 1) * limit,
+      take: limit,
     });
 
-    res.json(redemptions);
+    res.json({
+      items: redemptions,
+      page: clampedPage,
+      limit,
+      total,
+      total_pages: totalPages,
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -2834,6 +2871,7 @@ module.exports = {
   deleteAdminUser,
   listAdminCustomers,
   listCustomerSalesTransactionReports,
+  listCustomerSalesTransactionReportOutlets,
   createAdminCustomer,
   updateAdminCustomer,
   adjustCustomerLoyalty,
