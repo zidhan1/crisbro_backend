@@ -116,6 +116,7 @@ function isOnlineChannel(channel) {
   return normalized !== POS_CHANNEL;
 }
 
+// M-4: Menambahkan offset `+07:00` saat parsing tanggal agar waktu promo selalu konsisten di semua zona runtime dan mencegah status promo bergeser.
 function parseRunchiseDate(value, endOfDay = false) {
   if (!value) return null;
 
@@ -125,14 +126,17 @@ function parseRunchiseDate(value, endOfDay = false) {
   const [day, month, year] = parts.map(Number);
   if (!day || !month || !year) return null;
 
-  return endOfDay
-    ? new Date(year, month - 1, day, 23, 59, 59, 999)
-    : new Date(year, month - 1, day, 0, 0, 0, 0);
+  const pad = (n) => String(n).padStart(2, '0');
+  const timeOfDay = endOfDay ? '23:59:59.999' : '00:00:00.000';
+  const date = new Date(`${year}-${pad(month)}-${pad(day)}T${timeOfDay}+07:00`);
+
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
+// Menggunakan operasi UTC untuk memastikan pergeseran tanggal tetap konsisten di semua zona runtime.
 function addDays(date, days) {
   const result = new Date(date);
-  result.setDate(result.getDate() + days);
+  result.setUTCDate(result.getUTCDate() + days);
   return result;
 }
 
