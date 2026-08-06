@@ -1766,6 +1766,7 @@ async function retryCustomerRunchiseSync(req, res) {
   }
 }
 
+// M-7: Memastikan seluruh relasi foreign key ditangani sesuai aturan database agar penghapusan customer tidak gagal akibat constraint yang belum dibersihkan.
 async function deleteAdminCustomer(req, res) {
   try {
     const id = parsePositiveInt(req.params.id, 'id');
@@ -1786,6 +1787,9 @@ async function deleteAdminCustomer(req, res) {
       prisma.customerLocation.deleteMany({ where: { customer_id: id } }),
       prisma.customer.delete({ where: { id } }),
       prisma.session.deleteMany({ where: { user_id: customer.user_id } }),
+      prisma.accountActivationToken.deleteMany({
+        where: { user_id: customer.user_id },
+      }),
       prisma.user.delete({ where: { id: customer.user_id } }),
     ]);
 
