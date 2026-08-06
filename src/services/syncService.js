@@ -31,8 +31,7 @@ const PROMO_MAX_PAGES = 1000;
 // Sama dengan default kolom CustomerPoint.next_reward_threshold di schema.
 const DEFAULT_NEXT_REWARD_THRESHOLD = 2000;
 
-// Jumlah baris per statement bulk upsert poin. Cukup besar untuk menekan
-// jumlah round trip, cukup kecil untuk menjaga ukuran query tetap wajar.
+// Ukuran batch bulk upsert diatur untuk menyeimbangkan efisiensi query dan performa database.
 const CUSTOMER_POINT_UPSERT_CHUNK = 500;
 
 function normalizeChannel(rawChannel) {
@@ -154,12 +153,7 @@ function getEffectivePromoStatus(promo, now) {
 
 // ===================== SYNC CUSTOMERS =====================
 
-// Sync customer dari Runchise → database lokal
-// locationId hanya menjadi cadangan owner_location_id ketika Runchise tidak
-// mengirimkannya. Default lama 1 membuat customer tanpa outlet dipetakan ke
-// outlet yang tidak ada, sekaligus membuat baris Location id 1 palsu.
-// Daftar outlet Runchise yang akan disapu, dengan cadangan bila endpoint
-// locations tidak terbaca.
+// Sinkronisasi customer menggunakan owner_location_id dari Runchise dengan fallback outlet yang valid agar tidak menghasilkan pemetaan lokasi yang keliru.
 async function getRunchiseSyncLocationIds() {
   const locations = await fetchAllLocations();
   const locationIds = [
@@ -172,8 +166,6 @@ async function getRunchiseSyncLocationIds() {
 
   if (locationIds.length > 0) return locationIds;
 
-  // Fallback lama ke ID 1 menunjuk outlet yang tidak dimiliki Crisbar, sehingga
-  // sync tampak sukses padahal tidak memproses satu customer pun.
   const fallbackLocationId = Number(process.env.RUNCHISE_SYNC_LOCATION_ID);
 
   if (!Number.isInteger(fallbackLocationId) || fallbackLocationId <= 0) {
@@ -189,20 +181,11 @@ async function syncCustomers(locationId = null) {
   const fallbackLocationId = parseRunchiseId(locationId);
   const locationIds = await getRunchiseSyncLocationIds();
 
-  // Hanya ID customer yang disimpan, bukan objeknya. Versi lama memanggil
-  // fetchAllCustomersAcrossLocations() yang menumpuk seluruh hasil lebih dulu:
-  // endpoint Runchise melayani sampai 10.000 baris per outlet, jadi 32 outlet
-  // berarti hingga 320.000 objek customer sekaligus di memori sebelum satu pun
-  // diproses. Di function serverless yang memorinya terbatas itu berisiko
-  // crash. Sekarang tiap halaman langsung diproses lalu dilepas.
-  //
-  // Dedupe tetap dibutuhkan karena satu customer bisa muncul di beberapa outlet.
-  // Aman diproses per halaman: API mengembalikan location_ids yang lengkap pada
-  // setiap respons, apa pun outlet yang ditanya, sehingga keanggotaan outlet
-  // tidak hilang walau customernya hanya diproses sekali.
+  // Pemrosesan customer dilakukan per halaman dengan deduplikasi ID agar penggunaan memori tetap efisien tanpa kehilangan data lintas outlet.
   const processedCustomerIds = new Set();
   let synced = 0;
   let skippedConflicts = 0;
+  let failed = 0;
 
   for (const outletId of locationIds) {
     let page = 1;
@@ -212,22 +195,26 @@ async function syncCustomers(locationId = null) {
       const data = await fetchCustomersPage(outletId, page);
       const customers = Array.isArray(data.customers) ? data.customers : [];
 
+      // C-2: Customer diproses per batch agar jumlah query berkurang drastis dan sinkronisasi menjadi lebih cepat serta efisien.
+      const pageCustomers = [];
       for (const customer of customers) {
         const runchiseId = Number(customer.id);
         if (!Number.isInteger(runchiseId) || runchiseId <= 0) continue;
         if (processedCustomerIds.has(runchiseId)) continue;
 
         processedCustomerIds.add(runchiseId);
+        pageCustomers.push(customer);
+      }
 
-        const result = await upsertRunchiseCustomer(
-          customer,
+      if (pageCustomers.length > 0) {
+        const pageResults = await upsertRunchiseCustomersBatch(
+          pageCustomers,
           fallbackLocationId,
         );
-
-        if (result.status === 'skipped_conflict') {
-          skippedConflicts++;
-        } else {
-          synced++;
+        for (const result of pageResults) {
+          if (result.status === 'skipped_conflict') skippedConflicts++;
+          else if (result.status === 'failed') failed++;
+          else synced++;
         }
       }
 
@@ -240,14 +227,11 @@ async function syncCustomers(locationId = null) {
     synced,
     total: processedCustomerIds.size,
     skipped_conflicts: skippedConflicts,
+    failed,
   };
 }
 
-// Upsert satu customer Runchise ke database lokal.
-//
-// Dipakai baik oleh syncCustomers (impor penuh lewat CLI) maupun worker job
-// customerImportSyncService yang memproses satu halaman API per request agar
-// muat di batas waktu serverless.
+// Upsert customer dari Runchise ke database lokal yang digunakan oleh impor penuh maupun worker bertahap agar tetap sesuai batas serverless.
 async function upsertRunchiseCustomer(c, fallbackLocationId = null) {
   // Pastikan brand sudah ada di database
   await prisma.brand.upsert({
@@ -438,6 +422,444 @@ async function upsertRunchiseCustomer(c, fallbackLocationId = null) {
   return { status: 'created', customer_id: createdUser.customer?.id ?? null };
 }
 
+// C-2: Customer diproses dengan batch upsert untuk mengurangi round-trip database, menjaga konsistensi data, dan meningkatkan efisiensi pada lingkungan serverless.
+async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId = null) {
+  const results = new Array(customersInput.length).fill(null);
+
+  // ---- 1. Bangun kandidat di memori (tanpa query DB) ----
+  const candidates = customersInput.map((c, index) => {
+    const runchiseId = Number(c.id);
+    if (!Number.isInteger(runchiseId) || runchiseId <= 0) {
+      return { index, valid: false };
+    }
+
+    const ownerLocationId = Number(c.owner_location_id) || fallbackLocationId;
+    const ownerLocationName = c.owner_location?.name ?? `Outlet ${ownerLocationId}`;
+    const locationIds = [
+      ...new Set(
+        [
+          ...(c.location_ids ?? []),
+          ...(ownerLocationId ? [ownerLocationId] : []),
+        ]
+          .map(Number)
+          .filter((id) => Number.isInteger(id) && id > 0),
+      ),
+    ];
+
+    const normalizedPhone = normalizePhone(c.phone_number);
+    const phoneNumberVariants = phoneVariants(normalizedPhone);
+    const syncedAt = new Date();
+
+    const payload = {
+      runchise_id: runchiseId,
+      runchise_location_id: ownerLocationId,
+      runchise_sync_status: 'synced',
+      runchise_synced_at: syncedAt,
+      runchise_created_at: parseIsoDate(c.created_at),
+      runchise_updated_at: parseIsoDate(c.updated_at),
+      name: c.name,
+      phone_number: normalizedPhone,
+      normalized_phone_number: normalizedPhone,
+      phone_number_country_code: c.phone_number_country_code ?? 62,
+      address: c.address ?? null,
+      province: c.province ?? null,
+      city: c.city ?? null,
+      country: c.country ?? null,
+      postal_code: c.postal_code ?? null,
+      dob: c.dob && !isNaN(new Date(c.dob)) ? new Date(c.dob) : null,
+      gender: c.gender ?? 'unknown',
+      status: c.status ?? 'active',
+      balance: parseFloat(c.balance ?? 0),
+      brand_id: c.brand_id,
+      owner_location_id: ownerLocationId,
+    };
+
+    return {
+      index,
+      valid: true,
+      runchiseId,
+      brandId: c.brand_id,
+      ownerLocationId,
+      ownerLocationName,
+      locationIds,
+      normalizedPhone,
+      phoneNumberVariants,
+      payload,
+    };
+  });
+
+  const validCandidates = [];
+  for (const candidate of candidates) {
+    if (candidate.valid) {
+      validCandidates.push(candidate);
+    } else {
+      results[candidate.index] = { status: 'failed', reason: 'invalid_runchise_id' };
+    }
+  }
+
+  if (validCandidates.length === 0) return results;
+
+  // ---- 2. Preload kecocokan: 3 query total, bukan sampai 3 x N ----
+  const runchiseIds = validCandidates.map((c) => c.runchiseId);
+  const allVariants = [
+    ...new Set(validCandidates.flatMap((c) => c.phoneNumberVariants)),
+  ];
+
+  const [byRunchiseIdRows, byCustomerPhoneRows, byUserPhoneRows] = await Promise.all([
+    prisma.customer.findMany({
+      where: { runchise_id: { in: runchiseIds } },
+      include: { user: { select: { id: true, phone_number: true, role: true } } },
+    }),
+    allVariants.length > 0
+      ? prisma.customer.findMany({
+          where: {
+            OR: [
+              { phone_number: { in: allVariants } },
+              { user: { phone_number: { in: allVariants } } },
+            ],
+          },
+          include: { user: { select: { id: true, phone_number: true, role: true } } },
+        })
+      : Promise.resolve([]),
+    allVariants.length > 0
+      ? prisma.user.findMany({
+          where: { phone_number: { in: allVariants } },
+          include: { customer: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const byRunchiseId = new Map(byRunchiseIdRows.map((r) => [r.runchise_id, r]));
+  const customerByPhoneValue = new Map();
+  for (const row of byCustomerPhoneRows) {
+    if (row.phone_number) customerByPhoneValue.set(row.phone_number, row);
+    if (row.user?.phone_number) customerByPhoneValue.set(row.user.phone_number, row);
+  }
+  const userByPhoneValue = new Map();
+  for (const row of byUserPhoneRows) {
+    if (row.phone_number) userByPhoneValue.set(row.phone_number, row);
+  }
+  const findByVariants = (map, variants) => {
+    for (const variant of variants) {
+      const hit = map.get(variant);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  // ---- 3. Deteksi konflik & pisahkan jadi toUpdate / toCreate ----
+  const toUpdate = [];
+  const toCreate = [];
+  const seenExistingIds = new Set();
+
+  for (const candidate of validCandidates) {
+    const existingByRunchiseId = byRunchiseId.get(candidate.runchiseId) || null;
+    const existingCustomerByPhone = findByVariants(
+      customerByPhoneValue,
+      candidate.phoneNumberVariants,
+    );
+    const existingUserByPhone = findByVariants(
+      userByPhoneValue,
+      candidate.phoneNumberVariants,
+    );
+    const existingByPhone =
+      existingCustomerByPhone || existingUserByPhone?.customer || null;
+
+    if (
+      existingUserByPhone &&
+      (!existingUserByPhone.customer ||
+        existingUserByPhone.customer.id !== existingByPhone?.id)
+    ) {
+      results[candidate.index] = {
+        status: 'skipped_conflict',
+        reason: 'phone_used_by_other_user',
+      };
+      continue;
+    }
+
+    if (
+      existingByRunchiseId &&
+      existingByPhone &&
+      existingByRunchiseId.id !== existingByPhone.id
+    ) {
+      results[candidate.index] = {
+        status: 'skipped_conflict',
+        reason: 'runchise_id_phone_mismatch',
+      };
+      continue;
+    }
+
+    if (
+      existingByPhone &&
+      existingByPhone.runchise_id !== null &&
+      existingByPhone.runchise_id !== candidate.runchiseId
+    ) {
+      results[candidate.index] = {
+        status: 'skipped_conflict',
+        reason: 'phone_linked_to_other_runchise_id',
+      };
+      continue;
+    }
+
+    const existing = existingByRunchiseId || existingByPhone;
+    if (existing) {
+      if (seenExistingIds.has(existing.id)) {
+        results[candidate.index] = {
+          status: 'skipped_conflict',
+          reason: 'duplicate_customer_in_batch',
+        };
+        continue;
+      }
+      seenExistingIds.add(existing.id);
+      toUpdate.push({ candidate, existingId: existing.id, userId: existing.user_id });
+    } else {
+      toCreate.push({ candidate });
+    }
+  }
+
+  // Mencegah duplikasi berdasarkan nomor telepon saat bulk insert, sementara data tanpa nomor telepon diproses satu per satu agar tetap aman.
+  const seenCreatePhones = new Set();
+  const bulkCreatable = [];
+  const singleCreatable = [];
+  for (const item of toCreate) {
+    const phone = item.candidate.normalizedPhone;
+    if (!phone) {
+      singleCreatable.push(item);
+      continue;
+    }
+    if (seenCreatePhones.has(phone)) {
+      results[item.candidate.index] = {
+        status: 'skipped_conflict',
+        reason: 'duplicate_phone_in_batch',
+      };
+      continue;
+    }
+    seenCreatePhones.add(phone);
+    bulkCreatable.push(item);
+  }
+
+  // ---- 4. Bulk upsert brand yang direferensikan batch ini ----
+  const brandIds = [...new Set(validCandidates.map((c) => c.brandId))];
+  if (brandIds.length > 0) {
+    await prisma.$executeRaw`
+      INSERT INTO "Brand" (id, name, updated_at)
+      VALUES ${Prisma.join(
+        brandIds.map(
+          (id) => Prisma.sql`(${id}::int, ${`Brand ${id}`}::text, CURRENT_TIMESTAMP)`,
+        ),
+      )}
+      ON CONFLICT (id) DO NOTHING
+    `;
+  }
+
+  // ---- 5. Bulk upsert location yang direferensikan batch ini ----
+  const locationMap = new Map();
+  for (const c of validCandidates) {
+    for (const locId of c.locationIds) {
+      const isOwner = locId === c.ownerLocationId;
+      const prev = locationMap.get(locId);
+      if (isOwner) {
+        locationMap.set(locId, {
+          id: locId,
+          brandId: c.brandId,
+          name: c.ownerLocationName,
+          isOwnerName: true,
+        });
+      } else if (!prev) {
+        locationMap.set(locId, {
+          id: locId,
+          brandId: c.brandId,
+          name: `Outlet ${locId}`,
+          isOwnerName: false,
+        });
+      }
+    }
+  }
+  const locationRows = [...locationMap.values()];
+  if (locationRows.length > 0) {
+    // Statement A: Membuat data baru dan memperbarui brand_id/runchise_id, sedangkan pembaruan nama dilakukan pada statement terpisah untuk menjaga kompatibilitas dengan PostgreSQL.
+    await prisma.$executeRaw`
+      INSERT INTO "Location" (id, brand_id, runchise_id, name, is_active, is_outlet, updated_at)
+      VALUES ${Prisma.join(
+        locationRows.map(
+          (l) =>
+            Prisma.sql`(${l.id}::int, ${l.brandId}::int, ${l.id}::int, ${l.name}::text, true, true, CURRENT_TIMESTAMP)`,
+        ),
+      )}
+      ON CONFLICT (id) DO UPDATE SET
+        brand_id = EXCLUDED.brand_id,
+        runchise_id = EXCLUDED.runchise_id,
+        updated_at = CURRENT_TIMESTAMP
+    `;
+
+    // Statement B: timpa nama hanya untuk lokasi yang menjadi owner
+    // setidaknya satu customer di batch ini (sama seperti versi per-baris).
+    const ownerRows = locationRows.filter((l) => l.isOwnerName);
+    if (ownerRows.length > 0) {
+      await prisma.$executeRaw`
+        UPDATE "Location" AS t
+        SET name = v.name, updated_at = CURRENT_TIMESTAMP
+        FROM (VALUES ${Prisma.join(
+          ownerRows.map((l) => Prisma.sql`(${l.id}::int, ${l.name}::text)`),
+        )}) AS v(id, name)
+        WHERE t.id = v.id
+      `;
+    }
+  }
+
+  // ---- 6. Bulk update customer yang sudah ada + user + customer_locations ----
+  // Membungkus pembaruan customer, user, dan customer_locations dalam satu transaksi untuk menjaga konsistensi data jika terjadi kegagalan di tengah proses.
+  if (toUpdate.length > 0) {
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        UPDATE "Customer" AS c
+        SET
+          runchise_id = v.runchise_id::int,
+          runchise_location_id = v.runchise_location_id::int,
+          runchise_sync_status = v.runchise_sync_status::text,
+          runchise_sync_error = NULL,
+          runchise_synced_at = v.runchise_synced_at::timestamp,
+          runchise_created_at = v.runchise_created_at::timestamp,
+          runchise_updated_at = v.runchise_updated_at::timestamp,
+          name = v.name::text,
+          phone_number = v.phone_number::text,
+          normalized_phone_number = v.normalized_phone_number::text,
+          phone_number_country_code = v.phone_number_country_code::int,
+          address = v.address::text,
+          province = v.province::text,
+          city = v.city::text,
+          country = v.country::text,
+          postal_code = v.postal_code::text,
+          dob = v.dob::date,
+          gender = v.gender::text,
+          status = v.status::text,
+          balance = v.balance::numeric,
+          brand_id = v.brand_id::int,
+          owner_location_id = v.owner_location_id::int,
+          updated_at = CURRENT_TIMESTAMP
+        FROM (VALUES ${Prisma.join(
+          toUpdate.map(({ existingId, candidate }) => {
+            const p = candidate.payload;
+            return Prisma.sql`(${existingId}::int, ${p.runchise_id}::int, ${p.runchise_location_id}::int, ${p.runchise_sync_status}::text, ${p.runchise_synced_at}::timestamp, ${p.runchise_created_at}::timestamp, ${p.runchise_updated_at}::timestamp, ${p.name}::text, ${p.phone_number}::text, ${p.normalized_phone_number}::text, ${p.phone_number_country_code}::int, ${p.address}::text, ${p.province}::text, ${p.city}::text, ${p.country}::text, ${p.postal_code}::text, ${p.dob}::date, ${p.gender}::text, ${p.status}::text, ${p.balance}::numeric, ${p.brand_id}::int, ${p.owner_location_id}::int)`;
+          }),
+        )}) AS v(id, runchise_id, runchise_location_id, runchise_sync_status, runchise_synced_at, runchise_created_at, runchise_updated_at, name, phone_number, normalized_phone_number, phone_number_country_code, address, province, city, country, postal_code, dob, gender, status, balance, brand_id, owner_location_id)
+        WHERE c.id = v.id
+      `;
+
+      await tx.$executeRaw`
+        UPDATE "User" AS u
+        SET phone_number = v.phone_number, updated_at = CURRENT_TIMESTAMP
+        FROM (VALUES ${Prisma.join(
+          toUpdate.map(
+            ({ userId, candidate }) =>
+              Prisma.sql`(${userId}::int, ${candidate.payload.phone_number}::text)`,
+          ),
+        )}) AS v(user_id, phone_number)
+        WHERE u.id = v.user_id
+      `;
+
+      const updateIds = toUpdate.map(({ existingId }) => existingId);
+      await tx.$executeRaw`
+        DELETE FROM "CustomerLocation" WHERE customer_id IN (${Prisma.join(updateIds)})
+      `;
+
+      const updateLocationTuples = toUpdate.flatMap(({ existingId, candidate }) =>
+        candidate.locationIds.map(
+          (locationId) => Prisma.sql`(${existingId}::int, ${locationId}::int)`,
+        ),
+      );
+      if (updateLocationTuples.length > 0) {
+        await tx.$executeRaw`
+          INSERT INTO "CustomerLocation" (customer_id, location_id)
+          VALUES ${Prisma.join(updateLocationTuples)}
+          ON CONFLICT (customer_id, location_id) DO NOTHING
+        `;
+      }
+    });
+
+    for (const { candidate, existingId } of toUpdate) {
+      results[candidate.index] = { status: 'updated', customer_id: existingId };
+    }
+  }
+
+  // ---- 7. Bulk create user+customer baru (yang punya nomor telepon) ----
+  // Membuat user dan customer baru dalam satu transaksi untuk mencegah data yatim dan menjaga konsistensi saat terjadi kegagalan proses.
+  if (bulkCreatable.length > 0) {
+    await prisma.$transaction(async (tx) => {
+      const userRows = await tx.$queryRaw`
+        INSERT INTO "User" (phone_number, password_hash, activation_status, role, updated_at)
+        VALUES ${Prisma.join(
+          bulkCreatable.map(
+            ({ candidate }) =>
+              Prisma.sql`(${candidate.normalizedPhone}::text, ${''}::text, ${'pending_activation'}::text, ${'customer'}::text, CURRENT_TIMESTAMP)`,
+          ),
+        )}
+        RETURNING id, phone_number
+      `;
+      // Korelasi balik lewat nomor telepon (bukan urutan RETURNING): setiap
+      // nomor di bulkCreatable sudah dijamin unik dalam batch ini (langkah 3).
+      const userIdByPhone = new Map(userRows.map((r) => [r.phone_number, r.id]));
+
+      const customerTuples = bulkCreatable.map(({ candidate }) => {
+        const p = candidate.payload;
+        const userId = userIdByPhone.get(candidate.normalizedPhone);
+        return {
+          candidate,
+          userId,
+          sql: Prisma.sql`(${userId}::int, ${p.runchise_id}::int, ${p.runchise_location_id}::int, ${p.runchise_sync_status}::text, ${p.runchise_synced_at}::timestamp, ${p.runchise_created_at}::timestamp, ${p.runchise_updated_at}::timestamp, ${p.name}::text, ${p.phone_number}::text, ${p.normalized_phone_number}::text, ${p.phone_number_country_code}::int, ${p.address}::text, ${p.province}::text, ${p.city}::text, ${p.country}::text, ${p.postal_code}::text, ${p.dob}::date, ${p.gender}::text, ${p.status}::text, ${p.balance}::numeric, ${p.brand_id}::int, ${p.owner_location_id}::int, CURRENT_TIMESTAMP)`,
+        };
+      });
+
+      const customerRows = await tx.$queryRaw`
+        INSERT INTO "Customer" (
+          user_id, runchise_id, runchise_location_id, runchise_sync_status, runchise_synced_at,
+          runchise_created_at, runchise_updated_at, name, phone_number, normalized_phone_number,
+          phone_number_country_code, address, province, city, country, postal_code, dob, gender,
+          status, balance, brand_id, owner_location_id, updated_at
+        )
+        VALUES ${Prisma.join(customerTuples.map((t) => t.sql))}
+        RETURNING id, user_id
+      `;
+      // user_id dijamin unik (baru dibuat langkah di atas), jadi korelasi
+      // balik lewat user_id aman walau ada NULL/duplikat di kolom lain.
+      const customerIdByUserId = new Map(customerRows.map((r) => [r.user_id, r.id]));
+
+      const createLocationTuples = [];
+      for (const { candidate, userId } of customerTuples) {
+        const customerId = customerIdByUserId.get(userId);
+        results[candidate.index] = { status: 'created', customer_id: customerId };
+        for (const locationId of candidate.locationIds) {
+          createLocationTuples.push(
+            Prisma.sql`(${customerId}::int, ${locationId}::int)`,
+          );
+        }
+      }
+      if (createLocationTuples.length > 0) {
+        await tx.$executeRaw`
+          INSERT INTO "CustomerLocation" (customer_id, location_id)
+          VALUES ${Prisma.join(createLocationTuples)}
+          ON CONFLICT (customer_id, location_id) DO NOTHING
+        `;
+      }
+    });
+  }
+
+  // ---- 8. Kasus langka: create tanpa nomor telepon, satu-per-satu ----
+  for (const { candidate } of singleCreatable) {
+    try {
+      const original = customersInput[candidate.index];
+      results[candidate.index] = await upsertRunchiseCustomer(
+        original,
+        fallbackLocationId,
+      );
+    } catch (error) {
+      results[candidate.index] = { status: 'failed', reason: error.message };
+    }
+  }
+
+  return results;
+}
+
 function parseIsoDate(value) {
   if (!value) return null;
 
@@ -455,10 +877,7 @@ function parseInteger(value, fallback = 0) {
   return Number.isInteger(number) ? number : Math.trunc(number);
 }
 
-// Mengembalikan ID Runchise yang valid, atau null bila tidak dapat dipakai.
-// Sengaja tidak memiliki fallback angka: outlet Crisbar di Runchise memakai ID
-// 4424-9854, sehingga fallback seperti 1 akan menunjuk lokasi yang bukan milik
-// brand ini dan membuat sync mengembalikan data kosong.
+// Mengembalikan ID Runchise yang valid tanpa fallback numerik agar sinkronisasi selalu mengarah ke outlet yang benar.
 function parseRunchiseId(value) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : null;
@@ -497,11 +916,7 @@ function getOrderPurchaseAmount(sale) {
 
 // ===================== SYNC CUSTOMER POINTS =====================
 
-// Menulis saldo poin dalam beberapa statement bulk upsert. Versi lama mengirim
-// satu prisma.customerPoint.upsert per customer di dalam satu $transaction,
-// sehingga 16 ribu customer berarti 16 ribu round trip dan hampir pasti habis
-// waktu. Pemanggil wajib memastikan customerId unik karena ON CONFLICT tidak
-// boleh menyentuh baris yang sama dua kali dalam satu statement.
+// Menyimpan saldo poin dengan bulk upsert untuk mengurangi round-trip database dan meningkatkan efisiensi sinkronisasi.
 async function bulkUpsertCustomerPoints(rows) {
   let written = 0;
 
@@ -536,15 +951,7 @@ async function bulkUpsertCustomerPoints(rows) {
   return written;
 }
 
-// Sync poin customer dari Runchise ke database lokal.
-//
-// Tanpa locationId, sync mencakup SELURUH outlet. Ini penting: Crisbar punya 29
-// lokasi di Runchise (ID 4424-9854) dan customer tersebar di semuanya, sedangkan
-// versi lama memakai default locationId = 1 yang bukan outlet Crisbar sehingga
-// tidak ada satu pun saldo poin yang ikut ter-update.
-//
-// locationId hanya diisi bila memang ingin membatasi ke satu outlet, misalnya
-// dari endpoint admin manual yang harus selesai dalam batas waktu serverless.
+// Sinkronisasi poin mencakup seluruh outlet secara default atau dapat dibatasi ke satu outlet agar tetap efisien di lingkungan serverless.
 async function syncCustomerPoints({ locationId = null } = {}) {
   const targetLocationId = parseRunchiseId(locationId);
 
@@ -598,19 +1005,7 @@ async function syncCustomerPoints({ locationId = null } = {}) {
   };
 }
 
-// Menurunkan saldo poin dari tabel staging RunchiseLocationCustomer, bukan dari
-// API. Staging sudah memuat total_point/available_point untuk ke-29 outlet dari
-// endpoint yang sama, sehingga cakupannya lengkap tanpa satu pun request HTTP.
-// Ini membuat job harian selesai dalam hitungan milidetik, sementara refresh
-// penuh dari API dijalankan lewat scripts/syncCustomerPoints.js yang tidak
-// terikat batas waktu serverless.
-//
-// Poin Runchise diperlakukan sebagai nilai global per customer: objek customer
-// yang sama muncul di setiap listing outlet yang ia ikuti dan membawa
-// location_ids lengkap, jadi barisnya cukup dipilih satu yang paling baru.
-// divergent_customers memverifikasi asumsi itu setiap kali sync berjalan; nilai
-// di atas nol berarti poin ternyata berbeda antar outlet dan strategi merge ini
-// harus ditinjau ulang.
+// Sinkronisasi poin menggunakan data staging untuk mempercepat proses tanpa request API, sekaligus memverifikasi konsistensi poin customer antar outlet.
 async function syncCustomerPointsFromStaging() {
   const [divergence] = await prisma.$queryRaw`
     SELECT COUNT(*)::int AS divergent_customers
@@ -628,9 +1023,7 @@ async function syncCustomerPointsFromStaging() {
     ) divergent
   `;
 
-  // DISTINCT ON memilih satu baris staging per customer, diambil dari snapshot
-  // terbaru. Dipisahkan ke CTE agar ORDER BY tetap milik SELECT dan tidak
-  // bercampur dengan ON CONFLICT milik INSERT.
+// Menggunakan `DISTINCT ON` untuk mengambil snapshot terbaru setiap customer sebelum proses insert atau update.
   const synced = await prisma.$executeRaw`
     WITH latest_points AS (
       SELECT DISTINCT ON (c."id")
@@ -677,16 +1070,7 @@ function bigIntToNumber(value) {
   return value === null || value === undefined ? 0 : Number(value);
 }
 
-// Diagnostik read-only untuk saldo poin. Tidak menulis apa pun.
-//
-// Menjawab satu pertanyaan yang menentukan strategi merge lintas outlet: apakah
-// poin Runchise bersifat global per customer, atau berbeda per outlet?
-//
-// fetchAllCustomersAcrossLocations menggabungkan dengan pola {...existing,
-// ...customer}, sehingga outlet yang diproses terakhir menang. Bila poin
-// ternyata dilaporkan hanya pada outlet asal customer dan 0 di outlet lain,
-// penggabungan itu dapat menimpa nilai benar dengan 0 dan mengecilkan saldo
-// tanpa gejala apa pun. divergent_customers membuktikan mana yang terjadi.
+// Diagnostik read-only untuk memverifikasi apakah saldo poin customer konsisten antar outlet sehingga strategi penggabungan data tetap akurat.
 async function inspectCustomerPointSources() {
   // 1. Apakah poin berbeda antar outlet? Dihitung atas SELURUH customer staging
   //    yang terdaftar di lebih dari satu outlet, bukan hanya yang punya akun.
@@ -1478,6 +1862,7 @@ async function syncPromos() {
 module.exports = {
   syncCustomers,
   upsertRunchiseCustomer,
+  upsertRunchiseCustomersBatch,
   syncProducts,
   syncCustomerPoints,
   syncCustomerPointsFromStaging,

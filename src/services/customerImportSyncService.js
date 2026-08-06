@@ -1,6 +1,9 @@
 const { Client } = require('pg');
 const { fetchCustomersPage } = require('./runchiseService');
-const { upsertRunchiseCustomer } = require('./syncService');
+const {
+  upsertRunchiseCustomer,
+  upsertRunchiseCustomersBatch,
+} = require('./syncService');
 
 // Lock terpisah dari worker timestamp agar keduanya boleh berjalan bersamaan.
 const CUSTOMER_IMPORT_WORKER_LOCK_ID = 750954836;
@@ -138,20 +141,42 @@ async function processImportPage(client, job) {
     ) {
       latestRunchiseCreatedAt = runchiseCreatedAt;
     }
+  }
 
-    try {
-      const result = await upsertRunchiseCustomer(customer, locationId);
-      if (result.status === 'created') created++;
-      else if (result.status === 'updated') updated++;
-      else skippedConflicts++;
-    } catch (error) {
-      // Satu customer bermasalah tidak boleh menghentikan seluruh job; job
-      // menyimpan cursor dan lanjut ke customer berikutnya.
-      failed++;
-      console.warn(
-        `Impor customer Runchise gagal (location ${locationId}, customer ${customer?.id}): ${error.message}`,
-      );
+  // C-2: satu halaman (sampai 100 customer) diproses lewat SATU batch
+  // (~3 query preload + beberapa statement bulk) alih-alih upsert per
+  // customer (~6-10 round-trip x 100 customer = 600-1000 round-trip
+  // sekuensial per halaman -- gampang melebihi time budget worker ini).
+  // Kalau batch gagal total (mis. galat jaringan/DB di tengah statement),
+  // jatuh ke mode satu-per-satu supaya satu halaman bermasalah tetap tidak
+  // menghentikan seluruh job -- properti yang sama dengan sebelumnya.
+  let results;
+  try {
+    results = await upsertRunchiseCustomersBatch(customers, locationId);
+  } catch (error) {
+    console.warn(
+      `Batch impor customer Runchise gagal (location ${locationId}, page ${page}), jatuh ke mode satu-per-satu: ${error.message}`,
+    );
+    results = [];
+    for (const customer of customers) {
+      try {
+        results.push(await upsertRunchiseCustomer(customer, locationId));
+      } catch (rowError) {
+        // Satu customer bermasalah tidak boleh menghentikan seluruh job; job
+        // menyimpan cursor dan lanjut ke customer berikutnya.
+        console.warn(
+          `Impor customer Runchise gagal (location ${locationId}, customer ${customer?.id}): ${rowError.message}`,
+        );
+        results.push({ status: 'failed', reason: rowError.message });
+      }
     }
+  }
+
+  for (const result of results) {
+    if (result.status === 'created') created++;
+    else if (result.status === 'updated') updated++;
+    else if (result.status === 'failed') failed++;
+    else skippedConflicts++;
   }
 
   const hasNextPage =
