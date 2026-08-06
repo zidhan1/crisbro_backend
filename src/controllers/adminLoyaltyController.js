@@ -14,6 +14,10 @@ const {
 } = require('../services/runchiseCustomerSyncService');
 const { recordAdminActivity } = require('../services/adminActivityLogService');
 const { respondWithServerError } = require('../lib/serverError');
+const {
+  toRedemptionTrend,
+  toPublicRedemptionHistory,
+} = require('../lib/loyaltySummaryProjection');
 
 const DEFAULT_PB1_RATE = 0.1;
 const DEFAULT_REWARD_THRESHOLD = 2000;
@@ -1724,6 +1728,17 @@ async function listAdminLocations(req, res) {
 
 async function getSummary(req, res) {
   try {
+    const redemptionHistoryPage =
+      parsePositiveInt(req.query.redemption_history_page, 'redemption_history_page', {
+        required: false,
+      }) ?? 1;
+    const requestedHistoryLimit =
+      parsePositiveInt(
+        req.query.redemption_history_limit,
+        'redemption_history_limit',
+        { required: false },
+      ) ?? 25;
+    const redemptionHistoryLimit = Math.min(requestedHistoryLimit, 100);
     const redemptionFrom = parseDateBoundary(
       req.query.redemption_from,
       'redemption_from',
@@ -1742,6 +1757,9 @@ async function getSummary(req, res) {
           select: { runchise_id: true },
         })
       : null;
+    if (outletId && !selectedOutlet?.runchise_id) {
+      throw new Error('outlet_id tidak ditemukan atau bukan outlet Runchise');
+    }
     const posRedemptionWhere = {
       status: 'valid',
       is_managed_reward: true,
@@ -1765,6 +1783,7 @@ async function getSummary(req, res) {
       topRewards,
       activatedCustomersByOutlet,
       redemptionsByOutlet,
+      redemptionTrend,
       redemptionHistory,
       runchiseCustomersByOutlet,
       runchiseCustomersUnique,
@@ -1817,17 +1836,38 @@ async function getSummary(req, res) {
         _count: { id: true },
         _sum: { quantity: true, points_spent: true },
       }),
+      prisma.$queryRaw`
+        SELECT
+          DATE_TRUNC('day', redemption."redeemed_at") AS date,
+          COALESCE(SUM(redemption."quantity"), 0)::double precision AS redemption_count,
+          COALESCE(SUM(redemption."points_spent"), 0)::double precision AS points_spent
+        FROM "RunchisePosRewardRedemption" redemption
+        WHERE redemption."status" = 'valid'
+          AND redemption."is_managed_reward" = TRUE
+          ${redemptionFrom ? Prisma.sql`AND redemption."redeemed_at" >= ${redemptionFrom}` : Prisma.empty}
+          ${redemptionTo ? Prisma.sql`AND redemption."redeemed_at" <= ${redemptionTo}` : Prisma.empty}
+          ${selectedOutlet?.runchise_id ? Prisma.sql`AND redemption."location_id" = ${selectedOutlet.runchise_id}` : Prisma.empty}
+        GROUP BY DATE_TRUNC('day', redemption."redeemed_at")
+        ORDER BY DATE_TRUNC('day', redemption."redeemed_at") ASC
+      `,
       prisma.runchisePosRewardRedemption.findMany({
         where: posRedemptionWhere,
-        include: {
-          redeem_menu_item: {
-            select: {
-              id: true,
-              menu_item: { select: { id: true, name: true } },
-            },
-          },
+        select: {
+          id: true,
+          redeem_menu_item_id: true,
+          runchise_product_id: true,
+          product_name: true,
+          quantity: true,
+          point_per_item: true,
+          points_spent: true,
+          selling_price: true,
+          location_id: true,
+          location_name: true,
+          redeemed_at: true,
         },
         orderBy: { redeemed_at: 'desc' },
+        skip: (redemptionHistoryPage - 1) * redemptionHistoryLimit,
+        take: redemptionHistoryLimit,
       }),
       prisma.$queryRaw`
         SELECT
@@ -1916,7 +1956,6 @@ async function getSummary(req, res) {
       redemptionLocations.map((location) => [location.runchise_id, location]),
     );
     const outletRedemptionById = new Map();
-    const redemptionTrendByDate = new Map();
     for (const redemption of redemptionsByOutlet) {
       const outlet = redemptionLocationByRunchiseId.get(redemption.location_id);
 
@@ -1971,21 +2010,6 @@ async function getSummary(req, res) {
               (outlet.stored_customers > 0 ? 'available' : 'empty')),
       };
     });
-
-    for (const redemption of redemptionHistory) {
-      if (!redemption.redeemed_at) continue;
-
-      const date = redemption.redeemed_at.toISOString().slice(0, 10);
-      const current = redemptionTrendByDate.get(date) ?? {
-        date,
-        redemption_count: 0,
-        points_spent: 0,
-      };
-
-      current.redemption_count += Number(redemption.quantity);
-      current.points_spent += redemption.points_spent;
-      redemptionTrendByDate.set(date, current);
-    }
 
     const totalPointsGiven = points._sum.total_point ?? 0;
     const totalPointsAvailable = points._sum.available_point ?? 0;
@@ -2043,32 +2067,17 @@ async function getSummary(req, res) {
       top_redeem_outlets: Array.from(outletRedemptionById.values())
         .sort((a, b) => b.redemption_count - a.redemption_count)
         .slice(0, 5),
-      redemption_trend: Array.from(redemptionTrendByDate.values()).sort(
-        (a, b) => a.date.localeCompare(b.date),
+      redemption_trend: toRedemptionTrend(redemptionTrend),
+      redemption_history: toPublicRedemptionHistory(
+        redemptionHistory,
+        redemptionLocationByRunchiseId,
       ),
-      redemption_history: redemptionHistory.map((redemption) => ({
-        id: String(redemption.id),
-        reward_id: redemption.redeem_menu_item_id,
-        runchise_product_id: redemption.runchise_product_id,
-        reward_name: redemption.product_name,
-        customer_id: redemption.customer_id,
-        runchise_customer_id: redemption.runchise_customer_id,
-        customer_name: redemption.customer_name,
-        customer_phone_number: redemption.customer_phone_number,
-        quantity: Number(redemption.quantity),
-        point_per_item: redemption.point_per_item,
-        points_spent: redemption.points_spent,
-        menu_price: Number(redemption.selling_price),
-        outlet_id:
-          redemptionLocationByRunchiseId.get(redemption.location_id)?.id ??
-          null,
-        runchise_location_id: redemption.location_id,
-        outlet_name: redemption.location_name ?? 'Outlet tidak diketahui',
-        outlet_city:
-          redemptionLocationByRunchiseId.get(redemption.location_id)?.city ??
-          null,
-        redeemed_at: redemption.redeemed_at,
-      })),
+      redemption_history_pagination: {
+        page: redemptionHistoryPage,
+        limit: redemptionHistoryLimit,
+        total: redemptionCount,
+        total_pages: Math.ceil(redemptionCount / redemptionHistoryLimit),
+      },
     });
   } catch (error) {
     handleError(res, error);
