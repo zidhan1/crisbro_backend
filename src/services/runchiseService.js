@@ -1,10 +1,31 @@
 // Mengimpor axios untuk melakukan HTTP request ke API eksternal
 const axios = require('axios');
 
+function getBoundedInteger(name, fallback, { min = 0, max }) {
+  const parsed = Number(process.env[name]);
+  if (!Number.isInteger(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+const RUNCHISE_REQUEST_TIMEOUT_MS = getBoundedInteger(
+  'RUNCHISE_API_TIMEOUT_MS',
+  6000,
+  { min: 1000, max: 8000 },
+);
+const RUNCHISE_MAX_RETRIES = getBoundedInteger(
+  'RUNCHISE_API_MAX_RETRIES',
+  1,
+  { min: 0, max: 2 },
+);
+const RUNCHISE_MAX_PAGES = getBoundedInteger('RUNCHISE_API_MAX_PAGES', 100, {
+  min: 1,
+  max: 1000,
+});
+
 // Membuat instance axios khusus untuk API Runchise
 const runchiseClient = axios.create({
   baseURL: 'https://api.runchise.com/api/public',
-  timeout: Number(process.env.RUNCHISE_API_TIMEOUT_MS || 30000),
+  timeout: RUNCHISE_REQUEST_TIMEOUT_MS,
   headers: {
     Accept: 'application/json',
     Authorization: process.env.RUNCHISE_API_KEY,
@@ -38,22 +59,55 @@ function isTransientRunchiseError(error) {
   );
 }
 
-async function requestWithRetry(label, request, { retries = 2 } = {}) {
-  let lastError;
+function getRetryBudgetMs(retries = RUNCHISE_MAX_RETRIES) {
+  const effectiveRetries = Math.min(
+    Math.max(0, retries),
+    RUNCHISE_MAX_RETRIES,
+  );
+  const backoffMs = Array.from(
+    { length: effectiveRetries },
+    (_, attempt) => 500 * 2 ** attempt,
+  ).reduce((total, delay) => total + delay, 0);
+  return (effectiveRetries + 1) * RUNCHISE_REQUEST_TIMEOUT_MS + backoffMs;
+}
 
-  for (let attempt = 0; attempt <= retries; attempt++) {
+function assertPageWithinLimit(resource, page, maxPages = RUNCHISE_MAX_PAGES) {
+  if (page > maxPages) {
+    const error = new Error(
+      `Pagination ${resource} melewati batas aman ${maxPages} halaman`,
+    );
+    error.code = 'RUNCHISE_MAX_PAGES_EXCEEDED';
+    error.resource = resource;
+    error.page = page;
+    error.maxPages = maxPages;
+    throw error;
+  }
+}
+
+async function requestWithRetry(
+  label,
+  request,
+  { retries = RUNCHISE_MAX_RETRIES } = {},
+) {
+  let lastError;
+  const effectiveRetries = Math.min(
+    Math.max(0, retries),
+    RUNCHISE_MAX_RETRIES,
+  );
+
+  for (let attempt = 0; attempt <= effectiveRetries; attempt++) {
     try {
       return await request();
     } catch (error) {
       lastError = error;
 
-      if (!isTransientRunchiseError(error) || attempt === retries) {
+      if (!isTransientRunchiseError(error) || attempt === effectiveRetries) {
         break;
       }
 
       const delayMs = 500 * 2 ** attempt;
       console.warn(
-        `${label} gagal sementara (${error.code || error.response?.status || error.message}), retry ${attempt + 1}/${retries}`,
+        `${label} gagal sementara (${error.code || error.response?.status || error.message}), retry ${attempt + 1}/${effectiveRetries}`,
       );
       await sleep(delayMs);
     }
@@ -147,6 +201,7 @@ async function fetchAllCustomers(locationId) {
   let hasMore = true;
 
   while (hasMore) {
+    assertPageWithinLimit('customers', page);
     const data = await fetchCustomersPage(locationId, page);
 
     allCustomers = allCustomers.concat(data.customers);
@@ -305,6 +360,7 @@ async function fetchAllSalesTransactions(params = {}) {
   let hasMore = true;
 
   while (hasMore) {
+    assertPageWithinLimit('sales transactions', page);
     const data = await fetchSalesTransactionsPage(page, params);
     const pageTransactions = extractSalesTransactions(data);
 
@@ -382,6 +438,7 @@ async function fetchAllProducts() {
   let hasMore = true;
 
   while (hasMore) {
+    assertPageWithinLimit('products', page);
     const data = await fetchProductsPage({
       page,
       itemPerPage: 100,
@@ -405,6 +462,7 @@ async function fetchAllSubBrands() {
   let hasMore = true;
 
   while (hasMore) {
+    assertPageWithinLimit('sub brands', page);
     const { data } = await requestWithRetry(
       `Fetch sub brands Runchise page ${page}`,
       () =>
@@ -436,6 +494,7 @@ async function fetchAllLocations() {
   let hasMore = true;
 
   while (hasMore) {
+    assertPageWithinLimit('locations', page);
     const { data } = await requestWithRetry(
       `Fetch locations Runchise page ${page}`,
       () =>
@@ -481,6 +540,7 @@ async function fetchAllPromos() {
   let hasMore = true;
 
   while (hasMore) {
+    assertPageWithinLimit('promos', page);
     const data = await fetchPromosPage({ page, itemPerPage: 100 });
 
     allPromos = allPromos.concat(data.promos);
@@ -533,6 +593,12 @@ async function updateCustomer(locationId, customerId, customerData) {
 }
 
 module.exports = {
+  RUNCHISE_REQUEST_TIMEOUT_MS,
+  RUNCHISE_MAX_RETRIES,
+  RUNCHISE_MAX_PAGES,
+  getRetryBudgetMs,
+  assertPageWithinLimit,
+  requestWithRetry,
   fetchCustomersPage,
   fetchAllCustomers,
   fetchAllCustomersAcrossLocations,
