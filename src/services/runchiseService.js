@@ -194,7 +194,14 @@ async function fetchCustomersPage(locationId, page) {
   return data;
 }
 
-// Mengambil semua customer dari Runchise (pagination otomatis)
+// M-9: menumpuk SELURUH customer satu outlet (bisa sampai ribuan) jadi satu
+// array sebelum mengembalikan apa pun -- aman untuk kebutuhan yang memang
+// butuh daftar lengkap sekaligus (mis. pencarian/pencocokan lintas
+// halaman), tapi BUKAN pilihan yang tepat kalau pemanggilnya sebenarnya
+// cuma perlu memproyeksikan beberapa field per customer (poin, nama,
+// telepon, dst) -- untuk kasus itu, stream per halaman langsung lewat
+// fetchCustomersPage() seperti syncCustomers()/syncCustomerPoints() di
+// syncService.js, jangan lewat fungsi ini.
 async function fetchAllCustomers(locationId) {
   let allCustomers = [];
   let page = 1;
@@ -212,6 +219,17 @@ async function fetchAllCustomers(locationId) {
   return allCustomers;
 }
 
+// M-9: memanggil fetchAllCustomers() di atas untuk SETIAP outlet lalu
+// menggabungkan semuanya ke satu Map -- untuk instalasi dengan puluhan
+// outlet x ribuan customer per outlet, ini bisa berarti puluhan/ratusan
+// ribu objek customer lengkap menumpuk di memori sekaligus. syncCustomerPoints
+// di syncService.js dulu memakai fungsi ini untuk sinkronisasi poin
+// seluruh outlet; sekarang sudah diganti stream per halaman per outlet
+// (lihat komentar M-9 di syncCustomerPoints). Fungsi ini dipertahankan
+// untuk kebutuhan lain yang genuinely perlu daftar customer lintas outlet
+// sekaligus, TAPI pemanggil baru sebaiknya mempertimbangkan pola stream
+// per halaman terlebih dulu sebelum memakai fungsi ini.
+//
 // Mengambil customer dari seluruh outlet yang dapat diakses API lalu
 // menggabungkannya berdasarkan ID customer Runchise. Customer dapat terdaftar
 // di beberapa outlet, sehingga nomor telepon tidak aman dijadikan kunci.

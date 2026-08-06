@@ -7,8 +7,6 @@ const { Prisma } = require('@prisma/client');
 
 // Mengimpor service Runchise (API eksternal)
 const {
-  fetchAllCustomers,
-  fetchAllCustomersAcrossLocations,
   fetchAllSalesTransactions,
   fetchAllSubBrands,
   fetchAllLocations,
@@ -956,20 +954,25 @@ async function bulkUpsertCustomerPoints(rows) {
   return written;
 }
 
-// Sinkronisasi poin mencakup seluruh outlet secara default atau dapat dibatasi ke satu outlet agar tetap efisien di lingkungan serverless.
+// M-9: versi lama memanggil fetchAllCustomers/fetchAllCustomersAcrossLocations,
+// yang menumpuk SELURUH customer dari SELURUH outlet (bisa ~10 ribu customer x
+// 29 outlet) jadi satu array besar sebelum diproses satu baris pun -- padahal
+// dari tiap customer cuma 2 angka (total_point, available_point) yang
+// akhirnya dipakai. Sekarang di-stream per halaman per outlet (pola yang
+// sama dengan syncCustomers), langsung diproyeksikan ke {customerId,
+// totalPoint, availablePoint} begitu satu halaman selesai -- objek customer
+// Runchise yang lengkap (nama, alamat, email, dst) tidak pernah menumpuk di
+// memori melebihi satu halaman (item_per_page) sekaligus.
 async function syncCustomerPoints({ locationId = null } = {}) {
   const targetLocationId = parseRunchiseId(locationId);
+  const locationIds = targetLocationId
+    ? [targetLocationId]
+    : await getRunchiseSyncLocationIds();
 
-  // Ambil data dari API + database sekaligus
-  const [runchiseCustomers, localCustomers] = await Promise.all([
-    targetLocationId
-      ? fetchAllCustomers(targetLocationId)
-      : fetchAllCustomersAcrossLocations(),
-    prisma.customer.findMany({
-      where: { runchise_id: { not: null } },
-      select: { id: true, runchise_id: true },
-    }),
-  ]);
+  const localCustomers = await prisma.customer.findMany({
+    where: { runchise_id: { not: null } },
+    select: { id: true, runchise_id: true },
+  });
 
   // Mapping runchise_id → local_id (biar cepat, tidak query DB berulang)
   const runchiseToLocal = new Map(
@@ -980,21 +983,37 @@ async function syncCustomerPoints({ locationId = null } = {}) {
   // outlet tetap menghasilkan tepat satu baris untuk ON CONFLICT.
   const pointsByCustomerId = new Map();
   let unmatched = 0;
+  let totalScanned = 0;
 
-  for (const c of runchiseCustomers) {
-    const localId = runchiseToLocal.get(parseRunchiseId(c.id));
-    if (!localId) {
-      unmatched++;
-      continue;
+  for (const outletId of locationIds) {
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      const data = await fetchCustomersPage(outletId, page);
+      const customers = Array.isArray(data.customers) ? data.customers : [];
+      totalScanned += customers.length;
+
+      for (const c of customers) {
+        const localId = runchiseToLocal.get(parseRunchiseId(c.id));
+        if (!localId) {
+          unmatched++;
+          continue;
+        }
+
+        // Runchise/POS adalah source of truth poin. Karena API riwayat poin
+        // Runchise belum tersedia, saldo lokal hanya menjadi mirror nilai
+        // terbaru.
+        pointsByCustomerId.set(localId, {
+          customerId: localId,
+          totalPoint: parseInteger(c.total_point, 0),
+          availablePoint: parseInteger(c.available_point, 0),
+        });
+      }
+
+      hasMore = data.paging?.next_page != null;
+      page++;
     }
-
-    // Runchise/POS adalah source of truth poin. Karena API riwayat poin
-    // Runchise belum tersedia, saldo lokal hanya menjadi mirror nilai terbaru.
-    pointsByCustomerId.set(localId, {
-      customerId: localId,
-      totalPoint: parseInteger(c.total_point, 0),
-      availablePoint: parseInteger(c.available_point, 0),
-    });
   }
 
   const rows = [...pointsByCustomerId.values()];
@@ -1005,7 +1024,7 @@ async function syncCustomerPoints({ locationId = null } = {}) {
     synced,
     matched: rows.length,
     unmatched,
-    total: runchiseCustomers.length,
+    total: totalScanned,
     local_customers: localCustomers.length,
   };
 }
@@ -1276,6 +1295,45 @@ function mapSalesTransactionReportData(
   };
 }
 
+// M-9: versi lama memanggil fetchAllCustomers(targetLocationId), yang
+// menumpuk seluruh customer outlet ini (bisa sampai 10 ribu) jadi satu array
+// besar berisi objek customer LENGKAP -- padahal mapSalesTransactionReportData
+// di bawah cuma memakai 6 field dari tiap customer Runchise (nama, telepon +
+// kode negaranya, tanggal dibuat, nama outlet pemilik, poin tersedia).
+// Sekarang di-stream per halaman (pola yang sama dengan syncCustomers) dan
+// langsung diproyeksikan ke 6 field itu saja, bukan menumpuk objek penuh.
+async function fetchRunchiseCustomerLookupForLocation(targetLocationId) {
+  const lookup = new Map();
+  let page = 1;
+  let hasMore = true;
+
+  while (hasMore) {
+    const data = await fetchCustomersPage(targetLocationId, page);
+    const customers = Array.isArray(data.customers) ? data.customers : [];
+
+    for (const c of customers) {
+      const id = Number(c.id);
+      if (!Number.isInteger(id) || id <= 0) continue;
+
+      lookup.set(id, {
+        name: c.name,
+        phone_number: c.phone_number,
+        phone_number_country_code: c.phone_number_country_code,
+        created_at: c.created_at,
+        available_point: c.available_point,
+        owner_location: c.owner_location
+          ? { name: c.owner_location.name }
+          : null,
+      });
+    }
+
+    hasMore = data.paging?.next_page != null;
+    page++;
+  }
+
+  return lookup;
+}
+
 async function syncSalesTransactionReportsForLocation(targetLocationId, options = {}) {
   const params = buildSalesTransactionParams({
     locationId: targetLocationId,
@@ -1284,13 +1342,10 @@ async function syncSalesTransactionReportsForLocation(targetLocationId, options 
     status: options.status,
     paymentMethodIds: options.paymentMethodIds ?? options.payment_method_ids,
   });
-  const [salesTransactions, runchiseCustomers] = await Promise.all([
+  const [salesTransactions, runchiseCustomerById] = await Promise.all([
     fetchAllSalesTransactions(params),
-    fetchAllCustomers(targetLocationId),
+    fetchRunchiseCustomerLookupForLocation(targetLocationId),
   ]);
-  const runchiseCustomerById = new Map(
-    runchiseCustomers.map((customer) => [Number(customer.id), customer]),
-  );
   const runchiseCustomerIds = Array.from(
     new Set(
       salesTransactions
@@ -1771,7 +1826,19 @@ function mapRunchisePromoToLocalData(promo, context, now) {
       status === 'active' &&
       isCustomerPromoChannel(promo.channel),
     start_at: parseRunchiseDate(promo.start_date, false),
-    raw: promo,
+    // M-9: raw promo (blob JSON penuh dari Runchise) TIDAK disimpan lagi.
+    // Diverifikasi lewat grep menyeluruh: tidak ada satu kode pun (backend
+    // atau frontend) yang pernah membaca kolom ini kembali -- mapPromo() di
+    // promoRoutes.js bahkan sudah memfilternya keluar dari respons API sejak
+    // awal. Berbeda dengan raw sale (CustomerSalesTransactionReport), yang
+    // memang masih dipakai runchisePosRewardRedemptionService.js untuk
+    // mengekstrak detail redeem POS, sehingga TIDAK disentuh oleh perbaikan
+    // ini. Kolom raw di skema Promo sengaja tidak dihapus (bukan migration).
+    // upsertPromoChunk() memakai objek ini utuh sebagai `update`, jadi nilai
+    // null di sini otomatis MEMBERSIHKAN blob lama juga begitu promo
+    // tersebut ikut ter-sync ulang (cron promo berjalan harian) -- bukan
+    // cuma mencegah pertumbuhan baru.
+    raw: null,
   };
 }
 
@@ -1883,6 +1950,7 @@ module.exports = {
   syncBrands,
   syncLocations,
   ensureLocalLocationRunchiseMapping,
+  fetchRunchiseCustomerLookupForLocation,
   getCrisbarPromoEvidence,
   loadCrisbarPromoContext,
   mapRunchisePromoToLocalData,

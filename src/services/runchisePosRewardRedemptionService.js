@@ -107,6 +107,24 @@ function extractRewardRedemptions(report, managedByProductId = new Map()) {
   };
 }
 
+// M-9: satu halaman report per iterasi (default 200). Versi lama memuat
+// SELURUH CustomerSalesTransactionReport yang cocok filter sekaligus lewat
+// satu findMany tanpa batas -- termasuk kolom `raw` (blob JSON penuh sale
+// Runchise) per baris, yang memang dibutuhkan fungsi ini (lihat
+// extractRewardRedemptions/unwrapSale) sehingga TIDAK bisa disederhanakan
+// jadi subset field seperti raw promo. Untuk backfill historis (script CLI
+// tanpa filter tanggal) itu berarti ribuan blob JSON penuh menumpuk di
+// memori sebelum satu baris pun diproses. Sekarang dipaginasi cursor-based
+// (urut oleh id), sehingga jumlah report yang ada di memori pada satu waktu
+// selalu terbatas ke satu halaman.
+const REPORT_PAGE_SIZE = 200;
+
+// M-9: versi lama memanggil `await prisma.$transaction(writes)` di DALAM
+// loop per-report -- satu transaksi database terpisah untuk SETIAP baris
+// report (N transaksi untuk N report). Sekarang seluruh write untuk SATU
+// HALAMAN report (sampai 200 x deleteMany+upsert) digabung jadi SATU
+// transaksi, memangkas jumlah transaksi dari N menjadi kira-kira N/200
+// tanpa pernah menumpuk lebih dari satu halaman report jadi write pending.
 async function syncRunchisePosRewardRedemptions({
   locationId,
   startDate,
@@ -124,19 +142,18 @@ async function syncRunchisePosRewardRedemptions({
         }
       : {}),
   };
-  const [reports, managedRewards] = await Promise.all([
-    prisma.customerSalesTransactionReport.findMany({ where }),
-    prisma.redeemMenuItem.findMany({
-      include: { menu_item: { select: { runchise_id: true, name: true } } },
-    }),
-  ]);
+
+  const managedRewards = await prisma.redeemMenuItem.findMany({
+    include: { menu_item: { select: { runchise_id: true, name: true } } },
+  });
   const managedByProductId = new Map(
     managedRewards
       .filter((item) => item.menu_item.runchise_id !== null)
       .map((item) => [item.menu_item.runchise_id, item]),
   );
+
   const summary = {
-    transactions_scanned: reports.length,
+    transactions_scanned: 0,
     transactions_valid: 0,
     transactions_point_mismatch: 0,
     transactions_no_candidate: 0,
@@ -144,39 +161,69 @@ async function syncRunchisePosRewardRedemptions({
     managed_rows: 0,
   };
 
-  for (const report of reports) {
-    const extracted = extractRewardRedemptions(report, managedByProductId);
-    const saleTransactionId = Number(report.runchise_sales_transaction_id);
-    const detailIds = extracted.rows.map((item) => item.sale_detail_transaction_id);
-    const writes = [
-      prisma.runchisePosRewardRedemption.deleteMany({
-        where: {
-          sale_transaction_id: saleTransactionId,
-          ...(detailIds.length > 0
-            ? { sale_detail_transaction_id: { notIn: detailIds } }
-            : {}),
-        },
-      }),
-      ...extracted.rows.map((row) =>
-        prisma.runchisePosRewardRedemption.upsert({
+  let cursorId = undefined;
+  let hasMore = true;
+
+  while (hasMore) {
+    const reports = await prisma.customerSalesTransactionReport.findMany({
+      where,
+      orderBy: { id: 'asc' },
+      take: REPORT_PAGE_SIZE,
+      ...(cursorId !== undefined
+        ? { skip: 1, cursor: { id: cursorId } }
+        : {}),
+    });
+
+    if (reports.length === 0) break;
+
+    const writes = [];
+
+    for (const report of reports) {
+      const extracted = extractRewardRedemptions(report, managedByProductId);
+      const saleTransactionId = Number(report.runchise_sales_transaction_id);
+      const detailIds = extracted.rows.map(
+        (item) => item.sale_detail_transaction_id,
+      );
+
+      writes.push(
+        prisma.runchisePosRewardRedemption.deleteMany({
           where: {
-            sale_transaction_id_sale_detail_transaction_id: {
-              sale_transaction_id: row.sale_transaction_id,
-              sale_detail_transaction_id: row.sale_detail_transaction_id,
-            },
+            sale_transaction_id: saleTransactionId,
+            ...(detailIds.length > 0
+              ? { sale_detail_transaction_id: { notIn: detailIds } }
+              : {}),
           },
-          create: row,
-          update: row,
         }),
-      ),
-    ];
+      );
+      for (const row of extracted.rows) {
+        writes.push(
+          prisma.runchisePosRewardRedemption.upsert({
+            where: {
+              sale_transaction_id_sale_detail_transaction_id: {
+                sale_transaction_id: row.sale_transaction_id,
+                sale_detail_transaction_id: row.sale_detail_transaction_id,
+              },
+            },
+            create: row,
+            update: row,
+          }),
+        );
+      }
+
+      summary.transactions_scanned += 1;
+      summary.redemption_rows += extracted.rows.length;
+      summary.managed_rows += extracted.rows.filter(
+        (item) => item.is_managed_reward,
+      ).length;
+      if (extracted.valid) summary.transactions_valid += 1;
+      else if (extracted.rows.length === 0) summary.transactions_no_candidate += 1;
+      else summary.transactions_point_mismatch += 1;
+    }
+
     await prisma.$transaction(writes);
 
-    summary.redemption_rows += extracted.rows.length;
-    summary.managed_rows += extracted.rows.filter((item) => item.is_managed_reward).length;
-    if (extracted.valid) summary.transactions_valid += 1;
-    else if (extracted.rows.length === 0) summary.transactions_no_candidate += 1;
-    else summary.transactions_point_mismatch += 1;
+    cursorId = reports[reports.length - 1].id;
+    hasMore = reports.length === REPORT_PAGE_SIZE;
   }
 
   return summary;
