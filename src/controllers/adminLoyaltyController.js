@@ -777,7 +777,8 @@ async function updateAdminUser(req, res) {
 
     if (transactionResult.conflict || !user) {
       return res.status(409).json({
-        message: 'Target berubah saat diproses; silakan muat ulang dan coba lagi',
+        message:
+          'Target berubah saat diproses; silakan muat ulang dan coba lagi',
       });
     }
 
@@ -1800,9 +1801,13 @@ async function listAdminLocations(req, res) {
 async function getSummary(req, res) {
   try {
     const redemptionHistoryPage =
-      parsePositiveInt(req.query.redemption_history_page, 'redemption_history_page', {
-        required: false,
-      }) ?? 1;
+      parsePositiveInt(
+        req.query.redemption_history_page,
+        'redemption_history_page',
+        {
+          required: false,
+        },
+      ) ?? 1;
     const requestedHistoryLimit =
       parsePositiveInt(
         req.query.redemption_history_limit,
@@ -2644,30 +2649,143 @@ async function listRedemptions(req, res) {
   }
 }
 
+// M-5: Perubahan status redemption kini mengikuti state machine tervalidasi dengan penyesuaian poin yang sesuai serta menjaga riwayat klaim untuk menjamin integritas data dan audit.
+const REDEMPTION_STATUS_TRANSITIONS = {
+  pending: ['claimed', 'expired'],
+  claimed: ['expired'],
+  expired: [],
+};
+
 async function updateRedemptionStatus(req, res) {
   try {
     const id = parsePositiveInt(req.params.id, 'id');
-    const status = parseRequiredString(req.body.status, 'status', 30);
-    const allowed = new Set(['pending', 'claimed', 'expired']);
+    const nextStatus = parseRequiredString(req.body.status, 'status', 30);
+    const allowedStatuses = new Set(['pending', 'claimed', 'expired']);
 
-    if (!allowed.has(status)) {
+    if (!allowedStatuses.has(nextStatus)) {
       return badRequest(res, 'status tidak valid');
     }
 
-    const redemption = await prisma.rewardRedemption.update({
-      where: { id },
-      data: {
-        status,
-        redeemed_at: status === 'claimed' ? new Date() : null,
-      },
-      include: {
-        reward: { select: { id: true, name: true } },
-        customer: { select: { id: true, name: true, phone_number: true } },
-      },
+    const redemption = await prisma.$transaction(async (tx) => {
+      // Mengunci data selama transaksi agar permintaan bersamaan tidak memproses redemption yang sama dan menyebabkan poin terpotong dua kali.
+      const [current] = await tx.$queryRaw`
+        SELECT * FROM "RewardRedemption" WHERE id = ${id} FOR UPDATE
+      `;
+
+      if (!current) {
+        throw Object.assign(new Error('Redemption tidak ditemukan'), {
+          code: 'P2025',
+        });
+      }
+
+      if (current.status === nextStatus) {
+        throw Object.assign(
+          new Error(`Redemption sudah berstatus ${nextStatus}`),
+          { code: 'INVALID_TRANSITION' },
+        );
+      }
+
+      const allowedNext = REDEMPTION_STATUS_TRANSITIONS[current.status] ?? [];
+      if (!allowedNext.includes(nextStatus)) {
+        throw Object.assign(
+          new Error(
+            `Transisi status ${current.status} -> ${nextStatus} tidak diizinkan`,
+          ),
+          { code: 'INVALID_TRANSITION' },
+        );
+      }
+
+      const pointsSpent = Number(current.points_spent) || 0;
+      const customerId = Number(current.customer_id);
+
+      if (current.status === 'pending' && nextStatus === 'claimed') {
+        const point = await tx.customerPoint.findUnique({
+          where: { customer_id: customerId },
+        });
+        const availablePoint = point?.available_point ?? 0;
+
+        if (availablePoint < pointsSpent) {
+          throw Object.assign(
+            new Error(
+              `Poin customer tidak cukup untuk klaim (tersedia ${availablePoint}, dibutuhkan ${pointsSpent})`,
+            ),
+            { code: 'INSUFFICIENT_POINTS' },
+          );
+        }
+
+        await tx.customerPoint.update({
+          where: { customer_id: customerId },
+          data: { available_point: { decrement: pointsSpent } },
+        });
+
+        await tx.pointHistory.create({
+          data: {
+            customer_id: customerId,
+            reward_redemption_id: id,
+            points_change: -pointsSpent,
+            type: 'redeem',
+            description: `Klaim reward redemption #${id}`,
+          },
+        });
+      }
+
+      if (current.status === 'claimed' && nextStatus === 'expired') {
+        await tx.customerPoint.upsert({
+          where: { customer_id: customerId },
+          update: { available_point: { increment: pointsSpent } },
+          create: {
+            customer_id: customerId,
+            total_point: pointsSpent,
+            available_point: pointsSpent,
+            next_reward_threshold: getDefaultRewardThreshold(),
+          },
+        });
+
+        await tx.pointHistory.create({
+          data: {
+            customer_id: customerId,
+            reward_redemption_id: id,
+            points_change: pointsSpent,
+            type: 'redeem_refund',
+            description: `Klaim reward redemption #${id} dibatalkan, poin dikembalikan`,
+          },
+        });
+      }
+
+      return tx.rewardRedemption.update({
+        where: { id },
+        data: {
+          status: nextStatus,
+          // redeemed_at hanya diisi saat pertama kali claimed dan dipertahankan pada transisi berikutnya agar riwayat klaim tetap tercatat.
+          redeemed_at:
+            current.status === 'pending' && nextStatus === 'claimed'
+              ? new Date()
+              : current.redeemed_at,
+        },
+        include: {
+          reward: { select: { id: true, name: true } },
+          customer: { select: { id: true, name: true, phone_number: true } },
+        },
+      });
+    });
+
+    await recordAdminActivity({
+      req,
+      action: 'update_redemption_status',
+      entityType: 'reward_redemption',
+      entityId: id,
+      after: redemption,
+      metadata: { new_status: nextStatus },
     });
 
     res.json(redemption);
   } catch (error) {
+    if (
+      error.code === 'INVALID_TRANSITION' ||
+      error.code === 'INSUFFICIENT_POINTS'
+    ) {
+      return badRequest(res, error.message);
+    }
     handleError(res, error);
   }
 }
