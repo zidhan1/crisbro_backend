@@ -115,11 +115,18 @@ async function runSyncSalesTransactionReportsJob() {
   }
 
   salesRunning = true;
-  const { locationId } = getSyncConfig();
 
   try {
     console.log('[runchise-sync:sales] started');
-    const result = await syncSalesTransactionReports(locationId);
+    // Tanpa locationId eksplisit, service mengambil dan mengiterasi seluruh
+    // outlet Runchise. RUNCHISE_SYNC_LOCATION_ID hanya menjadi fallback bila
+    // daftar lokasi dari API tidak tersedia, bukan pembatas coverage cron.
+    const result = await syncSalesTransactionReports();
+    if (result.locations_failed > 0) {
+      console.warn(
+        `[runchise-sync:sales] completed with ${result.locations_failed}/${result.locations_total} outlet failed`,
+      );
+    }
     console.log('[runchise-sync:sales] finished', result);
     return result;
   } finally {

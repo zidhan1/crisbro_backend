@@ -1,5 +1,6 @@
 // Mengimpor Prisma untuk akses database lokal
 const prisma = require('../lib/prisma');
+const { syncSalesAcrossLocations } = require('../lib/salesTransactionSyncCoverage');
 
 // Prisma.sql/Prisma.join dipakai untuk menyusun bulk upsert yang aman parameter
 const { Prisma } = require('@prisma/client');
@@ -1271,23 +1272,7 @@ function mapSalesTransactionReportData(
   };
 }
 
-async function syncSalesTransactionReports(locationId = null, options = {}) {
-  const targetLocationId = parseRunchiseId(locationId);
-
-  // source_location_id ikut menyusun identitas unik baris laporan, sehingga
-  // outlet sumber wajib diketahui. Tanpa itu Number(null) akan tersimpan
-  // sebagai 0 dan menimpa transaksi outlet lain di composite key yang sama.
-  if (!targetLocationId) {
-    return {
-      skipped: true,
-      reason:
-        'RUNCHISE_SYNC_LOCATION_ID belum diisi dengan ID outlet Runchise yang valid',
-      synced: 0,
-      skipped_rows: 0,
-      total: 0,
-    };
-  }
-
+async function syncSalesTransactionReportsForLocation(targetLocationId, options = {}) {
   const params = buildSalesTransactionParams({
     locationId: targetLocationId,
     startDate: options.startDate ?? options.start_date ?? options.from,
@@ -1383,12 +1368,35 @@ async function syncSalesTransactionReports(locationId = null, options = {}) {
   }
 
   return {
+    location_id: targetLocationId,
     synced,
     total: salesTransactions.length,
     skipped,
     skipped_zero_points: skippedZeroPoints,
     deleted_zero_points: deletedZeroPoints,
   };
+}
+
+// Tanpa locationId, sinkronisasi terjadwal wajib mencakup seluruh outlet yang
+// tersedia dari Runchise. locationId eksplisit tetap didukung untuk operasi
+// manual/diagnostik satu outlet.
+async function syncSalesTransactionReports(locationId = null, options = {}) {
+  const targetLocationId = parseRunchiseId(locationId);
+  const hasExplicitLocationId =
+    locationId !== null && locationId !== undefined && locationId !== '';
+
+  if (hasExplicitLocationId && !targetLocationId) {
+    throw new Error('locationId harus berupa ID outlet Runchise yang valid');
+  }
+
+  const locationIds = targetLocationId
+    ? [targetLocationId]
+    : await getRunchiseSyncLocationIds();
+  return syncSalesAcrossLocations({
+    locationIds,
+    syncLocation: (outletId) =>
+      syncSalesTransactionReportsForLocation(outletId, options),
+  });
 }
 
 function isCustomerPromoChannel(channel) {
