@@ -914,7 +914,9 @@ async function listAdminCustomers(req, res) {
           include: getAdminCustomerInclude(),
         })
       : [];
-    const customerById = new Map(customers.map((customer) => [customer.id, customer]));
+    const customerById = new Map(
+      customers.map((customer) => [customer.id, customer]),
+    );
 
     const items = customerIds.map((customerId) => {
       const customer = customerById.get(customerId);
@@ -932,8 +934,10 @@ async function listAdminCustomers(req, res) {
           available_point: 0,
           next_reward_threshold: DEFAULT_REWARD_THRESHOLD,
         },
-        created_at: customer?.runchise_created_at ?? customer?.created_at ?? null,
-        updated_at: customer?.runchise_updated_at ?? customer?.updated_at ?? null,
+        created_at:
+          customer?.runchise_created_at ?? customer?.created_at ?? null,
+        updated_at:
+          customer?.runchise_updated_at ?? customer?.updated_at ?? null,
         date_source: hasRunchiseDate ? 'runchise_sync' : 'local',
       };
     });
@@ -965,14 +969,7 @@ async function createAdminCustomer(req, res) {
       req.body.owner_location_id,
       'owner_location_id',
     );
-    const total_point = parseNonNegativeInt(
-      req.body.total_point ?? 0,
-      'total_point',
-    );
-    const available_point = parseNonNegativeInt(
-      req.body.available_point ?? total_point,
-      'available_point',
-    );
+    // H-1: Saldo poin tidak dapat diubah melalui endpoint ini dan hanya dikelola melalui mekanisme khusus yang tervalidasi serta tercatat untuk menjaga integritas data.
     const locationIds = parseLocationIds(
       req.body.location_ids,
       owner_location_id,
@@ -1025,15 +1022,15 @@ async function createAdminCustomer(req, res) {
           dob: parseOptionalDate(req.body.dob, 'dob'),
           gender: parseCustomerGender(req.body.gender),
           status: parseCustomerStatus(req.body.status),
-          balance: parseOptionalNumber(req.body.balance ?? 0, 'balance') ?? 0,
+          balance: 0,
           brand_id,
           owner_location_id,
           created_by_id: req.user.id,
           last_updated_by_id: req.user.id,
           customer_point: {
             create: {
-              total_point,
-              available_point,
+              total_point: 0,
+              available_point: 0,
               next_reward_threshold: getDefaultRewardThreshold(),
             },
           },
@@ -1199,7 +1196,8 @@ async function listCustomerSalesTransactionReports(req, res) {
       : [];
     const rewardsByTransactionId = new Map();
     for (const reward of rewardRedemptions) {
-      const items = rewardsByTransactionId.get(reward.sale_transaction_id) ?? [];
+      const items =
+        rewardsByTransactionId.get(reward.sale_transaction_id) ?? [];
       items.push({
         id: reward.id.toString(),
         runchise_product_id: reward.runchise_product_id,
@@ -1216,7 +1214,8 @@ async function listCustomerSalesTransactionReports(req, res) {
       items: reports.map((report) => ({
         ...report,
         redeemed_rewards:
-          rewardsByTransactionId.get(report.runchise_sales_transaction_id) ?? [],
+          rewardsByTransactionId.get(report.runchise_sales_transaction_id) ??
+          [],
         import_run_id:
           report.import_run_id === null || report.import_run_id === undefined
             ? null
@@ -1239,7 +1238,6 @@ async function updateAdminCustomer(req, res) {
     const beforeCustomer = await getCustomerAuditSnapshot(id);
     const data = {};
     const userData = {};
-    const pointData = {};
 
     if (req.body.name !== undefined)
       data.name = parseRequiredString(req.body.name, 'name', 120);
@@ -1275,26 +1273,43 @@ async function updateAdminCustomer(req, res) {
       data.gender = parseCustomerGender(req.body.gender);
     if (req.body.status !== undefined)
       data.status = parseCustomerStatus(req.body.status);
-    if (req.body.balance !== undefined)
-      data.balance = parseOptionalNumber(req.body.balance, 'balance') ?? 0;
+    // H-1: Field saldo poin diabaikan pada endpoint ini agar perubahan hanya dapat dilakukan melalui mekanisme khusus yang tervalidasi dan tercatat, tanpa mengganggu pembaruan profil biasa.
+    const blockedLoyaltyMutationAttempt = {};
+    if (
+      req.body.balance !== undefined &&
+      Number(req.body.balance) !== Number(beforeCustomer?.balance ?? 0)
+    ) {
+      blockedLoyaltyMutationAttempt.balance = {
+        attempted: req.body.balance,
+        kept: beforeCustomer?.balance ?? 0,
+      };
+    }
+    if (
+      req.body.total_point !== undefined &&
+      Number(req.body.total_point) !==
+        Number(beforeCustomer?.customer_point?.total_point ?? 0)
+    ) {
+      blockedLoyaltyMutationAttempt.total_point = {
+        attempted: req.body.total_point,
+        kept: beforeCustomer?.customer_point?.total_point ?? 0,
+      };
+    }
+    if (
+      req.body.available_point !== undefined &&
+      Number(req.body.available_point) !==
+        Number(beforeCustomer?.customer_point?.available_point ?? 0)
+    ) {
+      blockedLoyaltyMutationAttempt.available_point = {
+        attempted: req.body.available_point,
+        kept: beforeCustomer?.customer_point?.available_point ?? 0,
+      };
+    }
     if (req.body.brand_id !== undefined)
       data.brand_id = parsePositiveInt(req.body.brand_id, 'brand_id');
     if (req.body.owner_location_id !== undefined) {
       data.owner_location_id = parsePositiveInt(
         req.body.owner_location_id,
         'owner_location_id',
-      );
-    }
-    if (req.body.total_point !== undefined) {
-      pointData.total_point = parseNonNegativeInt(
-        req.body.total_point,
-        'total_point',
-      );
-    }
-    if (req.body.available_point !== undefined) {
-      pointData.available_point = parseNonNegativeInt(
-        req.body.available_point,
-        'available_point',
       );
     }
     data.last_updated_by_id = req.user.id;
@@ -1347,19 +1362,6 @@ async function updateAdminCustomer(req, res) {
         }
       }
 
-      if (Object.keys(pointData).length > 0) {
-        await tx.customerPoint.upsert({
-          where: { customer_id: id },
-          update: pointData,
-          create: {
-            customer_id: id,
-            total_point: pointData.total_point ?? 0,
-            available_point: pointData.available_point ?? 0,
-            next_reward_threshold: getDefaultRewardThreshold(),
-          },
-        });
-      }
-
       if (
         req.body.location_ids !== undefined ||
         data.owner_location_id !== undefined
@@ -1398,9 +1400,15 @@ async function updateAdminCustomer(req, res) {
       after: customer,
       customerFields: Object.keys(data),
       userFields: Object.keys(userData),
-      pointFields: Object.keys(pointData),
       locationIdsTouched: req.body.location_ids !== undefined,
     });
+
+    if (Object.keys(blockedLoyaltyMutationAttempt).length > 0) {
+      console.warn(
+        `[admin-loyalty] blocked point/balance mutation attempt via profile update: customer_id=${id}, actor_user_id=${req.user.id}, actor_role=${req.user.role}`,
+        blockedLoyaltyMutationAttempt,
+      );
+    }
 
     const runchiseSync = await syncCustomerToRunchise(customer.id);
     const syncedCustomer = await prisma.customer.findUnique({
@@ -1432,6 +1440,9 @@ async function updateAdminCustomer(req, res) {
         changed_fields: changedFields,
         runchise_sync: runchiseSync,
         activation_email: activationEmail,
+        ...(Object.keys(blockedLoyaltyMutationAttempt).length > 0 && {
+          blocked_loyalty_mutation_attempt: blockedLoyaltyMutationAttempt,
+        }),
       },
     });
 
@@ -1440,6 +1451,128 @@ async function updateAdminCustomer(req, res) {
       runchise_sync: runchiseSync,
       activation_email: activationEmail,
     });
+  } catch (error) {
+    handleError(res, error);
+  }
+}
+
+// H-1: Perubahan saldo poin hanya dapat dilakukan melalui endpoint khusus admin yang tervalidasi, mewajibkan alasan, menjaga konsistensi data, dan mencatat seluruh riwayat perubahan.
+async function adjustCustomerLoyalty(req, res) {
+  try {
+    const id = parsePositiveInt(req.params.id, 'id');
+    const reason = parseRequiredString(req.body.reason, 'reason', 500);
+
+    const hasTotalPoint = req.body.total_point !== undefined;
+    const hasAvailablePoint = req.body.available_point !== undefined;
+    const hasBalance = req.body.balance !== undefined;
+
+    if (!hasTotalPoint && !hasAvailablePoint && !hasBalance) {
+      return badRequest(
+        res,
+        'Isi minimal salah satu dari total_point, available_point, atau balance',
+      );
+    }
+
+    const nextTotalPoint = hasTotalPoint
+      ? parseNonNegativeInt(req.body.total_point, 'total_point')
+      : undefined;
+    const nextAvailablePoint = hasAvailablePoint
+      ? parseNonNegativeInt(req.body.available_point, 'available_point')
+      : undefined;
+    const nextBalance = hasBalance
+      ? (parseOptionalNumber(req.body.balance, 'balance') ?? 0)
+      : undefined;
+
+    const beforeCustomer = await getCustomerAuditSnapshot(id);
+    if (!beforeCustomer) {
+      return res.status(404).json({ message: 'Customer tidak ditemukan' });
+    }
+
+    const currentTotalPoint = beforeCustomer.customer_point?.total_point ?? 0;
+    const currentAvailablePoint =
+      beforeCustomer.customer_point?.available_point ?? 0;
+
+    // Validasi menggunakan nilai akhir setelah seluruh perubahan diterapkan agar setiap pembaruan tetap menjaga konsistensi saldo poin.
+    const effectiveTotalPoint = nextTotalPoint ?? currentTotalPoint;
+    const effectiveAvailablePoint = nextAvailablePoint ?? currentAvailablePoint;
+
+    if (effectiveAvailablePoint > effectiveTotalPoint) {
+      return badRequest(
+        res,
+        'available_point tidak boleh melebihi total_point',
+      );
+    }
+
+    const pointsChange = effectiveAvailablePoint - currentAvailablePoint;
+
+    const customer = await prisma.$transaction(async (tx) => {
+      if (hasTotalPoint || hasAvailablePoint) {
+        await tx.customerPoint.upsert({
+          where: { customer_id: id },
+          update: {
+            ...(hasTotalPoint && { total_point: nextTotalPoint }),
+            ...(hasAvailablePoint && { available_point: nextAvailablePoint }),
+          },
+          create: {
+            customer_id: id,
+            total_point: effectiveTotalPoint,
+            available_point: effectiveAvailablePoint,
+            next_reward_threshold: getDefaultRewardThreshold(),
+          },
+        });
+      }
+
+      if (hasBalance) {
+        await tx.customer.update({
+          where: { id },
+          data: { balance: nextBalance, last_updated_by_id: req.user.id },
+        });
+      }
+      // Mencatat setiap penyesuaian poin sebagai transaksi terpisah agar riwayat koreksi manual tetap terlacak dan dapat dibedakan dari transaksi POS.
+      if (pointsChange !== 0) {
+        await tx.pointHistory.create({
+          data: {
+            customer_id: id,
+            points_change: pointsChange,
+            type: 'admin_adjustment',
+            description: reason,
+          },
+        });
+      }
+
+      return tx.customer.findUnique({
+        where: { id },
+        include: getAdminCustomerInclude(),
+      });
+    });
+
+    await recordAdminActivity({
+      req,
+      action: 'adjust_customer_loyalty',
+      entityType: 'customer',
+      entityId: id,
+      before: beforeCustomer,
+      after: customer,
+      metadata: {
+        reason,
+        changes: {
+          ...(hasTotalPoint && {
+            total_point: { before: currentTotalPoint, after: nextTotalPoint },
+          }),
+          ...(hasAvailablePoint && {
+            available_point: {
+              before: currentAvailablePoint,
+              after: nextAvailablePoint,
+            },
+          }),
+          ...(hasBalance && {
+            balance: { before: beforeCustomer.balance, after: nextBalance },
+          }),
+        },
+      },
+    });
+
+    res.json(customer);
   } catch (error) {
     handleError(res, error);
   }
@@ -1638,14 +1771,7 @@ async function getSummary(req, res) {
       salesPointUsageByOutlet,
     ] = await Promise.all([
       prisma.customer.count(),
-      // "Member aktif" berarti akun aplikasinya sudah diaktivasi, bukan status
-      // customer di POS. Customer.status disalin dari Runchise dan default-nya
-      // 'active', sehingga metrik lama selalu sama dengan total member.
-      //
-      // Kondisi di bawah adalah negasi tepat dari isSyncedPlaceholderUser di
-      // authController, yaitu definisi yang dipakai aplikasi untuk memblokir
-      // login. password_hash ikut diperiksa karena kolom activation_status
-      // punya default 'active' di schema.
+      // Member aktif dihitung berdasarkan status aktivasi akun aplikasi, bukan status customer di POS, agar metrik sesuai dengan kemampuan login pengguna.
       prisma.customer.count({
         where: {
           user: {
@@ -1695,7 +1821,10 @@ async function getSummary(req, res) {
         where: posRedemptionWhere,
         include: {
           redeem_menu_item: {
-            select: { id: true, menu_item: { select: { id: true, name: true } } },
+            select: {
+              id: true,
+              menu_item: { select: { id: true, name: true } },
+            },
           },
         },
         orderBy: { redeemed_at: 'desc' },
@@ -1769,18 +1898,19 @@ async function getSummary(req, res) {
     const outletIds = activatedCustomersByOutlet
       .map((item) => item.owner_location_id)
       .filter(Boolean);
-    const redemptionLocationIds = redemptionsByOutlet.map((item) => item.location_id);
-    const [outlets, redemptionLocations] =
-      await Promise.all([
-        prisma.location.findMany({
-          where: { id: { in: outletIds } },
-          select: { id: true, name: true, city: true },
-        }),
-        prisma.location.findMany({
-          where: { runchise_id: { in: redemptionLocationIds } },
-          select: { id: true, runchise_id: true, name: true, city: true },
-        }),
-      ]);
+    const redemptionLocationIds = redemptionsByOutlet.map(
+      (item) => item.location_id,
+    );
+    const [outlets, redemptionLocations] = await Promise.all([
+      prisma.location.findMany({
+        where: { id: { in: outletIds } },
+        select: { id: true, name: true, city: true },
+      }),
+      prisma.location.findMany({
+        where: { runchise_id: { in: redemptionLocationIds } },
+        select: { id: true, runchise_id: true, name: true, city: true },
+      }),
+    ]);
     const outletById = new Map(outlets.map((outlet) => [outlet.id, outlet]));
     const redemptionLocationByRunchiseId = new Map(
       redemptionLocations.map((location) => [location.runchise_id, location]),
@@ -1793,7 +1923,8 @@ async function getSummary(req, res) {
       const current = outletRedemptionById.get(redemption.location_id) ?? {
         outlet_id: outlet?.id ?? null,
         runchise_location_id: redemption.location_id,
-        outlet_name: redemption.location_name ?? outlet?.name ?? 'Outlet tidak diketahui',
+        outlet_name:
+          redemption.location_name ?? outlet?.name ?? 'Outlet tidak diketahui',
         city: outlet?.city ?? null,
         redemption_count: 0,
         redeemed_quantity: 0,
@@ -1836,7 +1967,8 @@ async function getSummary(req, res) {
           ? 'mismatch'
           : isCapped
             ? 'capped'
-            : outlet.import_status ?? (outlet.stored_customers > 0 ? 'available' : 'empty'),
+            : (outlet.import_status ??
+              (outlet.stored_customers > 0 ? 'available' : 'empty')),
       };
     });
 
@@ -1928,11 +2060,13 @@ async function getSummary(req, res) {
         points_spent: redemption.points_spent,
         menu_price: Number(redemption.selling_price),
         outlet_id:
-          redemptionLocationByRunchiseId.get(redemption.location_id)?.id ?? null,
+          redemptionLocationByRunchiseId.get(redemption.location_id)?.id ??
+          null,
         runchise_location_id: redemption.location_id,
         outlet_name: redemption.location_name ?? 'Outlet tidak diketahui',
         outlet_city:
-          redemptionLocationByRunchiseId.get(redemption.location_id)?.city ?? null,
+          redemptionLocationByRunchiseId.get(redemption.location_id)?.city ??
+          null,
         redeemed_at: redemption.redeemed_at,
       })),
     });
@@ -2468,6 +2602,7 @@ module.exports = {
   listCustomerSalesTransactionReports,
   createAdminCustomer,
   updateAdminCustomer,
+  adjustCustomerLoyalty,
   resendCustomerActivation,
   retryCustomerRunchiseSync,
   deleteAdminCustomer,
