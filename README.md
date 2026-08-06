@@ -214,13 +214,40 @@
 
   ## Cron Sync
 
-  Endpoint cron tersedia untuk menjalankan sinkronisasi otomatis.
+  Endpoint cron tersedia untuk menjalankan sinkronisasi otomatis. Setiap
+  tahap punya endpoint, jadwal, dan mutex sendiri (lihat vercel.json) supaya
+  timeout atau error pada satu tahap tidak menghanguskan tahap lain:
 
-  GET  /api/cron/runchise-sync/master
-  POST /api/cron/runchise-sync/master
+  GET  /api/cron/runchise-sync/locations
+  POST /api/cron/runchise-sync/locations
+
+  GET  /api/cron/runchise-sync/brands
+  POST /api/cron/runchise-sync/brands
+
+  GET  /api/cron/runchise-sync/products
+  POST /api/cron/runchise-sync/products
+
+  GET  /api/cron/runchise-sync/customers
+  POST /api/cron/runchise-sync/customers
+  (worker berbasis cursor; satu invocation memproses beberapa halaman lalu
+  menyimpan progres, aman dipanggil berkali-kali per hari)
+
+  GET  /api/cron/runchise-sync/sales-transactions
+  POST /api/cron/runchise-sync/sales-transactions
+
+  GET  /api/cron/runchise-sync/promos
+  POST /api/cron/runchise-sync/promos
 
   GET  /api/cron/runchise-sync/points
   POST /api/cron/runchise-sync/points
+
+  GET  /api/cron/runchise-sync/customer-timestamps-worker
+  POST /api/cron/runchise-sync/customer-timestamps-worker
+
+  /api/cron/runchise-sync/master sudah dihapus (mengembalikan 410 Gone).
+  Endpoint itu dulu merangkai keenam tahap di atas berurutan dalam satu
+  request, yang melebihi batas eksekusi function Vercel pada sinkronisasi
+  harian.
 
   Di production, endpoint cron dilindungi menggunakan CRON_SECRET.
 

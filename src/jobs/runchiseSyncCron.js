@@ -8,21 +8,35 @@ const {
   syncLocations,
   syncPromos,
 } = require('../services/syncService');
+const {
+  createCustomerImportSyncJob,
+  processCustomerImportSyncJob,
+} = require('../services/customerImportSyncService');
 
-const DEFAULT_MASTER_CRON = '0 12,18 * * *';
-const DEFAULT_POINTS_CRON = '*/30 * * * *';
+// C-1: Memecah master sync menjadi job terpisah dengan cron, mutex, checkpoint, dan worker berbasis cursor agar setiap tahap berjalan independen serta mencegah timeout Vercel menghentikan seluruh proses sinkronisasi.
+const DEFAULT_LOCATIONS_CRON = '0 12 * * *';
+const DEFAULT_BRANDS_CRON = '5 12 * * *';
+const DEFAULT_PRODUCTS_CRON = '10 12 * * *';
+const DEFAULT_CUSTOMERS_IMPORT_CRON = '15,45 12 * * *';
+const DEFAULT_SALES_CRON = '20 12 * * *';
+const DEFAULT_PROMOS_CRON = '25 12 * * *';
+const DEFAULT_POINTS_CRON = '30 12 * * *';
+
 let started = false;
-let masterRunning = false;
-let customersRunning = false;
+let locationsRunning = false;
+let brandsRunning = false;
+let productsRunning = false;
+let customersRunning = false; // syncCustomers penuh: dipakai CLI/manual saja, tidak dijadwalkan.
+let customerImportRunning = false; // worker berbasis cursor: ini yang dijadwalkan.
+let salesRunning = false;
+let promosRunning = false;
 let pointsRunning = false;
 
 function getSyncConfig() {
   const rawLocationId = Number(process.env.RUNCHISE_SYNC_LOCATION_ID);
 
   return {
-    // Tanpa fallback angka. Outlet Crisbar di Runchise memakai ID 4424-9854 dan
-    // tidak ada outlet ID 1, sehingga default lama membuat sync menunjuk lokasi
-    // milik brand lain: request gagal, atau sukses dengan nol baris.
+    // Menghapus fallback ID numerik agar sinkronisasi selalu menggunakan outlet ID yang valid dan tidak salah mengarah ke lokasi brand lain.
     locationId:
       Number.isInteger(rawLocationId) && rawLocationId > 0
         ? rawLocationId
@@ -31,41 +45,113 @@ function getSyncConfig() {
   };
 }
 
-async function runRunchiseMasterSyncJob() {
-  if (masterRunning) {
+async function runSyncLocationsJob() {
+  if (locationsRunning) {
     console.log(
-      '[runchise-sync:master] skipped because previous run is still active',
+      '[runchise-sync:locations] skipped because previous run is still active',
     );
     return { skipped: true };
   }
 
-  masterRunning = true;
-  const { locationId, brandId } = getSyncConfig();
+  locationsRunning = true;
+  const { brandId } = getSyncConfig();
 
   try {
-    console.log('[runchise-sync:master] started');
-
-    const results = {};
-
-    results.locations = await syncLocations(brandId);
-    results.brands = await syncBrands();
-    results.products = await syncProducts(brandId);
-    results.customers = await runCustomerSyncJob();
-    results.salesTransactionReports =
-      await syncSalesTransactionReports(locationId);
-    results.promos = await syncPromos();
-
-    console.log('[runchise-sync:master] finished', results);
-    return results;
+    console.log('[runchise-sync:locations] started');
+    const result = await syncLocations(brandId);
+    console.log('[runchise-sync:locations] finished', result);
+    return result;
   } finally {
-    masterRunning = false;
+    locationsRunning = false;
   }
 }
 
+async function runSyncBrandsJob() {
+  if (brandsRunning) {
+    console.log(
+      '[runchise-sync:brands] skipped because previous run is still active',
+    );
+    return { skipped: true };
+  }
+
+  brandsRunning = true;
+
+  try {
+    console.log('[runchise-sync:brands] started');
+    const result = await syncBrands();
+    console.log('[runchise-sync:brands] finished', result);
+    return result;
+  } finally {
+    brandsRunning = false;
+  }
+}
+
+async function runSyncProductsJob() {
+  if (productsRunning) {
+    console.log(
+      '[runchise-sync:products] skipped because previous run is still active',
+    );
+    return { skipped: true };
+  }
+
+  productsRunning = true;
+
+  try {
+    console.log('[runchise-sync:products] started');
+    const result = await syncProducts();
+    console.log('[runchise-sync:products] finished', result);
+    return result;
+  } finally {
+    productsRunning = false;
+  }
+}
+
+async function runSyncSalesTransactionReportsJob() {
+  if (salesRunning) {
+    console.log(
+      '[runchise-sync:sales] skipped because previous run is still active',
+    );
+    return { skipped: true };
+  }
+
+  salesRunning = true;
+  const { locationId } = getSyncConfig();
+
+  try {
+    console.log('[runchise-sync:sales] started');
+    const result = await syncSalesTransactionReports(locationId);
+    console.log('[runchise-sync:sales] finished', result);
+    return result;
+  } finally {
+    salesRunning = false;
+  }
+}
+
+async function runSyncPromosJob() {
+  if (promosRunning) {
+    console.log(
+      '[runchise-sync:promos] skipped because previous run is still active',
+    );
+    return { skipped: true };
+  }
+
+  promosRunning = true;
+
+  try {
+    console.log('[runchise-sync:promos] started');
+    const result = await syncPromos();
+    console.log('[runchise-sync:promos] finished', result);
+    return result;
+  } finally {
+    promosRunning = false;
+  }
+}
+
+// Impor customer penuh hanya untuk eksekusi manual/CLI, bukan cron, guna menghindari risiko timeout pada lingkungan serverless.
 async function runCustomerSyncJob() {
   if (customersRunning) {
     console.log(
-      '[runchise-sync:customers] skipped because previous run is still active',
+      '[runchise-sync:customers-full] skipped because previous run is still active',
     );
     return { skipped: true };
   }
@@ -74,12 +160,41 @@ async function runCustomerSyncJob() {
   const { locationId } = getSyncConfig();
 
   try {
-    console.log('[runchise-sync:customers] started');
+    console.log('[runchise-sync:customers-full] started');
     const result = await syncCustomers(locationId);
-    console.log('[runchise-sync:customers] finished', result);
+    console.log('[runchise-sync:customers-full] finished', result);
     return result;
   } finally {
     customersRunning = false;
+  }
+}
+
+// Sinkronisasi customer terjadwal menggunakan worker berbasis cursor agar pemrosesan bertahap dapat dilanjutkan dari checkpoint terakhir tanpa berisiko timeout.
+async function runCustomerImportWorkerJob() {
+  if (customerImportRunning) {
+    console.log(
+      '[runchise-sync:customers-import] skipped because previous run is still active',
+    );
+    return { skipped: true };
+  }
+
+  customerImportRunning = true;
+
+  try {
+    console.log('[runchise-sync:customers-import] started');
+
+    const { created, job } = await createCustomerImportSyncJob({
+      source: 'cron',
+    });
+    if (created) {
+      console.log('[runchise-sync:customers-import] new job created', job?.id);
+    }
+
+    const result = await processCustomerImportSyncJob();
+    console.log('[runchise-sync:customers-import] finished', result);
+    return result;
+  } finally {
+    customerImportRunning = false;
   }
 }
 
@@ -96,9 +211,7 @@ async function runCustomerPointsSyncJob() {
   try {
     console.log('[runchise-sync:points] started');
 
-    // Diturunkan dari tabel staging, bukan API: mencakup ke-29 outlet dan
-    // selesai dalam satu query, sehingga aman dijalankan sebagai cron
-    // serverless. Refresh penuh dari API lewat scripts/syncCustomerPoints.js.
+    // Sinkronisasi poin customer dijalankan dari tabel staging agar aman untuk cron serverless, sedangkan refresh penuh dari API dilakukan secara manual.
     const result = await syncCustomerPointsFromStaging();
 
     if (result.divergent_customers > 0) {
@@ -114,6 +227,7 @@ async function runCustomerPointsSyncJob() {
   }
 }
 
+// Scheduler lokal hanya aktif pada proses persisten/non-serverless, sedangkan production menggunakan Vercel Cron yang menjalankan setiap tahap sinkronisasi secara independen.
 function startRunchiseSyncCron() {
   if (started) return null;
 
@@ -123,38 +237,93 @@ function startRunchiseSyncCron() {
   }
 
   started = true;
-  const masterSchedule =
-    process.env.RUNCHISE_MASTER_SYNC_CRON ||
-    process.env.RUNCHISE_SYNC_CRON ||
-    DEFAULT_MASTER_CRON;
-  const pointsSchedule =
-    process.env.RUNCHISE_POINTS_SYNC_CRON || DEFAULT_POINTS_CRON;
+
+  const schedules = {
+    locations:
+      process.env.RUNCHISE_LOCATIONS_SYNC_CRON || DEFAULT_LOCATIONS_CRON,
+    brands: process.env.RUNCHISE_BRANDS_SYNC_CRON || DEFAULT_BRANDS_CRON,
+    products: process.env.RUNCHISE_PRODUCTS_SYNC_CRON || DEFAULT_PRODUCTS_CRON,
+    customersImport:
+      process.env.RUNCHISE_CUSTOMERS_IMPORT_SYNC_CRON ||
+      DEFAULT_CUSTOMERS_IMPORT_CRON,
+    sales: process.env.RUNCHISE_SALES_SYNC_CRON || DEFAULT_SALES_CRON,
+    promos: process.env.RUNCHISE_PROMOS_SYNC_CRON || DEFAULT_PROMOS_CRON,
+    points: process.env.RUNCHISE_POINTS_SYNC_CRON || DEFAULT_POINTS_CRON,
+  };
+
+  const stageJobs = [
+    ['locations', runSyncLocationsJob],
+    ['brands', runSyncBrandsJob],
+    ['products', runSyncProductsJob],
+    ['customers-import', runCustomerImportWorkerJob],
+    ['sales', runSyncSalesTransactionReportsJob],
+    ['promos', runSyncPromosJob],
+    ['points', runCustomerPointsSyncJob],
+  ];
 
   if (process.env.RUNCHISE_SYNC_ON_START !== 'false') {
-    runRunchiseMasterSyncJob().catch((error) => {
-      console.error(
-        '[runchise-sync:master] initial run failed:',
-        error.message,
-      );
-    });
-    runCustomerPointsSyncJob().catch((error) => {
-      console.error(
-        '[runchise-sync:points] initial run failed:',
-        error.message,
-      );
-    });
+    // Setiap tahap dijalankan lepas (fire-and-forget) dan independen: satu
+    // tahap gagal/timeout tidak menghalangi tahap lain berjalan.
+    for (const [name, job] of stageJobs) {
+      job().catch((error) => {
+        console.error(
+          `[runchise-sync:${name}] initial run failed:`,
+          error.message,
+        );
+      });
+    }
   }
 
-  const masterTask = cron.schedule(masterSchedule, () => {
-    runRunchiseMasterSyncJob().catch((error) => {
+  const tasks = {};
+  tasks.locationsTask = cron.schedule(schedules.locations, () => {
+    runSyncLocationsJob().catch((error) => {
       console.error(
-        '[runchise-sync:master] scheduled run failed:',
+        '[runchise-sync:locations] scheduled run failed:',
         error.message,
       );
     });
   });
-
-  const pointsTask = cron.schedule(pointsSchedule, () => {
+  tasks.brandsTask = cron.schedule(schedules.brands, () => {
+    runSyncBrandsJob().catch((error) => {
+      console.error(
+        '[runchise-sync:brands] scheduled run failed:',
+        error.message,
+      );
+    });
+  });
+  tasks.productsTask = cron.schedule(schedules.products, () => {
+    runSyncProductsJob().catch((error) => {
+      console.error(
+        '[runchise-sync:products] scheduled run failed:',
+        error.message,
+      );
+    });
+  });
+  tasks.customersImportTask = cron.schedule(schedules.customersImport, () => {
+    runCustomerImportWorkerJob().catch((error) => {
+      console.error(
+        '[runchise-sync:customers-import] scheduled run failed:',
+        error.message,
+      );
+    });
+  });
+  tasks.salesTask = cron.schedule(schedules.sales, () => {
+    runSyncSalesTransactionReportsJob().catch((error) => {
+      console.error(
+        '[runchise-sync:sales] scheduled run failed:',
+        error.message,
+      );
+    });
+  });
+  tasks.promosTask = cron.schedule(schedules.promos, () => {
+    runSyncPromosJob().catch((error) => {
+      console.error(
+        '[runchise-sync:promos] scheduled run failed:',
+        error.message,
+      );
+    });
+  });
+  tasks.pointsTask = cron.schedule(schedules.points, () => {
     runCustomerPointsSyncJob().catch((error) => {
       console.error(
         '[runchise-sync:points] scheduled run failed:',
@@ -163,13 +332,17 @@ function startRunchiseSyncCron() {
     });
   });
 
-  return { masterTask, pointsTask };
+  return tasks;
 }
 
 module.exports = {
   startRunchiseSyncCron,
-  runRunchiseSyncJob: runRunchiseMasterSyncJob,
-  runRunchiseMasterSyncJob,
+  runSyncLocationsJob,
+  runSyncBrandsJob,
+  runSyncProductsJob,
+  runSyncSalesTransactionReportsJob,
+  runSyncPromosJob,
   runCustomerSyncJob,
+  runCustomerImportWorkerJob,
   runCustomerPointsSyncJob,
 };

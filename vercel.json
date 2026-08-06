@@ -14,16 +14,36 @@
   ],
   "crons": [
     {
-      "path": "/api/cron/runchise-sync/master",
+      "path": "/api/cron/runchise-sync/locations",
       "schedule": "0 12 * * *"
     },
     {
+      "path": "/api/cron/runchise-sync/brands",
+      "schedule": "5 12 * * *"
+    },
+    {
+      "path": "/api/cron/runchise-sync/products",
+      "schedule": "10 12 * * *"
+    },
+    {
+      "path": "/api/cron/runchise-sync/customers",
+      "schedule": "15,45 12 * * *"
+    },
+    {
+      "path": "/api/cron/runchise-sync/sales-transactions",
+      "schedule": "20 12 * * *"
+    },
+    {
+      "path": "/api/cron/runchise-sync/promos",
+      "schedule": "25 12 * * *"
+    },
+    {
       "path": "/api/cron/runchise-sync/points",
-      "schedule": "15 12 * * *"
+      "schedule": "30 12 * * *"
     },
     {
       "path": "/api/cron/runchise-sync/customer-timestamps-worker",
-      "schedule": "30 12 * * *"
+      "schedule": "35 12 * * *"
     },
     {
       "path": "/api/cron/maintenance",

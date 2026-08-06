@@ -44,8 +44,12 @@ const {
 } = require('./services/syncService');
 const {
   startRunchiseSyncCron,
-  runRunchiseMasterSyncJob,
-  runCustomerSyncJob,
+  runSyncLocationsJob,
+  runSyncBrandsJob,
+  runSyncProductsJob,
+  runSyncSalesTransactionReportsJob,
+  runSyncPromosJob,
+  runCustomerImportWorkerJob,
   runCustomerPointsSyncJob,
 } = require('./jobs/runchiseSyncCron');
 const {
@@ -62,22 +66,13 @@ const {
 // ===================== APP SETUP =====================
 const app = express();
 
-// Vercel menaruh satu proxy di depan function. Tanpa ini req.ip berisi alamat
-// proxy, sehingga seluruh pengunjung terhitung sebagai satu IP dan rate limit
-// jadi salah sasaran. Angka 1 dipakai, bukan true, karena mempercayai seluruh
-// rantai X-Forwarded-For membuat IP gampang dipalsukan.
+// Mengatur `trust proxy` ke 1 agar rate limit menggunakan IP asli pengguna secara akurat tanpa membuka risiko pemalsuan IP.
 app.set('trust proxy', 1);
 
-// Header keamanan dasar. Content-Security-Policy dimatikan karena halaman
-// Swagger yang dilayani backend memakai skrip inline; API JSON tidak
-// membutuhkannya.
+// Menambahkan header keamanan dasar dengan menonaktifkan Content-Security-Policy agar tetap kompatibel dengan halaman Swagger yang menggunakan skrip inline.
 app.use(helmet({ contentSecurityPolicy: false }));
 
-// Hanya origin yang dikenal yang boleh memanggil API dari browser. Sebelumnya
-// cors() tanpa argumen mengizinkan semua origin.
-//
-// Permintaan tanpa header Origin sengaja diizinkan: itu bukan permintaan lintas
-// origin dari browser, melainkan cron Vercel, health check, dan curl.
+// Membatasi akses CORS hanya untuk origin yang tepercaya, sambil tetap mengizinkan permintaan tanpa header Origin untuk cron, health check, dan akses non-browser.
 const allowedOrigins = new Set(
   [
     process.env.FRONTEND_URL,
@@ -91,12 +86,7 @@ const allowedOrigins = new Set(
 
 const isProduction = process.env.NODE_ENV === 'production';
 
-// Di luar produksi, seluruh port localhost diizinkan. Menuliskan daftar port
-// tetap terbukti rapuh: dev server proyek ini berjalan di 8080, sementara
-// tooling lain memakai 5173, 3000, atau port acak.
-//
-// Pengecekan memakai URL parser, bukan pencocokan awalan string, supaya
-// domain seperti http://localhost.situs-penyerang.com tidak ikut lolos.
+// Mengizinkan semua port localhost di lingkungan non-produksi dengan validasi URL yang aman untuk mendukung pengembangan tanpa membuka celah keamanan.
 function isLocalhostOrigin(origin) {
   try {
     const { hostname } = new URL(origin);
@@ -114,9 +104,7 @@ function isAllowedOrigin(origin) {
   return !isProduction && isLocalhostOrigin(origin);
 }
 
-// Origin asing ditolak di depan dengan 403 yang bersih. Melempar Error dari
-// dalam callback cors membuat Express membalas 500 beserta stack trace, yang
-// membingungkan sekaligus membocorkan detail internal.
+// Menolak origin yang tidak diizinkan dengan respons 403 agar lebih aman, konsisten, dan tidak membocorkan detail internal server.
 app.use((req, res, next) => {
   const origin = req.get('origin');
 
@@ -132,8 +120,7 @@ app.use((req, res, next) => {
 // Sampai di sini origin sudah pasti dikenal, jadi aman untuk dipantulkan.
 app.use(cors({ origin: true, credentials: true }));
 
-// Batas ukuran body. Default express.json() adalah 100kb, ditegaskan di sini
-// supaya tidak berubah diam-diam mengikuti versi express.
+// Menetapkan batas ukuran request body secara eksplisit agar tetap konsisten dan tidak berubah mengikuti pembaruan Express.
 app.use(express.json({ limit: '100kb' }));
 
 // Batas laju umum untuk seluruh API.
@@ -203,12 +190,7 @@ app.post('/redeem/:id', auth, (req, res) => {
 
 // ===================== SYNC HANDLERS (WRAPPER API) =====================
 
-// Sync customers dari Runchise → DB lokal.
-//
-// Impor penuh mencakup 29 outlet x 100 halaman API, jadi tidak muat dalam satu
-// request serverless. Endpoint ini hanya membuat job; kemajuannya dilaporkan
-// lewat /sync/customers/status dan dieksekusi bertahap oleh
-// /sync/customers/process.
+// Sinkronisasi customer dari Runchise dijalankan bertahap melalui sistem job agar aman diproses di lingkungan serverless.
 async function handleSyncCustomers(req, res) {
   try {
     const result = await createCustomerImportSyncJob();
@@ -283,12 +265,7 @@ async function handleSyncProducts(req, res) {
   }
 }
 
-// Sync points
-//
-// Tanpa location_id, poin diturunkan dari tabel staging: mencakup ke-29 outlet
-// dan selesai dalam satu query, sehingga tetap aman di batas waktu serverless.
-// Dengan location_id, satu outlet disegarkan langsung dari API Runchise.
-// Refresh penuh semua outlet dari API dijalankan lewat `npm run sync:points`.
+// Sinkronisasi poin menggunakan tabel staging untuk seluruh outlet atau API Runchise per outlet agar tetap aman di lingkungan serverless.
 async function handleSyncPoints(req, res) {
   try {
     const rawLocationId = Number(req.query.location_id);
@@ -356,15 +333,10 @@ async function handleSyncSalesTransactions(req, res) {
 
 // ===================== ADMIN MIDDLEWARE =====================
 
-// Middleware gabungan: login + role check
-// Role yang benar-benar ada di database hanya customer, admin, dan marketing.
-// 'staff' tidak pernah dibuat, jadi menyebutnya hanya menyesatkan pembaca.
+// Middleware login dan pemeriksaan role disederhanakan dengan menghapus role `staff` yang tidak digunakan agar sesuai dengan data di database.
 const adminOnly = [auth, requireRole('admin')];
 
-// Sync data customer dibuka juga untuk marketing, selaras dengan hak kelola
-// customer penuh yang sudah mereka miliki di adminLoyaltyRoutes (buat, ubah,
-// hapus, kirim aktivasi, retry sync Runchise). Sync katalog dan master data
-// lain tetap admin saja karena di luar ranah kerja marketing.
+// Akses sinkronisasi customer diperluas untuk marketing sesuai kewenangannya, sementara sinkronisasi master data lainnya tetap dibatasi untuk admin.
 const adminOrMarketing = [auth, requireRole('admin', 'marketing')];
 
 // ===================== ADMIN SYNC ROUTES =====================
@@ -502,23 +474,76 @@ function createCronSyncHandler(jobName, job) {
         result,
       });
     } catch (error) {
-      // Endpoint cron hanya dipanggil penjadwal, tetapi detail error tetap
-      // ditahan agar formatnya seragam dengan endpoint lain: penyebab aslinya
-      // ada di log server, ditandai error_id yang sama.
+      // Endpoint cron menyembunyikan detail error pada respons dan mencatat penyebab aslinya di log server agar tetap aman serta konsisten.
       respondWithServerError(res, error, `cron:${jobName}`);
     }
   };
 }
 
+// C-1: Master sync dipecah menjadi cron terpisah per tahap dengan worker berbasis cursor untuk sinkronisasi customer agar setiap proses berjalan independen dan terhindar dari timeout serverless.
+app.all('/api/cron/runchise-sync/master', requireCronSecret, (req, res) => {
+  res.status(410).json({
+    message:
+      'Endpoint ini sudah dipecah menjadi cron per tahap untuk mencegah timeout serverless. ' +
+      'Gunakan /api/cron/runchise-sync/locations, /brands, /products, /customers, ' +
+      '/sales-transactions, /promos, dan /points secara terpisah.',
+  });
+});
 app.get(
-  '/api/cron/runchise-sync/master',
+  '/api/cron/runchise-sync/locations',
   requireCronSecret,
-  createCronSyncHandler('runchise-master', runRunchiseMasterSyncJob),
+  createCronSyncHandler('runchise-locations', runSyncLocationsJob),
 );
 app.post(
-  '/api/cron/runchise-sync/master',
+  '/api/cron/runchise-sync/locations',
   requireCronSecret,
-  createCronSyncHandler('runchise-master', runRunchiseMasterSyncJob),
+  createCronSyncHandler('runchise-locations', runSyncLocationsJob),
+);
+app.get(
+  '/api/cron/runchise-sync/brands',
+  requireCronSecret,
+  createCronSyncHandler('runchise-brands', runSyncBrandsJob),
+);
+app.post(
+  '/api/cron/runchise-sync/brands',
+  requireCronSecret,
+  createCronSyncHandler('runchise-brands', runSyncBrandsJob),
+);
+app.get(
+  '/api/cron/runchise-sync/products',
+  requireCronSecret,
+  createCronSyncHandler('runchise-products', runSyncProductsJob),
+);
+app.post(
+  '/api/cron/runchise-sync/products',
+  requireCronSecret,
+  createCronSyncHandler('runchise-products', runSyncProductsJob),
+);
+app.get(
+  '/api/cron/runchise-sync/sales-transactions',
+  requireCronSecret,
+  createCronSyncHandler(
+    'runchise-sales-transactions',
+    runSyncSalesTransactionReportsJob,
+  ),
+);
+app.post(
+  '/api/cron/runchise-sync/sales-transactions',
+  requireCronSecret,
+  createCronSyncHandler(
+    'runchise-sales-transactions',
+    runSyncSalesTransactionReportsJob,
+  ),
+);
+app.get(
+  '/api/cron/runchise-sync/promos',
+  requireCronSecret,
+  createCronSyncHandler('runchise-promos', runSyncPromosJob),
+);
+app.post(
+  '/api/cron/runchise-sync/promos',
+  requireCronSecret,
+  createCronSyncHandler('runchise-promos', runSyncPromosJob),
 );
 app.get(
   '/api/cron/runchise-sync/customer-timestamps-worker',
@@ -534,15 +559,16 @@ app.post(
     processCustomerTimestampSyncJob({ maxPages: 5 }),
   ),
 );
+// Worker berbasis cursor memproses data secara bertahap dengan menyimpan progres sehingga setiap eksekusi dapat melanjutkan dari checkpoint terakhir dan aman dijalankan berulang oleh scheduler.
 app.get(
   '/api/cron/runchise-sync/customers',
   requireCronSecret,
-  createCronSyncHandler('runchise-customers', runCustomerSyncJob),
+  createCronSyncHandler('runchise-customers', runCustomerImportWorkerJob),
 );
 app.post(
   '/api/cron/runchise-sync/customers',
   requireCronSecret,
-  createCronSyncHandler('runchise-customers', runCustomerSyncJob),
+  createCronSyncHandler('runchise-customers', runCustomerImportWorkerJob),
 );
 app.get(
   '/api/cron/runchise-sync/points',
@@ -555,10 +581,7 @@ app.post(
   createCronSyncHandler('runchise-points', runCustomerPointsSyncJob),
 );
 
-// Pembersihan berkala. Sesi yang sudah kedaluwarsa dan hitungan rate limit yang
-// jendelanya lewat tidak pernah dihapus siapa pun, sehingga kedua tabel terus
-// menumpuk. Sesi kedaluwarsa memang sudah ditolak middleware auth, tetapi
-// menyimpan token yang tidak terpakai tanpa batas waktu tidak ada gunanya.
+// Pembersihan berkala menghapus sesi kedaluwarsa dan data rate limit yang sudah tidak berlaku agar penyimpanan tetap efisien.
 async function runMaintenanceJob() {
   const now = new Date();
   const [expiredSessions, rateLimitRows] = await Promise.all([
