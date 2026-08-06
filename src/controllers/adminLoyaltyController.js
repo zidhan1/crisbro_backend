@@ -1533,6 +1533,8 @@ async function updateAdminCustomer(req, res) {
 }
 
 // H-1: Perubahan saldo poin hanya dapat dilakukan melalui endpoint khusus admin yang tervalidasi, mewajibkan alasan, menjaga konsistensi data, dan mencatat seluruh riwayat perubahan.
+
+// M-6: Menggunakan locking dalam transaksi agar penyesuaian saldo poin tetap konsisten dan terhindar dari race condition pada permintaan bersamaan.
 async function adjustCustomerLoyalty(req, res) {
   try {
     const id = parsePositiveInt(req.params.id, 'id');
@@ -1559,68 +1561,95 @@ async function adjustCustomerLoyalty(req, res) {
       ? (parseOptionalNumber(req.body.balance, 'balance') ?? 0)
       : undefined;
 
+    // Snapshot ini hanya digunakan untuk audit log, sedangkan validasi dilakukan ulang di dalam transaksi menggunakan data terbaru yang telah dikunci.
     const beforeCustomer = await getCustomerAuditSnapshot(id);
     if (!beforeCustomer) {
       return res.status(404).json({ message: 'Customer tidak ditemukan' });
     }
 
-    const currentTotalPoint = beforeCustomer.customer_point?.total_point ?? 0;
-    const currentAvailablePoint =
-      beforeCustomer.customer_point?.available_point ?? 0;
+    const { customer, currentTotalPoint, currentAvailablePoint } =
+      await prisma.$transaction(async (tx) => {
+        // Mengunci baris Customer selama transaksi untuk memastikan data masih valid dan mencegah perubahan bersamaan.
+        const [customerRow] = await tx.$queryRaw`
+          SELECT id FROM "Customer" WHERE id = ${id} FOR UPDATE
+        `;
+        if (!customerRow) {
+          throw Object.assign(new Error('Customer tidak ditemukan'), {
+            code: 'P2025',
+          });
+        }
 
-    // Validasi menggunakan nilai akhir setelah seluruh perubahan diterapkan agar setiap pembaruan tetap menjaga konsistensi saldo poin.
-    const effectiveTotalPoint = nextTotalPoint ?? currentTotalPoint;
-    const effectiveAvailablePoint = nextAvailablePoint ?? currentAvailablePoint;
+        let lockedTotalPoint = 0;
+        let lockedAvailablePoint = 0;
 
-    if (effectiveAvailablePoint > effectiveTotalPoint) {
-      return badRequest(
-        res,
-        'available_point tidak boleh melebihi total_point',
-      );
-    }
+        if (hasTotalPoint || hasAvailablePoint) {
+          // M-6: Mengunci baris selama transaksi agar permintaan bersamaan selalu menggunakan data terbaru dan mencegah race condition.
+          const [pointRow] = await tx.$queryRaw`
+            SELECT total_point, available_point FROM "CustomerPoint"
+            WHERE customer_id = ${id} FOR UPDATE
+          `;
+          lockedTotalPoint = pointRow?.total_point ?? 0;
+          lockedAvailablePoint = pointRow?.available_point ?? 0;
 
-    const pointsChange = effectiveAvailablePoint - currentAvailablePoint;
+          const effectiveTotalPoint = nextTotalPoint ?? lockedTotalPoint;
+          const effectiveAvailablePoint =
+            nextAvailablePoint ?? lockedAvailablePoint;
 
-    const customer = await prisma.$transaction(async (tx) => {
-      if (hasTotalPoint || hasAvailablePoint) {
-        await tx.customerPoint.upsert({
-          where: { customer_id: id },
-          update: {
-            ...(hasTotalPoint && { total_point: nextTotalPoint }),
-            ...(hasAvailablePoint && { available_point: nextAvailablePoint }),
-          },
-          create: {
-            customer_id: id,
-            total_point: effectiveTotalPoint,
-            available_point: effectiveAvailablePoint,
-            next_reward_threshold: getDefaultRewardThreshold(),
-          },
-        });
-      }
+          if (effectiveAvailablePoint > effectiveTotalPoint) {
+            throw Object.assign(
+              new Error('available_point tidak boleh melebihi total_point'),
+              { code: 'INVALID_INVARIANT' },
+            );
+          }
 
-      if (hasBalance) {
-        await tx.customer.update({
+          await tx.customerPoint.upsert({
+            where: { customer_id: id },
+            update: {
+              ...(hasTotalPoint && { total_point: nextTotalPoint }),
+              ...(hasAvailablePoint && {
+                available_point: nextAvailablePoint,
+              }),
+            },
+            create: {
+              customer_id: id,
+              total_point: effectiveTotalPoint,
+              available_point: effectiveAvailablePoint,
+              next_reward_threshold: getDefaultRewardThreshold(),
+            },
+          });
+
+          // Mencatat setiap penyesuaian poin sebagai transaksi terpisah agar riwayat koreksi manual tetap terlacak dan dapat dibedakan dari transaksi POS.
+          const pointsChange = effectiveAvailablePoint - lockedAvailablePoint;
+          if (pointsChange !== 0) {
+            await tx.pointHistory.create({
+              data: {
+                customer_id: id,
+                points_change: pointsChange,
+                type: 'admin_adjustment',
+                description: reason,
+              },
+            });
+          }
+        }
+
+        if (hasBalance) {
+          await tx.customer.update({
+            where: { id },
+            data: { balance: nextBalance, last_updated_by_id: req.user.id },
+          });
+        }
+
+        const updatedCustomer = await tx.customer.findUnique({
           where: { id },
-          data: { balance: nextBalance, last_updated_by_id: req.user.id },
+          include: getAdminCustomerInclude(),
         });
-      }
-      // Mencatat setiap penyesuaian poin sebagai transaksi terpisah agar riwayat koreksi manual tetap terlacak dan dapat dibedakan dari transaksi POS.
-      if (pointsChange !== 0) {
-        await tx.pointHistory.create({
-          data: {
-            customer_id: id,
-            points_change: pointsChange,
-            type: 'admin_adjustment',
-            description: reason,
-          },
-        });
-      }
 
-      return tx.customer.findUnique({
-        where: { id },
-        include: getAdminCustomerInclude(),
+        return {
+          customer: updatedCustomer,
+          currentTotalPoint: lockedTotalPoint,
+          currentAvailablePoint: lockedAvailablePoint,
+        };
       });
-    });
 
     await recordAdminActivity({
       req,
@@ -1650,6 +1679,9 @@ async function adjustCustomerLoyalty(req, res) {
 
     res.json(customer);
   } catch (error) {
+    if (error.code === 'INVALID_INVARIANT') {
+      return badRequest(res, error.message);
+    }
     handleError(res, error);
   }
 }
