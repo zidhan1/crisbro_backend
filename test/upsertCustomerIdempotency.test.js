@@ -186,6 +186,39 @@ test('idempotensi dalam SATU halaman: customer yang sama muncul dua kali di resp
   assert.equal(createTransactionCount, 1);
 });
 
+test('customer tanpa nomor telepon tetap diproses dalam bulk transaction', async (t) => {
+  installCommonMocks(t);
+  const originalCustomerFindMany = prisma.customer.findMany;
+  const originalUserFindMany = prisma.user.findMany;
+  t.after(() => {
+    prisma.customer.findMany = originalCustomerFindMany;
+    prisma.user.findMany = originalUserFindMany;
+  });
+
+  prisma.customer.findMany = async () => [];
+  prisma.user.findMany = async () => [];
+  let transactionCalls = 0;
+  prisma.$transaction = async (callback) => {
+    transactionCalls += 1;
+    return callback(
+      makeFakeTx({
+        createdUserId: 9010,
+        createdCustomerId: 8010,
+        phone: `__runchise_sync_${RUNCHISE_CUSTOMER.id}`,
+      }),
+    );
+  };
+
+  const [result] = await upsertRunchiseCustomersBatch(
+    [{ ...RUNCHISE_CUSTOMER, phone_number: null }],
+    null,
+  );
+
+  assert.equal(transactionCalls, 1);
+  assert.equal(result.status, 'created');
+  assert.equal(result.customer_id, 8010);
+});
+
 test('membership customer hanya memakai Location master berdasarkan runchise_id', async (t) => {
   const originalExecuteRaw = prisma.$executeRaw;
   const originalTransaction = prisma.$transaction;

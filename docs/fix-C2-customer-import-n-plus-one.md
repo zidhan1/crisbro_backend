@@ -203,6 +203,21 @@ module type: function LOAD OK
   berubah, kecuali field `failed` tambahan (additive) pada return value
   `syncCustomers()`.
 
+## Addendum — penghapusan fallback N+1
+
+Perubahan lanjutan L8/C-2 menghapus fallback per-customer yang sebelumnya
+disebut pada bagian 3.3 dan 5:
+
+- customer tanpa nomor telepon tetap dibuat dalam transaksi bulk memakai
+  placeholder unik sementara, lalu dikembalikan ke `NULL` sebelum commit;
+- kegagalan batch tidak lagi diproses satu-per-satu. Worker melempar error,
+  mengembalikan job ke `queued`, dan mengulang cursor halaman yang sama pada
+  invocation berikutnya.
+
+Dengan demikian jalur worker production tidak memiliki fallback N+1. Fungsi
+`upsertRunchiseCustomer()` tetap dipertahankan untuk kompatibilitas jalur
+manual, tetapi tidak dipanggil oleh worker batch.
+
 ## 6. Dampak performa yang diharapkan
 
 Untuk satu halaman berisi 100 customer:

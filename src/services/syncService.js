@@ -592,6 +592,7 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
       ownerLocationId,
       runchiseLocationIds,
       normalizedPhone,
+      createPhone: normalizedPhone || `__runchise_sync_${runchiseId}`,
       phoneNumberVariants,
       payload,
     };
@@ -754,24 +755,30 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
     }
   }
 
-  // Mencegah duplikasi berdasarkan nomor telepon saat bulk insert, sementara data tanpa nomor telepon diproses satu per satu agar tetap aman.
+  // Semua customer baru diproses dalam satu transaksi bulk. Placeholder unik
+  // dipakai sementara untuk customer tanpa nomor telepon agar hasil RETURNING
+  // tetap dapat dikorelasikan tanpa INSERT per customer.
   const seenCreatePhones = new Set();
+  const seenCreateRunchiseIds = new Set();
   const bulkCreatable = [];
-  const singleCreatable = [];
   for (const item of toCreate) {
-    const phone = item.candidate.normalizedPhone;
-    if (!phone) {
-      singleCreatable.push(item);
-      continue;
-    }
-    if (seenCreatePhones.has(phone)) {
+    const { candidate } = item;
+    if (candidate.normalizedPhone && seenCreatePhones.has(candidate.normalizedPhone)) {
       results[item.candidate.index] = {
         status: 'skipped_conflict',
         reason: 'duplicate_phone_in_batch',
       };
       continue;
     }
-    seenCreatePhones.add(phone);
+    if (seenCreateRunchiseIds.has(candidate.runchiseId)) {
+      results[candidate.index] = {
+        status: 'skipped_conflict',
+        reason: 'duplicate_runchise_id_in_batch',
+      };
+      continue;
+    }
+    seenCreateRunchiseIds.add(candidate.runchiseId);
+    if (candidate.normalizedPhone) seenCreatePhones.add(candidate.normalizedPhone);
     bulkCreatable.push(item);
   }
 
@@ -868,7 +875,7 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
     }
   }
 
-  // ---- 6. Bulk create user+customer baru (yang punya nomor telepon) ----
+  // ---- 6. Bulk create user+customer baru (dengan atau tanpa nomor telepon) ----
   // Membuat user dan customer baru dalam satu transaksi untuk mencegah data yatim dan menjaga konsistensi saat terjadi kegagalan proses.
   if (bulkCreatable.length > 0) {
     try {
@@ -878,18 +885,18 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
         VALUES ${Prisma.join(
           bulkCreatable.map(
             ({ candidate }) =>
-              Prisma.sql`(${candidate.normalizedPhone}::text, ${''}::text, ${'pending_activation'}::text, ${'customer'}::text, CURRENT_TIMESTAMP)`,
+              Prisma.sql`(${candidate.createPhone}::text, ${''}::text, ${'pending_activation'}::text, ${'customer'}::text, CURRENT_TIMESTAMP)`,
           ),
         )}
         RETURNING id, phone_number
       `;
       // Korelasi balik lewat nomor telepon (bukan urutan RETURNING): setiap
-      // nomor di bulkCreatable sudah dijamin unik dalam batch ini (langkah 3).
+      // createPhone sudah dijamin unik dalam batch ini (nomor asli atau placeholder).
       const userIdByPhone = new Map(userRows.map((r) => [r.phone_number, r.id]));
 
       const customerTuples = bulkCreatable.map(({ candidate }) => {
         const p = candidate.payload;
-        const userId = userIdByPhone.get(candidate.normalizedPhone);
+        const userId = userIdByPhone.get(candidate.createPhone);
         return {
           candidate,
           userId,
@@ -910,6 +917,16 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
       // user_id dijamin unik (baru dibuat langkah di atas), jadi korelasi
       // balik lewat user_id aman walau ada NULL/duplikat di kolom lain.
       const customerIdByUserId = new Map(customerRows.map((r) => [r.user_id, r.id]));
+
+      const nullPhoneUserIds = customerTuples
+        .filter(({ candidate }) => !candidate.normalizedPhone)
+        .map(({ userId }) => userId);
+      if (nullPhoneUserIds.length > 0) {
+        await tx.$executeRaw`
+          UPDATE "User" SET phone_number = NULL, updated_at = CURRENT_TIMESTAMP
+          WHERE id IN (${Prisma.join(nullPhoneUserIds)})
+        `;
+      }
 
       const createLocationTuples = [];
       for (const { candidate, userId } of customerTuples) {
@@ -934,29 +951,9 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
       }
       });
     } catch (error) {
-      if (!isUniqueConstraintError(error)) throw error;
-
-      // Bulk INSERT dapat kalah race terhadap run lain. Ulangi kandidat satu per
-      // satu agar setiap P2002 direkonsiliasi ke baris pemenang secara idempoten.
-      for (const { candidate } of bulkCreatable) {
-        results[candidate.index] = await upsertRunchiseCustomer(
-          customersInput[candidate.index],
-          fallbackLocationId,
-        );
-      }
-    }
-  }
-
-  // ---- 7. Kasus langka: create tanpa nomor telepon, satu-per-satu ----
-  for (const { candidate } of singleCreatable) {
-    try {
-      const original = customersInput[candidate.index];
-      results[candidate.index] = await upsertRunchiseCustomer(
-        original,
-        fallbackLocationId,
-      );
-    } catch (error) {
-      results[candidate.index] = { status: 'failed', reason: error.message };
+      // Jangan kembali ke N+1. Worker akan mengembalikan cursor ke queued dan
+      // mengulang halaman secara atomik; P2002 tetap direkonsiliasi pada retry.
+      throw error;
     }
   }
 

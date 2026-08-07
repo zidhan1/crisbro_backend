@@ -1,7 +1,6 @@
 const { Client } = require('pg');
 const { fetchCustomersPage } = require('./runchiseService');
 const {
-  upsertRunchiseCustomer,
   upsertRunchiseCustomersBatch,
 } = require('./syncService');
 
@@ -147,29 +146,16 @@ async function processImportPage(client, job) {
   // (~3 query preload + beberapa statement bulk) alih-alih upsert per
   // customer (~6-10 round-trip x 100 customer = 600-1000 round-trip
   // sekuensial per halaman -- gampang melebihi time budget worker ini).
-  // Kalau batch gagal total (mis. galat jaringan/DB di tengah statement),
-  // jatuh ke mode satu-per-satu supaya satu halaman bermasalah tetap tidak
-  // menghentikan seluruh job -- properti yang sama dengan sebelumnya.
+  // Kalau batch gagal total, jangan jatuh ke N+1. Lempar error agar worker
+  // mengembalikan job ke queued dan mengulang halaman yang sama secara atomik.
   let results;
   try {
     results = await upsertRunchiseCustomersBatch(customers, locationId);
   } catch (error) {
     console.warn(
-      `Batch impor customer Runchise gagal (location ${locationId}, page ${page}), jatuh ke mode satu-per-satu: ${error.message}`,
+      `Batch impor customer Runchise gagal (location ${locationId}, page ${page}), halaman akan diulang: ${error.message}`,
     );
-    results = [];
-    for (const customer of customers) {
-      try {
-        results.push(await upsertRunchiseCustomer(customer, locationId));
-      } catch (rowError) {
-        // Satu customer bermasalah tidak boleh menghentikan seluruh job; job
-        // menyimpan cursor dan lanjut ke customer berikutnya.
-        console.warn(
-          `Impor customer Runchise gagal (location ${locationId}, customer ${customer?.id}): ${rowError.message}`,
-        );
-        results.push({ status: 'failed', reason: rowError.message });
-      }
-    }
+    throw error;
   }
 
   for (const result of results) {
