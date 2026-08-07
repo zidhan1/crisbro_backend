@@ -20,8 +20,13 @@ function getSessionCookie(req) {
 }
 
 function cookieOptions(expiresAt) {
-  const configured = String(process.env.SESSION_COOKIE_SAME_SITE || 'strict').toLowerCase();
-  const sameSite = ['strict', 'lax', 'none'].includes(configured) ? configured : 'strict';
+  const defaultSameSite = process.env.NODE_ENV === 'production' ? 'none' : 'strict';
+  const configured = String(
+    process.env.SESSION_COOKIE_SAME_SITE || defaultSameSite,
+  ).toLowerCase();
+  const sameSite = ['strict', 'lax', 'none'].includes(configured)
+    ? configured
+    : defaultSameSite;
   return {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production' || sameSite === 'none',
@@ -39,4 +44,9 @@ function clearSessionCookie(res) {
   res.clearCookie(SESSION_COOKIE_NAME, cookieOptions());
 }
 
-module.exports = { getSessionCookie, setSessionCookie, clearSessionCookie };
+module.exports = {
+  getSessionCookie,
+  setSessionCookie,
+  clearSessionCookie,
+  cookieOptions,
+};

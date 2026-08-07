@@ -8,6 +8,7 @@ const helmet = require('helmet');
 const { openApiSpec, renderSwaggerHtml } = require('./docs/swagger');
 const { safeStringEqual } = require('./lib/safeCompare');
 const { globalLimiter, pruneRateLimitCounters } = require('./lib/rateLimit');
+const { createCorsPolicy } = require('./lib/corsPolicy');
 
 // Prisma ORM (database client)
 const prisma = require('./lib/prisma');
@@ -90,52 +91,13 @@ app.use(
 );
 
 // Membatasi akses CORS hanya untuk origin yang tepercaya, sambil tetap mengizinkan permintaan tanpa header Origin untuk cron, health check, dan akses non-browser.
-const allowedOrigins = new Set(
-  [
-    process.env.FRONTEND_URL,
-    ...String(process.env.CORS_ORIGINS || '')
-      .split(',')
-      .map((origin) => origin.trim()),
-  ]
-    .filter(Boolean)
-    .map((origin) => origin.replace(/\/$/, '')),
-);
-
-const isProduction = process.env.NODE_ENV === 'production';
-
-// Mengizinkan semua port localhost di lingkungan non-produksi dengan validasi URL yang aman untuk mendukung pengembangan tanpa membuka celah keamanan.
-function isLocalhostOrigin(origin) {
-  try {
-    const { hostname } = new URL(origin);
-    return (
-      hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1'
-    );
-  } catch {
-    return false;
-  }
-}
-
-function isAllowedOrigin(origin) {
-  if (allowedOrigins.has(origin.replace(/\/$/, ''))) return true;
-
-  return !isProduction && isLocalhostOrigin(origin);
-}
+const corsPolicy = createCorsPolicy();
 
 // Menolak origin yang tidak diizinkan dengan respons 403 agar lebih aman, konsisten, dan tidak membocorkan detail internal server.
-app.use((req, res, next) => {
-  const origin = req.get('origin');
-
-  if (origin && !isAllowedOrigin(origin)) {
-    return res
-      .status(403)
-      .json({ message: 'Origin tidak diizinkan oleh kebijakan CORS' });
-  }
-
-  return next();
-});
+app.use(corsPolicy.guard);
 
 // Sampai di sini origin sudah pasti dikenal, jadi aman untuk dipantulkan.
-app.use(cors({ origin: true, credentials: true }));
+app.use(cors(corsPolicy.corsOptions));
 
 // Menetapkan batas ukuran request body secara eksplisit agar tetap konsisten dan tidak berubah mengikuti pembaruan Express.
 app.use(express.json({ limit: '100kb' }));
