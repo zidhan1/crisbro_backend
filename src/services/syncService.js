@@ -16,6 +16,7 @@ const {
   fetchAllLocations,
   fetchCustomersPage,
   fetchPromosPage,
+  assertPageWithinLimit,
 } = require('./runchiseService');
 const {
   importProducts: importCrisbarProducts,
@@ -188,6 +189,11 @@ async function syncCustomers(locationId = null) {
     let hasMore = true;
 
     while (hasMore) {
+      // M-2: batasi jumlah halaman per outlet agar next_page yang tidak pernah
+      // null (bug upstream/respons tak terduga) tidak membuat loop ini
+      // berjalan tanpa henti sampai timeout function, sama seperti fetchAll*
+      // di runchiseService.js.
+      assertPageWithinLimit('customers', page);
       const data = await fetchCustomersPage(outletId, page);
       const customers = Array.isArray(data.customers) ? data.customers : [];
 
@@ -1087,6 +1093,9 @@ async function syncCustomerPoints({ locationId = null } = {}) {
     let hasMore = true;
 
     while (hasMore) {
+      // M-2: cap halaman yang sama dengan syncCustomers() — mencegah loop poin
+      // berjalan tanpa batas kalau paging.next_page dari Runchise tak pernah null.
+      assertPageWithinLimit('customers', page);
       const data = await fetchCustomersPage(outletId, page);
       const customers = Array.isArray(data.customers) ? data.customers : [];
       totalScanned += customers.length;
@@ -1405,6 +1414,10 @@ async function fetchRunchiseCustomerLookupForLocation(targetLocationId) {
   let hasMore = true;
 
   while (hasMore) {
+    // M-2: cap halaman yang sama dengan fetchAllCustomers() — lookup ini
+    // dipakai per outlet saat sync sales-transaction, jadi rawan hal yang
+    // sama kalau next_page tak pernah null.
+    assertPageWithinLimit('customers', page);
     const data = await fetchCustomersPage(targetLocationId, page);
     const customers = Array.isArray(data.customers) ? data.customers : [];
 

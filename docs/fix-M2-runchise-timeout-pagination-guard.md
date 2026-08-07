@@ -1,11 +1,13 @@
 # M-2 (MEDIUM) — Timeout Runchise melampaui budget serverless dan paginator tanpa hard cap
 
-Status: **Fixed untuk timeout/retry per request dan hard page cap**
+Status: **Fixed** — timeout/retry per request, dan hard page cap kini terpasang di seluruh loop paginasi customer (bukan hanya `fetchAll*`). Lihat bagian 15 untuk penutupan celah residual.
 
 File terdampak:
 
 - `src/services/runchiseService.js`
+- `src/services/syncService.js`
 - `test/runchiseServiceSafety.test.js`
+- `test/customerPaginationCap.test.js`
 
 Kategori: **Reliabilitas, External API, Serverless Budget**
 
@@ -366,6 +368,9 @@ Test tidak memanggil API Runchise dan tidak menulis database production.
   mengumpulkan hasil ke array memory. Hard cap membatasi jumlah halaman tetapi
   tidak menjadikan memory konstan.
 - Paginator `fetchAll*` belum semuanya memiliki checkpoint/cursor persisten.
+- ~~Tiga loop `while (hasMore)` di `syncService.js` yang memanggil
+  `fetchCustomersPage()` langsung (bukan lewat `fetchAllCustomers()`) tidak
+  memiliki hard cap.~~ Ditutup — lihat bagian 15.
 - Request yang sedang berjalan tidak mengetahui sisa waktu aktual dari runtime
   serverless.
 - Cap 100 adalah batas keselamatan, bukan jaminan bahwa 100 halaman dapat
@@ -409,3 +414,80 @@ Checklist:
 4. Bandingkan jumlah page aktual dengan cap untuk setiap resource.
 5. Pastikan job checkpoint besar tidak diganti kembali menjadi `fetchAll*`
    sinkron di satu request serverless.
+
+## 15. Update — celah residual ditutup: loop customer di syncService.js
+
+Audit lanjutan menemukan bahwa perbaikan section 6 hanya mencakup enam
+`fetchAll*` di `runchiseService.js`. Tiga loop lain di `syncService.js`
+memanggil `fetchCustomersPage()` **langsung**, tanpa lewat `fetchAllCustomers()`,
+sehingga tidak ikut terlindungi cap tersebut:
+
+| Fungsi | Baris (sebelum fix) | Dipakai oleh |
+|---|---|---|
+| `syncCustomers()` | loop per outlet, `while (hasMore)` | sync customer penuh (manual/CLI) |
+| `syncCustomerPoints()` | loop per outlet, `while (hasMore)` | `POST /admin/sync/points?location_id=...` |
+| `fetchRunchiseCustomerLookupForLocation()` | `while (hasMore)` | lookup customer per outlet saat sync sales-transaction |
+
+Ketiganya sengaja tidak memakai `fetchAllCustomers()` karena masing-masing
+memproses per halaman langsung (streaming) untuk menghindari masalah memori
+M-9 — tapi karena itu juga berarti tidak otomatis mewarisi
+`assertPageWithinLimit()` yang dipasang di dalam `fetchAllCustomers()`.
+Kalau Runchise API mengembalikan `paging.next_page` yang tidak pernah `null`
+(bug upstream, response cacat, atau field yang berubah format), ketiga loop
+ini akan terus meminta halaman berikutnya tanpa henti sampai invocation
+dibunuh oleh timeout platform — persis skenario gagal yang section 1-6
+dokumen ini coba cegah, hanya lewat pintu yang berbeda.
+
+### Perbaikan
+
+`assertPageWithinLimit` (sudah diekspor dari `runchiseService.js`, dipakai
+`fetchAllCustomers()` dkk) diimpor ke `syncService.js` dan dipanggil di awal
+setiap iterasi ketiga loop tersebut — pola dan pesan error yang identik
+dengan `fetchAllCustomers()`:
+
+```js
+while (hasMore) {
+  assertPageWithinLimit('customers', page);
+  const data = await fetchCustomersPage(outletId, page);
+  ...
+}
+```
+
+Cap yang dipakai adalah `RUNCHISE_MAX_PAGES` yang sama (default 100,
+dikonfigurasi lewat `RUNCHISE_API_MAX_PAGES`) — tidak ada konfigurasi
+terpisah, sehingga satu env var tetap mengatur seluruh paginator customer,
+baik yang lewat `fetchAllCustomers()` maupun yang streaming langsung.
+
+Sekarang **sembilan** lokasi (enam `fetchAll*` + tiga loop `syncService.js`)
+memakai guard yang sama; pencarian struktural `while (hasMore)` di kedua file
+tidak lagi menyisakan loop tanpa `assertPageWithinLimit`.
+
+### Pengujian terukur (tambahan)
+
+`test/customerPaginationCap.test.js` (5 test, seluruhnya lulus lewat
+`npm test`) membuktikan langsung — dengan `fetchCustomersPage` dan
+`fetchAllLocations` di-stub agar tidak menyentuh Runchise API/DB sungguhan,
+dan `RUNCHISE_API_MAX_PAGES` dikecilkan ke 3 supaya test cepat:
+
+- `syncCustomers()`, `syncCustomerPoints()`, dan
+  `fetchRunchiseCustomerLookupForLocation()` masing-masing berhenti dengan
+  error `RUNCHISE_MAX_PAGES_EXCEEDED` setelah tepat `RUNCHISE_MAX_PAGES`
+  panggilan `fetchCustomersPage` — dibuktikan lewat penghitungan panggilan
+  aktual (`fetchCustomersPageCalls.length`), bukan sekadar "tidak timeout
+  dalam waktu wajar".
+- Test off-by-one: ketika upstream berhenti mengirim `next_page` **tepat**
+  di halaman terakhir yang diizinkan (`page === maxPages`), fungsi selesai
+  normal tanpa error — memastikan cap tidak menolak halaman terakhir yang
+  sah.
+
+Jalankan:
+
+```bash
+npm test
+```
+
+## File yang berubah (update)
+
+- `src/services/syncService.js`
+- `test/customerPaginationCap.test.js`
+- `docs/fix-M2-runchise-timeout-pagination-guard.md`
