@@ -34,13 +34,9 @@ const { respondWithServerError } = require('./lib/serverError');
 
 // Sync services (ETL dari Runchise → DB lokal)
 const {
-  syncProducts,
   syncCustomerPoints,
   syncCustomerPointsFromStaging,
   syncSalesTransactionReports,
-  syncBrands,
-  syncLocations,
-  syncPromos,
 } = require('./services/syncService');
 const {
   startRunchiseSyncCron,
@@ -52,6 +48,13 @@ const {
   runCustomerImportWorkerJob,
   runCustomerPointsSyncJob,
 } = require('./jobs/runchiseSyncCron');
+// M-3: Route sync manual admin memakai advisory lock Postgres yang sama dengan
+// cron per tahap, agar trigger manual dan jadwal cron untuk tahap yang sama
+// saling eksklusif alih-alih berjalan bersamaan tanpa guard.
+const {
+  withDistributedCronLock,
+  RUNCHISE_CRON_LOCK_IDS,
+} = require('./lib/distributedCronLock');
 const {
   createCustomerTimestampSyncJob,
   getCustomerTimestampSyncJob,
@@ -180,6 +183,27 @@ app.post('/redeem/:id', auth, (req, res) => {
 
 // ===================== SYNC HANDLERS (WRAPPER API) =====================
 
+// M-3: Membungkus sync yang dipicu manual dari dashboard admin dengan advisory
+// lock Postgres yang sama dengan cron per tahap (lockId dari RUNCHISE_CRON_LOCK_IDS),
+// sehingga klik manual saat cron sedang berjalan (atau sebaliknya) tidak saling
+// menumpuk beban maupun balapan pada baris yang sama — salah satu akan dilewati
+// (skipped) alih-alih keduanya jalan bersamaan.
+async function runAdminSyncWithLock(jobName, lockId, run) {
+  return withDistributedCronLock({
+    jobName: `admin-sync:${jobName}`,
+    lockId,
+    run,
+  });
+}
+
+function respondSyncSkipped(res, jobLabel, result) {
+  return res.status(409).json({
+    message: `Sinkronisasi ${jobLabel} sedang berjalan (cron terjadwal atau proses lain); coba lagi sebentar.`,
+    status: 'skipped',
+    ...result,
+  });
+}
+
 // Sinkronisasi customer dari Runchise dijalankan bertahap melalui sistem job agar aman diproses di lingkungan serverless.
 async function handleSyncCustomers(req, res) {
   try {
@@ -261,10 +285,12 @@ async function handleProcessCustomerTimestampSync(req, res) {
   }
 }
 
-// Sync products
+// Sync products — memakai job cron yang sama (lock RUNCHISE_CRON_LOCK_IDS.products)
+// agar trigger manual dari dashboard tidak balapan dengan cron terjadwal.
 async function handleSyncProducts(req, res) {
   try {
-    const result = await syncProducts();
+    const result = await runSyncProductsJob();
+    if (result?.skipped) return respondSyncSkipped(res, 'products', result);
     res.json({ message: 'Sync products selesai', ...result });
   } catch (error) {
     respondWithServerError(res, error, 'index');
@@ -279,9 +305,15 @@ async function handleSyncPoints(req, res) {
       Number.isInteger(rawLocationId) && rawLocationId > 0
         ? rawLocationId
         : null;
-    const result = locationId
-      ? await syncCustomerPoints({ locationId })
-      : await syncCustomerPointsFromStaging();
+    const result = await runAdminSyncWithLock(
+      'points-manual',
+      RUNCHISE_CRON_LOCK_IDS.points,
+      () =>
+        locationId
+          ? syncCustomerPoints({ locationId })
+          : syncCustomerPointsFromStaging(),
+    );
+    if (result?.skipped) return respondSyncSkipped(res, 'points', result);
 
     res.json({ message: 'Sync points selesai', ...result });
   } catch (error) {
@@ -289,29 +321,33 @@ async function handleSyncPoints(req, res) {
   }
 }
 
-// Sync brands
+// Sync brands — memakai job cron yang sama (lock RUNCHISE_CRON_LOCK_IDS.brands).
 async function handleSyncBrands(req, res) {
   try {
-    const result = await syncBrands();
+    const result = await runSyncBrandsJob();
+    if (result?.skipped) return respondSyncSkipped(res, 'brands', result);
     res.json({ message: 'Sync brands selesai', ...result });
   } catch (error) {
     respondWithServerError(res, error, 'index');
   }
 }
 
-// Sync locations
+// Sync locations — memakai job cron yang sama (lock RUNCHISE_CRON_LOCK_IDS.locations).
 async function handleSyncLocations(req, res) {
   try {
-    const result = await syncLocations();
+    const result = await runSyncLocationsJob();
+    if (result?.skipped) return respondSyncSkipped(res, 'locations', result);
     res.json({ message: 'Sync locations selesai', ...result });
   } catch (error) {
     respondWithServerError(res, error, 'index');
   }
 }
 
+// Sync promos — memakai job cron yang sama (lock RUNCHISE_CRON_LOCK_IDS.promos).
 async function handleSyncPromos(req, res) {
   try {
-    const result = await syncPromos();
+    const result = await runSyncPromosJob();
+    if (result?.skipped) return respondSyncSkipped(res, 'promos', result);
     res.json({ message: 'Sync promos selesai', ...result });
   } catch (error) {
     respondWithServerError(res, error, 'index');
@@ -323,14 +359,22 @@ async function handleSyncSalesTransactions(req, res) {
     // Tanpa fallback ke 1: tidak ada outlet Crisbar dengan ID itu di Runchise.
     const locationId =
       req.query.location_id || process.env.RUNCHISE_SYNC_LOCATION_ID || null;
-    const result = await syncSalesTransactionReports(locationId, {
-      start_date: req.query.start_date,
-      end_date: req.query.end_date,
-      status: req.query.status,
-      payment_method_ids: req.query.payment_method_ids,
-      from: req.query.from,
-      to: req.query.to,
-    });
+    const result = await runAdminSyncWithLock(
+      'sales-manual',
+      RUNCHISE_CRON_LOCK_IDS.sales,
+      () =>
+        syncSalesTransactionReports(locationId, {
+          start_date: req.query.start_date,
+          end_date: req.query.end_date,
+          status: req.query.status,
+          payment_method_ids: req.query.payment_method_ids,
+          from: req.query.from,
+          to: req.query.to,
+        }),
+    );
+    if (result?.skipped)
+      return respondSyncSkipped(res, 'sales transactions', result);
+
     res.json({ message: 'Sync sales transactions selesai', ...result });
   } catch (error) {
     respondWithServerError(res, error, 'index');
@@ -615,5 +659,18 @@ if (require.main === module) {
     startRunchiseSyncCron();
   });
 }
+
+// Diekspos khusus untuk pengujian (lihat test/adminSyncManualLock.test.js) agar
+// mutual exclusion antara trigger manual admin dan cron per tahap (M-3) dapat
+// diverifikasi tanpa menembak HTTP/auth/DB sungguhan. Tidak memengaruhi perilaku
+// produksi — hanya properti tambahan pada instance app yang sudah diekspor.
+app.__testables = {
+  handleSyncProducts,
+  handleSyncBrands,
+  handleSyncLocations,
+  handleSyncPromos,
+  handleSyncPoints,
+  handleSyncSalesTransactions,
+};
 
 module.exports = app;

@@ -111,10 +111,84 @@ Untuk pengukuran produksi, pantau per `job`:
 - durasi eksekusi;
 - waktu run sukses terakhir.
 
+## Update — celah residual ditutup: route sync manual admin
+
+Audit lanjutan menemukan bahwa perbaikan di atas hanya menutup jalur cron
+(`/api/cron/runchise-sync/*`). Lima route dashboard admin yang memicu sync
+secara manual — `POST /admin/sync/products`, `/brands`, `/locations`,
+`/promos`, `/sales-transactions` (dan kembarannya di bawah `/api`) — masih
+memanggil `syncProducts()`, `syncBrands()`, `syncLocations()`, `syncPromos()`,
+`syncSalesTransactionReports()` langsung dari `src/index.js`, tanpa lewat
+`withDistributedCronLock` sama sekali. `POST /admin/sync/points` punya
+masalah yang sama. Akibatnya, admin yang mengklik "Sync" di dashboard pada
+saat cron terjadwal untuk tahap yang sama sedang berjalan bisa memicu dua
+proses yang menulis tabel yang sama secara bersamaan — persis kelas bug yang
+ingin dicegah M-3, hanya saja lewat pintu yang berbeda.
+
+### Perbaikan
+
+`src/index.js` sekarang:
+
+1. Untuk `products`, `brands`, `locations`, `promos` — handler admin
+   (`handleSyncProducts`, dst.) memanggil **fungsi job cron yang sama**
+   (`runSyncProductsJob`, `runSyncBrandsJob`, `runSyncLocationsJob`,
+   `runSyncPromosJob` dari `src/jobs/runchiseSyncCron.js`) alih-alih
+   memanggil `syncX()` mentah. Karena job cron dan handler admin kini
+   memanggil fungsi identik, keduanya otomatis memakai `lockId` yang sama
+   (`RUNCHISE_CRON_LOCK_IDS.products/brands/locations/promos`) — trigger
+   manual dan jadwal cron untuk tahap yang sama benar-benar saling
+   eksklusif.
+2. Untuk `sales-transactions` dan `points` — kedua endpoint ini menerima
+   parameter spesifik dari query string (`location_id`, rentang tanggal,
+   filter status) yang tidak dipakai versi cron (yang selalu menyapu semua
+   outlet dari tabel staging/API). Agar fitur filter admin tetap berfungsi,
+   handler-nya dibungkus helper baru `runAdminSyncWithLock(jobName, lockId, run)`
+   yang memanggil `withDistributedCronLock` langsung dengan `lockId` yang
+   **sama persis** dengan yang dipakai `runSyncSalesTransactionReportsJob`
+   dan `runCustomerPointsSyncJob` (`RUNCHISE_CRON_LOCK_IDS.sales` /
+   `.points`). Jadi meski implementasinya tidak berbagi fungsi job yang
+   identik seperti kasus pertama, keduanya tetap berebut lock Postgres yang
+   sama.
+3. Ketika lock sedang dipegang (oleh cron atau oleh sync manual lain), route
+   admin sekarang membalas eksplisit `409` dengan body
+   `{ status: "skipped", reason: "distributed_lock_busy", ... }` lewat
+   `respondSyncSkipped()` — bukan diam-diam sukses tanpa efek atau, pada
+   kasus lama, benar-benar berjalan ganda tanpa guard sama sekali.
+
+Route customer (`/admin/sync/customers*`) dan customer-timestamps tidak
+disentuh karena sudah aman sejak awal — keduanya lewat
+`createCustomerImportSyncJob`/`processCustomerImportSyncJob` dan
+`createCustomerTimestampSyncJob`/`processCustomerTimestampSyncJob`, yang
+masing-masing sudah punya advisory lock sendiri di dalam service-nya.
+
+### Pengujian terukur (tambahan)
+
+`test/adminSyncManualLock.test.js` (8 test, seluruhnya lulus lewat
+`npm test`) memverifikasi secara langsung — dengan advisory lock dan fungsi
+sync di-stub, tanpa DB/Runchise API sungguhan:
+
+- Untuk **keenam** tahap (`products`, `brands`, `locations`, `promos`,
+  `sales transactions`, `points`): ketika job cron sedang "berjalan" (sengaja
+  digantung lewat deferred promise), memanggil handler admin untuk tahap yang
+  sama menghasilkan `409` dengan `reason: "distributed_lock_busy"` —
+  bukan menjalankan sync kedua secara diam-diam.
+- Arah sebaliknya (`products`): ketika sync manual admin sedang berjalan,
+  job cron untuk tahap yang sama ikut mendapat `distributed_lock_busy` alih-
+  alih berjalan berbarengan.
+- Setelah run selesai dan lock dilepas, panggilan berikutnya untuk tahap yang
+  sama berjalan normal (lock tidak "nyangkut").
+
+Jalankan:
+
+```bash
+npm test
+```
+
 ## File yang berubah
 
 - `src/lib/distributedCronLock.js`
 - `src/jobs/runchiseSyncCron.js`
 - `src/index.js`
 - `test/distributedCronLock.test.js`
+- `test/adminSyncManualLock.test.js`
 - `docs/fix-M3-distributed-cron-advisory-lock.md`
