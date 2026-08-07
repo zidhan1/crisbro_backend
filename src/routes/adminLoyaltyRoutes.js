@@ -2,6 +2,10 @@ const express = require('express');
 const auth = require('../middleware/auth');
 const requireRole = require('../middleware/requireRole');
 const {
+  resendActivationTargetLimiter,
+  runchiseSyncTargetLimiter,
+} = require('../lib/rateLimit');
+const {
   listAdminUsers,
   listAdminActivityLogs,
   createAdminUser,
@@ -70,11 +74,13 @@ router.post(
 router.post(
   '/customers/:id/activation',
   adminOrMarketing,
+  resendActivationTargetLimiter,
   resendCustomerActivation,
 );
 router.post(
   '/customers/:id/runchise-sync',
   adminOrMarketing,
+  runchiseSyncTargetLimiter,
   retryCustomerRunchiseSync,
 );
 router.delete('/customers/:id', adminOrMarketing, deleteAdminCustomer);

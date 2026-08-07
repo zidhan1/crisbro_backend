@@ -64,7 +64,7 @@ function tooManyRequests(message) {
 // Batas ketat untuk endpoint autentikasi. Endpoint inilah yang dipakai untuk
 // menebak password maupun memetakan nomor telepon yang terdaftar, sehingga
 // jatahnya jauh lebih kecil daripada endpoint biasa.
-function createAuthLimiter({ prefix, windowMs, max, message, keyGenerator }) {
+function createDedicatedLimiter({ prefix, windowMs, max, message, keyGenerator }) {
   return rateLimit({
     windowMs,
     limit: max,
@@ -79,7 +79,7 @@ function createAuthLimiter({ prefix, windowMs, max, message, keyGenerator }) {
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 
 // Per alamat IP. Menahan satu sumber yang membombardir endpoint autentikasi.
-const authIpLimiter = createAuthLimiter({
+const authIpLimiter = createDedicatedLimiter({
   prefix: 'auth-ip',
   windowMs: FIFTEEN_MINUTES,
   max: 10,
@@ -90,13 +90,43 @@ const authIpLimiter = createAuthLimiter({
 // Per nomor telepon. Tanpa ini, penyerang yang memakai banyak IP tetap bisa
 // menggempur satu akun. Ambangnya lebih longgar daripada batas IP supaya tidak
 // gampang dipakai mengunci akun orang lain.
-const loginAccountLimiter = createAuthLimiter({
+const loginAccountLimiter = createDedicatedLimiter({
   prefix: 'login-account',
   windowMs: FIFTEEN_MINUTES,
   max: 20,
   message:
     'Terlalu banyak percobaan login untuk nomor ini. Silakan coba lagi nanti.',
   keyGenerator: (req) => String(req.body?.phone_number ?? 'tanpa-nomor'),
+});
+
+function customerTargetKey(req) {
+  const customerId = Number(req.params?.id);
+  return Number.isInteger(customerId) && customerId > 0
+    ? `customer:${customerId}`
+    : 'customer:invalid';
+}
+
+// Endpoint ini menghasilkan email. Kuota berbasis customer (bukan admin/IP)
+// mencegah beberapa akun staf atau beberapa instance aplikasi bersama-sama
+// membanjiri alamat email customer yang sama.
+const resendActivationTargetLimiter = createDedicatedLimiter({
+  prefix: 'admin-resend-activation',
+  windowMs: FIFTEEN_MINUTES,
+  max: 3,
+  message:
+    'Terlalu banyak pengiriman aktivasi untuk customer ini. Silakan coba lagi nanti.',
+  keyGenerator: customerTargetKey,
+});
+
+// Retry sinkronisasi memanggil API eksternal. Prefix terpisah memastikan
+// pengiriman email dan retry sync tidak saling menghabiskan kuota.
+const runchiseSyncTargetLimiter = createDedicatedLimiter({
+  prefix: 'admin-runchise-sync',
+  windowMs: FIFTEEN_MINUTES,
+  max: 5,
+  message:
+    'Terlalu banyak percobaan sinkronisasi untuk customer ini. Silakan coba lagi nanti.',
+  keyGenerator: customerTargetKey,
 });
 
 // Batas umum seluruh API. Sengaja longgar: tujuannya menahan penyalahgunaan
@@ -124,4 +154,6 @@ module.exports = {
   globalLimiter,
   loginAccountLimiter,
   pruneRateLimitCounters,
+  resendActivationTargetLimiter,
+  runchiseSyncTargetLimiter,
 };
