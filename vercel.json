@@ -27,7 +27,7 @@
     },
     {
       "path": "/api/cron/runchise-sync/customers",
-      "schedule": "15,45 12 * * *"
+      "schedule": "15 12 * * *"
     },
     {
       "path": "/api/cron/runchise-sync/sales-transactions",
