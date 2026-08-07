@@ -3,6 +3,11 @@ const dotenv = require('dotenv');
 const path = require('path');
 const { Pool } = require('pg');
 const { importLocationCustomers } = require('./importRunchiseLocationCustomers');
+// M-9: pakai proyeksi field yang sama dengan syncService.js supaya script
+// backfill manual ini tidak lagi menuliskan JSON sale Runchise APA ADANYA
+// (lihat komentar di buildSaleRewardRedemptionSnapshot untuk field apa saja
+// yang benar-benar dipakai extractRewardRedemptions()/unwrapSale()).
+const { buildSaleRewardRedemptionSnapshot } = require('../src/services/syncService');
 
 dotenv.config({ path: path.resolve(__dirname, '..', '.env'), quiet: true });
 
@@ -194,7 +199,7 @@ function mapSale(
     paymentMethods,
     snapshotAt,
     runId,
-    JSON.stringify(sale),
+    JSON.stringify(buildSaleRewardRedemptionSnapshot(sale)),
     snapshotAt,
     snapshotAt,
   ];

@@ -1299,6 +1299,57 @@ async function inspectCustomerPointSources() {
 
 // ===================== SYNC SALES TRANSACTION REPORT =====================
 
+// M-9: Menyimpan hanya subset field transaksi Runchise yang benar-benar digunakan untuk proses reward redemption guna mengurangi ukuran penyimpanan tanpa mengubah fungsionalitas.
+function pickLoyaltyContainer(container) {
+  if (!container || typeof container !== 'object') return null;
+
+  return {
+    redeemed_point: container.redeemed_point ?? null,
+    loyalty_products: Array.isArray(container.loyalty_products)
+      ? container.loyalty_products
+      : [],
+  };
+}
+
+function buildSaleRewardRedemptionSnapshot(sale) {
+  if (!sale || typeof sale !== 'object') return null;
+
+  return {
+    id: sale.id ?? null,
+    customer_id: sale.customer_id ?? null,
+    customer_name: sale.customer_name ?? null,
+    customer_phone_number: sale.customer_phone_number ?? null,
+    customer_phone_number_country_code:
+      sale.customer_phone_number_country_code ?? null,
+    location_id: sale.location_id ?? null,
+    location_name: sale.location_name ?? null,
+    sales_time: sale.sales_time ?? null,
+    local_sales_time: sale.local_sales_time ?? null,
+    loyalty: pickLoyaltyContainer(sale.loyalty),
+    metadata: sale.metadata
+      ? {
+          redeemed_point: sale.metadata.redeemed_point ?? null,
+          loyalty: pickLoyaltyContainer(sale.metadata.loyalty),
+        }
+      : null,
+    sale_detail_transactions: Array.isArray(sale.sale_detail_transactions)
+      ? sale.sale_detail_transactions.map((detail) => ({
+          id: detail?.id ?? null,
+          product_id: detail?.product_id ?? null,
+          product_name: detail?.product_name ?? null,
+          price: detail?.price ?? null,
+          quantity: detail?.quantity ?? null,
+          cancelled_quantity: detail?.cancelled_quantity ?? null,
+          deleted: detail?.deleted ?? null,
+          meta:
+            detail?.meta && typeof detail.meta === 'object'
+              ? { sell_price: detail.meta.sell_price ?? null }
+              : null,
+        }))
+      : [],
+  };
+}
+
 function buildSalesTransactionParams({
   locationId,
   startDate,
@@ -1397,7 +1448,7 @@ function mapSalesTransactionReportData(
         ? [...new Set(sale.payments.map((p) => p.payment_method_name).filter(Boolean))].join(', ') || null
         : null),
     customer_snapshot_at: new Date(),
-    raw: sale,
+    raw: buildSaleRewardRedemptionSnapshot(sale),
   };
 }
 
@@ -2065,4 +2116,6 @@ module.exports = {
   loadCrisbarPromoContext,
   mapRunchisePromoToLocalData,
   syncPromos,
+  buildSaleRewardRedemptionSnapshot,
+  mapSalesTransactionReportData,
 };

@@ -1,7 +1,8 @@
 # M-9 (MEDIUM) — Helper fetchAll* & sync reward-redemption menumpuk seluruh dataset di memori
 
-Status: **Fixed**
-File terdampak: `src/services/runchiseService.js`, `src/services/syncService.js`, `src/services/runchisePosRewardRedemptionService.js`
+Status: **Fixed** — termasuk `raw: sale` yang sebelumnya sengaja tidak
+disentuh (lihat bagian 6 untuk audit lengkap dan penutupannya).
+File terdampak: `src/services/runchiseService.js`, `src/services/syncService.js`, `src/services/runchisePosRewardRedemptionService.js`, `scripts/importRunchiseSalesTransactions.js`, `test/salesTransactionRawSnapshot.test.js`
 
 ## 1. Masalah
 
@@ -52,11 +53,12 @@ risiko nyata, bukan menebak:
   `extractRewardRedemptions()`/`unwrapSale()` di
   `runchisePosRewardRedemptionService.js` untuk mengekstrak
   `sale_detail_transactions` dan metadata loyalty, field yang **tidak**
-  disimpan di kolom manapun selain `raw`. Menghapus/memangkas field di
-  dalamnya tanpa mengetahui persis skema respons Runchise berisiko
-  mematahkan ekstraksi reward secara diam-diam (banyak akses field pakai
-  `?.`, jadi field yang hilang tidak akan melempar error — cuma
-  menghasilkan hasil salah tanpa peringatan). **Sengaja tidak disentuh.**
+  disimpan di kolom manapun selain `raw`. Pada perbaikan awal ini
+  **sengaja tidak disentuh** karena memangkas field tanpa audit lengkap
+  setiap titik baca berisiko mematahkan ekstraksi reward secara diam-diam
+  (banyak akses field pakai `?.`, jadi field yang hilang tidak akan
+  melempar error — cuma menghasilkan hasil salah tanpa peringatan).
+  **Audit lengkap sudah dilakukan pada update berikutnya — lihat bagian 6.**
 - `raw: promo` (`Promo`) — ditelusuri lewat `grep` menyeluruh: **tidak ada
   satu kode pun** (backend maupun frontend) yang membaca kolom ini
   kembali. `mapPromo()` di `promoRoutes.js` bahkan sudah memfilternya
@@ -228,17 +230,16 @@ diverifikasi nol sisa di database produksi.
  3 files changed, 202 insertions(+), 69 deletions(-)
 ```
 
-## 5. Yang TIDAK berubah
+## 5. Yang TIDAK berubah (di luar bagian 6)
 
-- `raw: sale` (`CustomerSalesTransactionReport`) — sengaja **tidak**
-  dipangkas/dihapus, lihat bagian 2 untuk alasannya.
 - `fetchAllSubBrands`, `fetchAllLocations` — data katalog kecil, tidak
   berisiko, tidak disentuh.
 - `fetchAllProducts`, `fetchAllPromos` — kode mati (tidak dipanggil di
   mana pun), dibiarkan apa adanya; penghapusan kode mati adalah
   keputusan terpisah dari perbaikan performa ini.
-- Skema database — tidak ada migration baru. Kolom `raw` di `Promo` tetap
-  ada (hanya berhenti diisi untuk baris baru/yang ter-sync ulang).
+- Skema database — tidak ada migration baru. Kolom `raw` di `Promo` dan
+  `CustomerSalesTransactionReport` tetap ada (hanya berhenti diisi/berubah
+  bentuk untuk baris baru/yang ter-sync ulang).
 - `fetchAllSalesTransactions` (dipakai `syncSalesTransactionReportsForLocation`)
   — tidak diubah jadi streaming pada perbaikan ini. Berbeda dengan roster
   customer (yang selalu penuh per outlet terlepas dari filter tanggal),
@@ -247,3 +248,145 @@ diverifikasi nol sisa di database produksi.
   seberisiko kasus "~10rb customer x 29 outlet" yang eksplisit disebut
   laporan. Bisa jadi perbaikan lanjutan terpisah bila volumenya terbukti
   jadi masalah di kemudian hari.
+
+## 6. Update — celah residual ditutup: `raw: sale` dipangkas ke field yang benar-benar dipakai
+
+Audit lanjutan menindaklanjuti keputusan "sengaja tidak disentuh" di bagian
+2 dengan melakukan tepat audit yang sebelumnya dihindari karena berisiko:
+menelusuri **setiap** titik baca `report.raw`/`sale` di seluruh codebase
+untuk memastikan field mana saja yang genuinely dipakai, sebelum memangkas
+apa pun.
+
+### 6.1 Audit titik baca
+
+```bash
+grep -rn "\.raw\b\|raw:" src --include=*.js | grep -v node_modules
+```
+
+Hasilnya menunjukkan `CustomerSalesTransactionReport.raw` **hanya** dibaca
+di dua tempat:
+
+1. `unwrapSale()`/`extractRewardRedemptions()` di
+   `runchisePosRewardRedemptionService.js` — jalur produksi.
+2. `scripts/verifyRunchisePosRewardRedemptions.js` — script debugging
+   manual, membaca subset field yang **sama persis**.
+
+Tidak ada endpoint admin, export, atau tooling lain yang pernah
+mengembalikan/membaca kolom ini. Dari kedua titik itu, field `sale` yang
+benar-benar pernah diakses cuma:
+
+```text
+id, customer_id, customer_name, customer_phone_number,
+customer_phone_number_country_code, location_id, location_name,
+sales_time, local_sales_time,
+metadata.redeemed_point, metadata.loyalty.{redeemed_point,loyalty_products},
+loyalty.{redeemed_point,loyalty_products},
+sale_detail_transactions[].{id,product_id,product_name,price,quantity,
+  cancelled_quantity,deleted,meta.sell_price}
+```
+
+Field lain — rincian pajak, diskon, katalog produk penuh, info staff/meja,
+dan puluhan field lain yang dikirim API `/sale_transactions` — tidak pernah
+dibaca ulang setelah ditulis. Field itulah yang selama ini ikut tersimpan
+permanen di setiap baris tanpa pernah dipakai.
+
+`unwrapSale()` juga memeriksa `raw.sale_transaction` sebagai fallback
+(bentuk envelope dari endpoint detail-per-transaksi
+`GET /sale_transactions/:id`, dipakai `scripts/importRunchiseSalesTransactions.js`
+lewat `fetchSaleTransactionDetail()`). Ditelusuri lebih lanjut: script itu
+sendiri sudah meng-unwrap `data.sale_transaction` sebelum menyimpan
+(`const sale = data?.sale_transaction;`), jadi `raw` yang tertulis di kedua
+jalur (sync utama dan script backfill) selalu berbentuk objek sale yang
+sudah tak terbungkus — fallback `raw.sale_transaction` di `unwrapSale()`
+murni jaga-jaga, tidak ada penulis aktif yang menghasilkan bentuk itu.
+
+### 6.2 Perbaikan
+
+`buildSaleRewardRedemptionSnapshot(sale)` (baru, `syncService.js`)
+memproyeksikan `sale` ke persis daftar field di atas sebelum disimpan:
+
+```js
+function buildSaleRewardRedemptionSnapshot(sale) {
+  if (!sale || typeof sale !== 'object') return null;
+  return {
+    id: sale.id ?? null,
+    customer_id: sale.customer_id ?? null,
+    // ...9 field identitas/lokasi/waktu lainnya
+    loyalty: pickLoyaltyContainer(sale.loyalty),
+    metadata: sale.metadata
+      ? { redeemed_point: ..., loyalty: pickLoyaltyContainer(sale.metadata.loyalty) }
+      : null,
+    sale_detail_transactions: (sale.sale_detail_transactions ?? []).map((d) => ({
+      id: d?.id ?? null, product_id: d?.product_id ?? null, /* ... */
+    })),
+  };
+}
+```
+
+Kedua kemungkinan lokasi field loyalty (`sale.metadata.loyalty` **dan**
+`sale.loyalty`) tetap disalin apa adanya — `extractRewardRedemptions()`
+memakai fallback `sale.metadata?.loyalty ?? sale.loyalty`, jadi keduanya
+harus tetap tersedia agar fallback itu tidak diam-diam kehilangan data pada
+bentuk respons yang memakai jalur kedua.
+
+`mapSalesTransactionReportData()` sekarang menulis
+`raw: buildSaleRewardRedemptionSnapshot(sale)`, bukan `raw: sale`.
+`scripts/importRunchiseSalesTransactions.js` (backfill CLI manual) diubah
+memakai fungsi yang **sama** (diimpor dari `syncService.js`) alih-alih
+`JSON.stringify(sale)` langsung — mencegah script itu diam-diam
+menghidupkan kembali blob penuh di masa depan lewat jalur yang berbeda.
+
+### 6.3 Pengujian terukur
+
+`test/salesTransactionRawSnapshot.test.js` (6 test, seluruhnya lulus lewat
+`npm test`) membuktikan dua klaim sekaligus, bukan cuma salah satu:
+
+1. **Ukuran benar-benar berkurang dan field bloat benar-benar hilang** —
+   dibangun objek `sale` sintetis dengan field bloat realistis (rincian
+   pajak 50 baris, diskon 30 baris, info staff/meja, katalog produk 100
+   item), dan dibuktikan `JSON.stringify(snapshot).length` < 20% ukuran
+   `JSON.stringify(sale)` asli, plus tidak satu pun field bloat (`tax_breakdown`,
+   `discount_breakdown`, `shift_history`, `floor_plan_svg`,
+   `full_product_catalog`, dst) muncul di hasil `JSON.stringify` snapshot.
+2. **Ekstraksi reward tetap identik, dari raw penuh maupun raw dipangkas** —
+   `extractRewardRedemptions()` dipanggil dua kali dengan `sale` yang sama
+   persis (satu lewat raw asli, satu lewat raw yang sudah dipangkas), untuk
+   kedua kemungkinan lokasi field loyalty (`sale.metadata.loyalty` dan
+   `sale.loyalty`). Hasilnya dibandingkan `deepEqual` pada seluruh field
+   yang menentukan hasil bisnis (produk, pelanggan, lokasi, poin,
+   `calculatedPoints`, `redeemedPoints`, `valid`) — identik persis di kedua
+   kasus. (Sub-objek `row.raw` yang ikut menyalin `detail`/`loyaltyProduct`
+   apa adanya sengaja dites terpisah: field bloat pada level detail
+   transaksi juga ikut hilang di sana — manfaat tambahan, bukan regresi.)
+3. Kasus tepi: `unwrapSale()` tetap bekerja normal untuk raw yang sudah
+   dipangkas (tidak ada wrapper `sale_transaction`), dan
+   `buildSaleRewardRedemptionSnapshot()` aman dipanggil dengan
+   `null`/`undefined`/nilai bukan objek.
+
+Jalankan:
+
+```bash
+npm test
+```
+
+Seluruh suite backend: **70/70 test lulus**, tidak ada regresi pada 64 test
+yang sudah ada sebelumnya.
+
+### 6.4 Risiko residual yang tersisa (disengaja, bukan celah)
+
+- **Baris historis** yang sudah tersimpan sebelum perbaikan ini tetap
+  membawa blob `raw` penuh sampai baris itu ikut ter-sync ulang (upsert)
+  secara alami — tidak ada migration/backfill data yang dijalankan sebagai
+  bagian dari perbaikan ini. Backfill terpisah untuk mengecilkan baris lama
+  bisa dilakukan lewat script serupa `scripts/importRunchiseSalesTransactions.js`
+  bila DB bloat dari data historis terbukti signifikan, tapi itu operasi
+  penulisan massal ke produksi yang sengaja tidak dijalankan tanpa
+  persetujuan eksplisit.
+- Kalau Runchise suatu saat mengubah skema responsnya sehingga field
+  reward-redemption pindah ke path baru yang belum tercakup daftar di
+  bagian 6.1, `extractRewardRedemptions()` akan diam-diam kembali
+  menghasilkan `valid:false`/`rows:[]` untuk transaksi itu — persis
+  risiko yang sama seperti sebelum perbaikan ini (akses field pakai `?.`).
+  Bedanya sekarang risiko itu eksplisit terdokumentasi dan terikat pada
+  daftar field yang jelas, bukan tersembunyi di balik "field apa pun bisa
+  saja dipakai suatu saat".
