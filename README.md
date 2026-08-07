@@ -78,6 +78,12 @@
 
   CRON_SECRET="your-cron-secret"
 
+  # Swagger UI (/api/docs) nonaktif secara default di production.
+  # Set API_DOCS_ENABLED="true" untuk mengaktifkan, wajib disertai kredensial berikut.
+  API_DOCS_ENABLED="false"
+  API_DOCS_USER="your-docs-username"
+  API_DOCS_PASSWORD="your-docs-password"
+
   Jangan commit file .env ke repository.
 
   ## Instalasi
@@ -125,6 +131,11 @@
   OpenAPI JSON tersedia di:
 
   GET /api/docs/openapi.json
+
+  Di production, kedua endpoint di atas nonaktif (404) secara default. Aktifkan
+  hanya bila perlu lewat API_DOCS_ENABLED="true" beserta API_DOCS_USER dan
+  API_DOCS_PASSWORD (dilindungi HTTP Basic Auth). Lihat
+  docs/fix-L1-swagger-docs-public-exposure.md.
 
   ## Endpoint Utama
 
@@ -366,4 +377,6 @@
   - Gunakan JWT_SECRET yang kuat di production
   - Gunakan CRON_SECRET yang kuat untuk endpoint cron
   - Batasi akses endpoint admin hanya untuk role yang sesuai
+  - Biarkan API_DOCS_ENABLED nonaktif di production kecuali benar-benar perlu;
+    bila diaktifkan, wajib set API_DOCS_USER/API_DOCS_PASSWORD yang kuat
   - Jangan menyimpan token, password, atau API key di repository

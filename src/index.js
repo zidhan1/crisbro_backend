@@ -5,12 +5,9 @@ require('dotenv').config({ quiet: true });
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const crypto = require('crypto');
 const { openApiSpec, renderSwaggerHtml } = require('./docs/swagger');
-const {
-  globalLimiter,
-  pruneRateLimitCounters,
-} = require('./lib/rateLimit');
+const { safeStringEqual } = require('./lib/safeCompare');
+const { globalLimiter, pruneRateLimitCounters } = require('./lib/rateLimit');
 
 // Prisma ORM (database client)
 const prisma = require('./lib/prisma');
@@ -18,6 +15,7 @@ const prisma = require('./lib/prisma');
 // Middleware
 const auth = require('./middleware/auth');
 const requireRole = require('./middleware/requireRole');
+const requireDocsAccess = require('./middleware/docsAccess');
 
 // Routes (modular API)
 const customerRoutes = require('./routes/customerRoutes');
@@ -125,8 +123,11 @@ app.use(express.json({ limit: '100kb' }));
 
 // Batas laju umum untuk seluruh API.
 app.use(globalLimiter);
-app.get('/api/docs/openapi.json', (req, res) => res.json(openApiSpec));
-app.get(['/api/docs', '/api/docs/'], (req, res) => {
+// M-13: Melindungi akses Swagger UI dan OpenAPI dengan pembatasan akses agar tidak terekspos di lingkungan production.
+app.get('/api/docs/openapi.json', requireDocsAccess, (req, res) =>
+  res.set('Cache-Control', 'no-store').json(openApiSpec),
+);
+app.get(['/api/docs', '/api/docs/'], requireDocsAccess, (req, res) => {
   res.set('Cache-Control', 'no-store').type('html').send(renderSwaggerHtml());
 });
 app.use('/api', customerRoutes);
@@ -202,7 +203,11 @@ async function handleSyncCustomers(req, res) {
     });
   } catch (error) {
     console.error('Gagal membuat job impor customer Runchise:', error);
-    respondWithServerError(res, error, 'Gagal memulai sinkronisasi customer Runchise');
+    respondWithServerError(
+      res,
+      error,
+      'Gagal memulai sinkronisasi customer Runchise',
+    );
   }
 }
 
@@ -210,7 +215,11 @@ async function handleCustomerSyncStatus(req, res) {
   try {
     res.json({ job: await getCustomerImportSyncJob() });
   } catch (error) {
-    respondWithServerError(res, error, 'Gagal membaca status sinkronisasi customer');
+    respondWithServerError(
+      res,
+      error,
+      'Gagal membaca status sinkronisasi customer',
+    );
   }
 }
 
@@ -234,7 +243,11 @@ async function handleStartCustomerTimestampSync(req, res) {
     });
   } catch (error) {
     console.error('Gagal membuat job timestamp customer Runchise:', error);
-    respondWithServerError(res, error, 'Gagal memulai sinkronisasi tanggal customer Runchise');
+    respondWithServerError(
+      res,
+      error,
+      'Gagal memulai sinkronisasi tanggal customer Runchise',
+    );
   }
 }
 
@@ -251,7 +264,11 @@ async function handleProcessCustomerTimestampSync(req, res) {
     res.json(await processCustomerTimestampSyncJob());
   } catch (error) {
     console.error('Worker timestamp customer Runchise gagal:', error);
-    respondWithServerError(res, error, 'Worker sinkronisasi tanggal customer gagal');
+    respondWithServerError(
+      res,
+      error,
+      'Worker sinkronisasi tanggal customer gagal',
+    );
   }
 }
 
@@ -418,16 +435,6 @@ app.post(
 );
 
 // ===================== VERCEL CRON SYNC ROUTES =====================
-
-function safeStringEqual(left, right) {
-  const leftBuffer = Buffer.from(String(left || ''));
-  const rightBuffer = Buffer.from(String(right || ''));
-
-  return (
-    leftBuffer.length === rightBuffer.length &&
-    crypto.timingSafeEqual(leftBuffer, rightBuffer)
-  );
-}
 
 function requireCronSecret(req, res, next) {
   const secret =
