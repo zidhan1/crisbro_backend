@@ -16,6 +16,7 @@ const prisma = require('./lib/prisma');
 const auth = require('./middleware/auth');
 const requireRole = require('./middleware/requireRole');
 const requireDocsAccess = require('./middleware/docsAccess');
+const docsContentSecurityPolicy = require('./middleware/docsCsp');
 
 // Routes (modular API)
 const customerRoutes = require('./routes/customerRoutes');
@@ -67,8 +68,26 @@ const app = express();
 // Mengatur `trust proxy` ke 1 agar rate limit menggunakan IP asli pengguna secara akurat tanpa membuka risiko pemalsuan IP.
 app.set('trust proxy', 1);
 
-// Menambahkan header keamanan dasar dengan menonaktifkan Content-Security-Policy agar tetap kompatibel dengan halaman Swagger yang menggunakan skrip inline.
-app.use(helmet({ contentSecurityPolicy: false }));
+// L-2: Menerapkan Content Security Policy (CSP) secara global dengan kebijakan khusus untuk Swagger agar tetap aman tanpa mengganggu fungsionalitas dokumentasi API.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'"],
+        imgSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'self'"],
+        frameAncestors: ["'none'"],
+      },
+    },
+  }),
+);
 
 // Membatasi akses CORS hanya untuk origin yang tepercaya, sambil tetap mengizinkan permintaan tanpa header Origin untuk cron, health check, dan akses non-browser.
 const allowedOrigins = new Set(
@@ -127,9 +146,17 @@ app.use(globalLimiter);
 app.get('/api/docs/openapi.json', requireDocsAccess, (req, res) =>
   res.set('Cache-Control', 'no-store').json(openApiSpec),
 );
-app.get(['/api/docs', '/api/docs/'], requireDocsAccess, (req, res) => {
-  res.set('Cache-Control', 'no-store').type('html').send(renderSwaggerHtml());
-});
+app.get(
+  ['/api/docs', '/api/docs/'],
+  docsContentSecurityPolicy,
+  requireDocsAccess,
+  (req, res) => {
+    res
+      .set('Cache-Control', 'no-store')
+      .type('html')
+      .send(renderSwaggerHtml(res.locals.cspNonce));
+  },
+);
 app.use('/api', customerRoutes);
 app.use('/api', authRoutes);
 app.use('/api/rewards-catalog', rewardsCatalogRoutes);

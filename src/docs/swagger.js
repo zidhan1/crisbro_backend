@@ -16,8 +16,10 @@ const swaggerUiOptions = {
   },
 };
 
-function renderSwaggerHtml() {
+function renderSwaggerHtml(nonce) {
   const swaggerOptions = swaggerUiOptions.swaggerOptions;
+  // L-2: Menambahkan nonce unik pada setiap script dan style inline agar sesuai dengan kebijakan CSP dan tetap aman dijalankan.
+  const nonceAttr = nonce ? ` nonce="${nonce}"` : '';
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -27,7 +29,7 @@ function renderSwaggerHtml() {
   <title>${swaggerUiOptions.customSiteTitle}</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@${swaggerUiAssetVersion}/swagger-ui.css">
   <link rel="icon" type="image/png" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@${swaggerUiAssetVersion}/favicon-32x32.png" sizes="32x32">
-  <style>
+  <style${nonceAttr}>
     html {
       box-sizing: border-box;
       overflow-y: scroll;
@@ -49,7 +51,7 @@ function renderSwaggerHtml() {
   <div id="swagger-ui"></div>
   <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@${swaggerUiAssetVersion}/swagger-ui-bundle.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@${swaggerUiAssetVersion}/swagger-ui-standalone-preset.js"></script>
-  <script>
+  <script${nonceAttr}>
     window.onload = function () {
       window.ui = SwaggerUIBundle({
         url: '/api/docs/openapi.json',

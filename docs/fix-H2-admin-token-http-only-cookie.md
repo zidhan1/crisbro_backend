@@ -339,7 +339,10 @@ disarankan sebelum production rollout.
   terpisah bila diperlukan.
 - XSS yang aktif masih dapat mengirim request dari browser korban selama sesi
   terbuka, tetapi tidak dapat membaca token untuk mengambil alih sesi dari
-  perangkat lain. Karena itu perbaikan CSP pada temuan L-2 tetap penting.
+  perangkat lain. Temuan L-2 (CSP dimatikan global) yang disebut di atas sudah
+  diperbaiki — lihat `fix-L2-csp-disabled-globally.md` — sehingga script asing
+  hasil injeksi XSS sekarang juga diblokir CSP pada seluruh endpoint API,
+  bukan hanya bergantung pada proteksi cookie `HttpOnly` di temuan ini.
 - Cookie tidak menggantikan pemeriksaan role. Semua endpoint admin tetap harus
   memakai middleware `auth` dan `requireRole` yang sesuai.
 - Tidak ada perubahan skema database atau format tabel `Session`.

@@ -379,4 +379,8 @@
   - Batasi akses endpoint admin hanya untuk role yang sesuai
   - Biarkan API_DOCS_ENABLED nonaktif di production kecuali benar-benar perlu;
     bila diaktifkan, wajib set API_DOCS_USER/API_DOCS_PASSWORD yang kuat
+  - Content-Security-Policy aktif secara global (lihat
+    docs/fix-L2-csp-disabled-globally.md); jangan menambah 'unsafe-inline'
+    atau 'unsafe-eval' pada CSP global, buat kebijakan khusus per-route bila
+    ada halaman HTML baru yang butuh pengecualian
   - Jangan menyimpan token, password, atau API key di repository
