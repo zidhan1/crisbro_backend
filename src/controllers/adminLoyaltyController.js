@@ -14,6 +14,7 @@ const {
 } = require('../services/runchiseCustomerSyncService');
 const { recordAdminActivity } = require('../services/adminActivityLogService');
 const { respondWithServerError } = require('../lib/serverError');
+const { ValidationError } = require('../lib/validationError');
 const {
   toRedemptionTrend,
   toPublicRedemptionHistory,
@@ -218,12 +219,12 @@ function badRequest(res, message) {
 function parsePositiveInt(value, fieldName, { required = true } = {}) {
   if (value === undefined || value === null || value === '') {
     if (!required) return undefined;
-    throw new Error(`${fieldName} wajib diisi`);
+    throw new ValidationError(`${fieldName} wajib diisi`);
   }
 
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0) {
-    throw new Error(`${fieldName} harus berupa integer positif`);
+    throw new ValidationError(`${fieldName} harus berupa integer positif`);
   }
 
   return number;
@@ -232,12 +233,12 @@ function parsePositiveInt(value, fieldName, { required = true } = {}) {
 function parseNonNegativeInt(value, fieldName, { required = true } = {}) {
   if (value === undefined || value === null || value === '') {
     if (!required) return undefined;
-    throw new Error(`${fieldName} wajib diisi`);
+    throw new ValidationError(`${fieldName} wajib diisi`);
   }
 
   const number = Number(value);
   if (!Number.isInteger(number) || number < 0) {
-    throw new Error(`${fieldName} harus berupa integer non-negatif`);
+    throw new ValidationError(`${fieldName} harus berupa integer non-negatif`);
   }
 
   return number;
@@ -246,25 +247,25 @@ function parseNonNegativeInt(value, fieldName, { required = true } = {}) {
 function parseBoolean(value, fieldName, { required = true } = {}) {
   if (value === undefined || value === null || value === '') {
     if (!required) return undefined;
-    throw new Error(`${fieldName} wajib diisi`);
+    throw new ValidationError(`${fieldName} wajib diisi`);
   }
 
   if (value === true || value === false) return value;
   if (value === 'true') return true;
   if (value === 'false') return false;
 
-  throw new Error(`${fieldName} harus berupa boolean`);
+  throw new ValidationError(`${fieldName} harus berupa boolean`);
 }
 
 function parseOptionalString(value, fieldName, maxLength = 255) {
   if (value === undefined) return undefined;
   if (value === null || value === '') return null;
   if (typeof value !== 'string')
-    throw new Error(`${fieldName} harus berupa string`);
+    throw new ValidationError(`${fieldName} harus berupa string`);
 
   const trimmed = value.trim();
   if (trimmed.length > maxLength) {
-    throw new Error(`${fieldName} maksimal ${maxLength} karakter`);
+    throw new ValidationError(`${fieldName} maksimal ${maxLength} karakter`);
   }
 
   return trimmed || null;
@@ -276,7 +277,7 @@ function parseOptionalEmail(value, fieldName = 'email', maxLength = 255) {
 
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailPattern.test(email)) {
-    throw new Error(`${fieldName} harus berupa email valid`);
+    throw new ValidationError(`${fieldName} harus berupa email valid`);
   }
 
   return email.toLowerCase();
@@ -284,7 +285,7 @@ function parseOptionalEmail(value, fieldName = 'email', maxLength = 255) {
 
 function parseRequiredString(value, fieldName, maxLength = 255) {
   const parsed = parseOptionalString(value, fieldName, maxLength);
-  if (!parsed) throw new Error(`${fieldName} wajib diisi`);
+  if (!parsed) throw new ValidationError(`${fieldName} wajib diisi`);
   return parsed;
 }
 
@@ -384,7 +385,7 @@ function parseAdminUserRole(value) {
   const role = parseRequiredString(value ?? 'marketing', 'role', 30);
 
   if (!ADMIN_USER_ROLES.has(role)) {
-    throw new Error('role harus admin atau marketing');
+    throw new ValidationError('role harus admin atau marketing');
   }
 
   return role;
@@ -396,7 +397,7 @@ function parseOptionalDate(value, fieldName) {
 
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    throw new Error(`${fieldName} harus berupa tanggal valid`);
+    throw new ValidationError(`${fieldName} harus berupa tanggal valid`);
   }
 
   return date;
@@ -421,7 +422,7 @@ function parseOptionalNumber(value, fieldName, { min = 0 } = {}) {
 
   const number = Number(value);
   if (Number.isNaN(number) || number < min) {
-    throw new Error(`${fieldName} harus berupa angka minimal ${min}`);
+    throw new ValidationError(`${fieldName} harus berupa angka minimal ${min}`);
   }
 
   return number;
@@ -472,7 +473,7 @@ function parseCustomerStatus(value) {
   const allowed = new Set(['active', 'inactive']);
 
   if (!allowed.has(status)) {
-    throw new Error('status harus active atau inactive');
+    throw new ValidationError('status harus active atau inactive');
   }
 
   return status;
@@ -484,14 +485,14 @@ function parseCustomerGender(value) {
   const allowed = new Set(['male', 'female', 'unknown']);
 
   if (!allowed.has(gender)) {
-    throw new Error('gender harus male, female, atau unknown');
+    throw new ValidationError('gender harus male, female, atau unknown');
   }
 
   return gender;
 }
 
 function handleError(res, error) {
-  if (error.message?.includes('harus') || error.message?.includes('wajib')) {
+  if (error instanceof ValidationError) {
     return badRequest(res, error.message);
   }
 
@@ -1428,7 +1429,7 @@ async function updateAdminCustomer(req, res) {
           : existing.owner_location_id;
 
       if (!effectiveOwnerLocationId) {
-        throw new Error('owner_location_id wajib diisi');
+      throw new ValidationError('owner_location_id wajib diisi');
       }
 
       if (Object.keys(userData).length > 0) {
