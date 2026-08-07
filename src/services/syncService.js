@@ -5,6 +5,10 @@ const { syncSalesAcrossLocations } = require('../lib/salesTransactionSyncCoverag
 // Prisma.sql/Prisma.join dipakai untuk menyusun bulk upsert yang aman parameter
 const { Prisma } = require('@prisma/client');
 
+function isUniqueConstraintError(error) {
+  return error?.code === 'P2002';
+}
+
 // Mengimpor service Runchise (API eksternal)
 const {
   fetchAllSalesTransactions,
@@ -274,6 +278,62 @@ async function resolveCustomerLocationMemberships(runchiseLocationIds) {
   return buildLocationResolution(locationRows);
 }
 
+async function updateRunchiseCustomer(existing, payload, uniqueLocationIds) {
+  const operations = [
+    prisma.customer.update({
+      where: { id: existing.id },
+      data: payload,
+    }),
+    prisma.user.update({
+      where: { id: existing.user_id },
+      data: { phone_number: payload.phone_number },
+    }),
+    prisma.customerLocation.deleteMany({
+      where: { customer_id: existing.id },
+    }),
+  ];
+  if (uniqueLocationIds.length > 0) {
+    operations.push(
+      prisma.customerLocation.createMany({
+        data: uniqueLocationIds.map((location_id) => ({
+          customer_id: existing.id,
+          location_id,
+        })),
+        skipDuplicates: true,
+      }),
+    );
+  }
+  await prisma.$transaction(operations);
+}
+
+async function findCustomerAfterCreateConflict(c, phoneNumberVariants) {
+  const [customer, user] = await Promise.all([
+    prisma.customer.findFirst({
+      where: {
+        OR: [
+          { runchise_id: Number(c.id) },
+          ...(phoneNumberVariants.length > 0
+            ? [
+                { phone_number: { in: phoneNumberVariants } },
+                { user: { phone_number: { in: phoneNumberVariants } } },
+              ]
+            : []),
+        ],
+      },
+      include: {
+        user: { select: { id: true, phone_number: true, role: true } },
+      },
+    }),
+    phoneNumberVariants.length > 0
+      ? prisma.user.findFirst({
+          where: { phone_number: { in: phoneNumberVariants } },
+          include: { customer: true },
+        })
+      : null,
+  ]);
+  return { customer, user };
+}
+
 // Upsert customer dari Runchise ke database lokal yang digunakan oleh impor penuh maupun worker bertahap agar tetap sesuai batas serverless.
 async function upsertRunchiseCustomer(c, fallbackLocationId = null) {
   // Pastikan brand sudah ada di database
@@ -405,33 +465,10 @@ async function upsertRunchiseCustomer(c, fallbackLocationId = null) {
 
   const existing = existingByRunchiseId || existingByPhone;
 
-  // Update jika sudah ada, create jika belum
+  // Pemeriksaan di atas hanya untuk rekonsiliasi data yang sudah ada. Constraint
+  // unik database tetap menjadi sumber kebenaran ketika dua run berjalan serentak.
   if (existing) {
-    const operations = [
-      prisma.customer.update({
-        where: { id: existing.id },
-        data: payload,
-      }),
-      prisma.user.update({
-        where: { id: existing.user_id },
-        data: { phone_number: payload.phone_number },
-      }),
-      prisma.customerLocation.deleteMany({
-        where: { customer_id: existing.id },
-      }),
-    ];
-    if (uniqueLocationIds.length > 0) {
-      operations.push(
-        prisma.customerLocation.createMany({
-          data: uniqueLocationIds.map((location_id) => ({
-            customer_id: existing.id,
-            location_id,
-          })),
-          skipDuplicates: true,
-        }),
-      );
-    }
-    await prisma.$transaction(operations);
+    await updateRunchiseCustomer(existing, payload, uniqueLocationIds);
 
     return {
       status: 'updated',
@@ -440,25 +477,54 @@ async function upsertRunchiseCustomer(c, fallbackLocationId = null) {
     };
   }
 
-  const createdUser = await prisma.user.create({
-    data: {
-      phone_number: normalizedPhone,
-      password_hash: '',
-      activation_status: 'pending_activation',
-      role: 'customer',
-      customer: {
-        create: {
-          ...payload,
-          ...(uniqueLocationIds.length > 0 && {
-            customer_locations: {
-              create: uniqueLocationIds.map((location_id) => ({ location_id })),
-            },
-          }),
+  let createdUser;
+  try {
+    createdUser = await prisma.user.create({
+      data: {
+        phone_number: normalizedPhone,
+        password_hash: '',
+        activation_status: 'pending_activation',
+        role: 'customer',
+        customer: {
+          create: {
+            ...payload,
+            ...(uniqueLocationIds.length > 0 && {
+              customer_locations: {
+                create: uniqueLocationIds.map((location_id) => ({ location_id })),
+              },
+            }),
+          },
         },
       },
-    },
-    include: { customer: { select: { id: true } } },
-  });
+      include: { customer: { select: { id: true } } },
+    });
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error;
+
+    // P2002 berarti run lain memenangkan INSERT pada unique phone/runchise_id.
+    // Ambil pemenang lalu jalankan rekonsiliasi yang sama; tidak membuat baris baru.
+    const winner = await findCustomerAfterCreateConflict(c, phoneNumberVariants);
+    const winnerCustomer = winner.customer || winner.user?.customer;
+    if (winner.user && !winner.user.customer) {
+      return { status: 'skipped_conflict', reason: 'phone_used_by_other_user' };
+    }
+    if (!winnerCustomer) throw error;
+    if (
+      winnerCustomer.runchise_id !== null &&
+      winnerCustomer.runchise_id !== Number(c.id)
+    ) {
+      return {
+        status: 'skipped_conflict',
+        reason: 'phone_linked_to_other_runchise_id',
+      };
+    }
+    await updateRunchiseCustomer(winnerCustomer, payload, uniqueLocationIds);
+    return {
+      status: 'updated_after_conflict',
+      customer_id: winnerCustomer.id,
+      unresolved_location_ids: unresolvedLocationIds,
+    };
+  }
 
   return {
     status: 'created',
@@ -805,7 +871,8 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
   // ---- 6. Bulk create user+customer baru (yang punya nomor telepon) ----
   // Membuat user dan customer baru dalam satu transaksi untuk mencegah data yatim dan menjaga konsistensi saat terjadi kegagalan proses.
   if (bulkCreatable.length > 0) {
-    await prisma.$transaction(async (tx) => {
+    try {
+      await prisma.$transaction(async (tx) => {
       const userRows = await tx.$queryRaw`
         INSERT INTO "User" (phone_number, password_hash, activation_status, role, updated_at)
         VALUES ${Prisma.join(
@@ -865,7 +932,19 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
           ON CONFLICT (customer_id, location_id) DO NOTHING
         `;
       }
-    });
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+
+      // Bulk INSERT dapat kalah race terhadap run lain. Ulangi kandidat satu per
+      // satu agar setiap P2002 direkonsiliasi ke baris pemenang secara idempoten.
+      for (const { candidate } of bulkCreatable) {
+        results[candidate.index] = await upsertRunchiseCustomer(
+          customersInput[candidate.index],
+          fallbackLocationId,
+        );
+      }
+    }
   }
 
   // ---- 7. Kasus langka: create tanpa nomor telepon, satu-per-satu ----
