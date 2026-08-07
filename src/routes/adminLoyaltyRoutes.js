@@ -5,6 +5,7 @@ const {
   resendActivationTargetLimiter,
   runchiseSyncTargetLimiter,
 } = require('../lib/rateLimit');
+const redeemAdminRoutes = require('./admin/redeemAdminRoutes');
 const {
   listAdminUsers,
   listAdminActivityLogs,
@@ -26,16 +27,6 @@ const {
   listRewards,
   createReward,
   updateReward,
-  listCatalogMenuItems,
-  listRedeemCategories,
-  createRedeemCategory,
-  updateRedeemCategory,
-  listRedeemItems,
-  createRedeemItem,
-  updateRedeemItem,
-  deleteRedeemItem,
-  listRedemptions,
-  updateRedemptionStatus,
 } = require('../controllers/adminLoyaltyController');
 
 const router = express.Router();
@@ -94,22 +85,6 @@ router.get('/rewards', adminOnly, listRewards);
 router.post('/rewards', adminOnly, createReward);
 router.put('/rewards/:id', adminOnly, updateReward);
 
-router.get('/catalog/menu-items', adminOrMarketing, listCatalogMenuItems);
-
-router.get('/redeem-menu/categories', adminOrMarketing, listRedeemCategories);
-router.post('/redeem-menu/categories', adminOrMarketing, createRedeemCategory);
-router.put(
-  '/redeem-menu/categories/:id',
-  adminOrMarketing,
-  updateRedeemCategory,
-);
-
-router.get('/redeem-menu/items', adminOrMarketing, listRedeemItems);
-router.post('/redeem-menu/items', adminOrMarketing, createRedeemItem);
-router.put('/redeem-menu/items/:id', adminOrMarketing, updateRedeemItem);
-router.delete('/redeem-menu/items/:id', adminOrMarketing, deleteRedeemItem);
-
-router.get('/redemptions', adminOnly, listRedemptions);
-router.put('/redemptions/:id/status', adminOnly, updateRedemptionStatus);
+router.use(redeemAdminRoutes);
 
 module.exports = router;
