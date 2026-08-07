@@ -1,7 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
-const { createResponseCache } = require('../lib/responseCache');
+const {
+  createResponseCache,
+  setSharedResponseCacheHeaders,
+} = require('../lib/responseCache');
 const { respondWithServerError } = require('../lib/serverError');
 
 const {
@@ -9,9 +12,15 @@ const {
   EXCLUDED_CRISBAR_CATEGORY_NAMES,
 } = require('../constants/categoryMapping');
 
-const cache = createResponseCache(
-  Number(process.env.CATALOG_RESPONSE_CACHE_TTL_MS || 5 * 60 * 1000),
+const CATALOG_CACHE_TTL_MS = Number(
+  process.env.CATALOG_RESPONSE_CACHE_TTL_MS || 5 * 60 * 1000,
 );
+const cache = createResponseCache(CATALOG_CACHE_TTL_MS, { maxEntries: 100 });
+
+function sendCacheableJson(res, value) {
+  setSharedResponseCacheHeaders(res, CATALOG_CACHE_TTL_MS);
+  return res.json(value);
+}
 
 async function getVisibleCrisbarProducts() {
   return prisma.menuItem.findMany({
@@ -46,7 +55,7 @@ router.get('/', async (req, res) => {
     const cached = cache.get(cacheKey);
 
     if (cached) {
-      return res.json(cached);
+      return sendCacheableJson(res, cached);
     }
 
     let items = await getVisibleCrisbarProducts();
@@ -69,7 +78,7 @@ router.get('/', async (req, res) => {
     }));
 
     cache.set(cacheKey, result);
-    res.json(result);
+    sendCacheableJson(res, result);
   } catch (error) {
     respondWithServerError(res, error, 'productCatalogRoutes');
   }
@@ -82,7 +91,7 @@ router.get('/categories', async (req, res) => {
     const cached = cache.get(cacheKey);
 
     if (cached) {
-      return res.json(cached);
+      return sendCacheableJson(res, cached);
     }
 
     const items = await getVisibleCrisbarProducts();
@@ -107,7 +116,7 @@ router.get('/categories', async (req, res) => {
     );
 
     cache.set(cacheKey, categories);
-    res.json(categories);
+    sendCacheableJson(res, categories);
   } catch (error) {
     respondWithServerError(res, error, 'productCatalogRoutes');
   }

@@ -1,12 +1,21 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
-const { createResponseCache } = require('../lib/responseCache');
+const {
+  createResponseCache,
+  setSharedResponseCacheHeaders,
+} = require('../lib/responseCache');
 const { respondWithServerError } = require('../lib/serverError');
 
-const cache = createResponseCache(
-  Number(process.env.PROMO_RESPONSE_CACHE_TTL_MS || 5 * 60 * 1000),
+const PROMO_CACHE_TTL_MS = Number(
+  process.env.PROMO_RESPONSE_CACHE_TTL_MS || 5 * 60 * 1000,
 );
+const cache = createResponseCache(PROMO_CACHE_TTL_MS, { maxEntries: 100 });
+
+function sendCacheableJson(res, value) {
+  setSharedResponseCacheHeaders(res, PROMO_CACHE_TTL_MS);
+  return res.json(value);
+}
 
 const DEFAULT_PAGE = 1;
 const DEFAULT_LIMIT = 8;
@@ -61,7 +70,7 @@ router.get('/', async (req, res) => {
     const cached = cache.get(cacheKey);
 
     if (cached) {
-      return res.json(cached);
+      return sendCacheableJson(res, cached);
     }
 
     if (usePaginatedResponse) {
@@ -83,7 +92,7 @@ router.get('/', async (req, res) => {
       };
 
       cache.set(cacheKey, result);
-      return res.json(result);
+      return sendCacheableJson(res, result);
     }
 
     const promos = await prisma.promo.findMany({
@@ -94,7 +103,7 @@ router.get('/', async (req, res) => {
     const result = promos.map(mapPromo);
 
     cache.set(cacheKey, result);
-    res.json(result);
+    sendCacheableJson(res, result);
   } catch (error) {
     respondWithServerError(res, error, 'promoRoutes');
   }
