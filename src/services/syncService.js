@@ -16,6 +16,10 @@ const {
 const {
   importProducts: importCrisbarProducts,
 } = require('../../scripts/importSelectedCrisbarProducts');
+const {
+  normalizePhone,
+  phoneVariants,
+} = require('../lib/phoneNumber');
 
 const DEFAULT_PROMO_LIFESPAN_DAYS = 90;
 const POS_CHANNEL = 'pos';
@@ -37,14 +41,6 @@ function normalizeChannel(rawChannel) {
   return String(rawChannel ?? '')
     .trim()
     .toLowerCase();
-}
-
-function normalizePhone(raw) {
-  if (!raw) return raw;
-  const digits = String(raw).replace(/\D/g, '');
-  if (digits.startsWith('62')) return digits.slice(2);
-  if (digits.startsWith('0')) return digits.slice(1);
-  return digits;
 }
 
 function normalizeLocationName(value) {
@@ -94,14 +90,6 @@ function mapRunchiseLocationToLocalData(loc, brandId) {
     longitude: loc.longitude ? parseFloat(loc.longitude) : null,
     ...visibility,
   };
-}
-
-function phoneVariants(normalizedPhone) {
-  if (!normalizedPhone) return [];
-
-  return Array.from(
-    new Set([normalizedPhone, `0${normalizedPhone}`, `62${normalizedPhone}`]),
-  );
 }
 
 function isPosChannel(channel) {

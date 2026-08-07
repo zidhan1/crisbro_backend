@@ -36,20 +36,25 @@ function loginRequest(body) {
 }
 
 test('login: password salah ditolak dengan pesan seragam, tanpa membuat sesi', async (t) => {
-  const originalFindUnique = prisma.user.findUnique;
+  // Memperbarui mock pengujian agar sesuai dengan penggunaan findFirst, sehingga seluruh proses autentikasi tetap diuji tanpa mengakses database secara langsung.
+  const originalFindFirst = prisma.user.findFirst;
   const originalSessionCreate = prisma.session.create;
   let sessionCreated = false;
+  let findFirstCalled = false;
   t.after(() => {
-    prisma.user.findUnique = originalFindUnique;
+    prisma.user.findFirst = originalFindFirst;
     prisma.session.create = originalSessionCreate;
   });
 
-  prisma.user.findUnique = async () => ({
-    id: 1,
-    role: 'customer',
-    password_hash: REAL_PASSWORD_HASH,
-    activation_status: 'active',
-  });
+  prisma.user.findFirst = async () => {
+    findFirstCalled = true;
+    return {
+      id: 1,
+      role: 'customer',
+      password_hash: REAL_PASSWORD_HASH,
+      activation_status: 'active',
+    };
+  };
   prisma.session.create = async () => {
     sessionCreated = true;
   };
@@ -60,17 +65,22 @@ test('login: password salah ditolak dengan pesan seragam, tanpa membuat sesi', a
     res,
   );
 
+  assert.equal(findFirstCalled, true);
   assert.equal(res.statusCode, 401);
   assert.match(res.body.message, /Nomor telepon atau password salah/);
   assert.equal(sessionCreated, false);
 });
 
 test('login: nomor tidak terdaftar dibalas PERSIS sama seperti password salah (tidak membocorkan status)', async (t) => {
-  const originalFindUnique = prisma.user.findUnique;
+  const originalFindFirst = prisma.user.findFirst;
+  let findFirstCalled = false;
   t.after(() => {
-    prisma.user.findUnique = originalFindUnique;
+    prisma.user.findFirst = originalFindFirst;
   });
-  prisma.user.findUnique = async () => null;
+  prisma.user.findFirst = async () => {
+    findFirstCalled = true;
+    return null;
+  };
 
   const res = responseMock();
   await login(
@@ -78,19 +88,20 @@ test('login: nomor tidak terdaftar dibalas PERSIS sama seperti password salah (t
     res,
   );
 
+  assert.equal(findFirstCalled, true);
   assert.equal(res.statusCode, 401);
   assert.match(res.body.message, /Nomor telepon atau password salah/);
 });
 
 test('login: akun pending_activation ditolak walau password (calon) benar', async (t) => {
-  const originalFindUnique = prisma.user.findUnique;
+  const originalFindFirst = prisma.user.findFirst;
   t.after(() => {
-    prisma.user.findUnique = originalFindUnique;
+    prisma.user.findFirst = originalFindFirst;
   });
 
   // password_hash kosong -- pola user hasil sinkronisasi Runchise yang
   // belum pernah mengaktivasi akun (lihat isSyncedPlaceholderUser).
-  prisma.user.findUnique = async () => ({
+  prisma.user.findFirst = async () => ({
     id: 2,
     role: 'customer',
     password_hash: '',
@@ -107,29 +118,70 @@ test('login: akun pending_activation ditolak walau password (calon) benar', asyn
   assert.match(res.body.message, /Nomor telepon atau password salah/);
 });
 
+test('login: mencari lewat SEMUA varian nomor (8xxx/08xxx/62xxx), bukan cuma satu bentuk (bug M-13 asli)', async (t) => {
+  const originalFindFirst = prisma.user.findFirst;
+  t.after(() => {
+    prisma.user.findFirst = originalFindFirst;
+  });
+
+  let capturedWhere = null;
+  prisma.user.findFirst = async (args) => {
+    capturedWhere = args.where;
+    return null;
+  };
+
+  const res = responseMock();
+  await login(
+    loginRequest({ phone_number: '081234567890', password: 'apa-saja' }),
+    res,
+  );
+
+  // Input dengan awalan 0 dinormalisasi ke 8xxx (jadi '81234567890'), lalu
+  // dicari lewat SELURUH variannya -- inilah yang membuat login tahan
+  // terhadap kemungkinan nomor tersimpan tidak persis dalam bentuk 8xxx
+  // (skenario yang dilaporkan M-13), bukan cuma exact-match ke satu bentuk
+  // seperti versi lama.
+  assert.deepEqual(
+    [...capturedWhere.phone_number.in].sort(),
+    ['81234567890', '081234567890', '6281234567890'].sort(),
+  );
+  assert.equal(res.statusCode, 401);
+});
+
 test('login: kredensial benar pada akun aktif -> sesi dibuat, cookie di-set, password_hash tidak ikut terkirim', async (t) => {
+  const originalFindFirst = prisma.user.findFirst;
   const originalFindUnique = prisma.user.findUnique;
   const originalSessionCreate = prisma.session.create;
+  let findFirstCallCount = 0;
   let findUniqueCallCount = 0;
   let sessionCreateArgs = null;
   t.after(() => {
+    prisma.user.findFirst = originalFindFirst;
     prisma.user.findUnique = originalFindUnique;
     prisma.session.create = originalSessionCreate;
   });
 
+  // Tahap 1 (verifikasi kredensial) memakai findFirst + phoneVariants.
+  // Input '81234567890' sudah kanonik (tidak ada awalan 0/62 untuk
+  // dihapus), jadi normalizePhone mengembalikannya apa adanya.
+  prisma.user.findFirst = async (args) => {
+    findFirstCallCount += 1;
+    assert.deepEqual(
+      [...args.where.phone_number.in].sort(),
+      ['81234567890', '081234567890', '6281234567890'].sort(),
+    );
+    return {
+      id: 7,
+      role: 'customer',
+      password_hash: REAL_PASSWORD_HASH,
+      activation_status: 'active',
+    };
+  };
+  // Tahap 2 (memuat profil lengkap setelah kredensial terbukti) TETAP
+  // memakai findUnique by id -- tidak diubah oleh perbaikan M-13, karena
+  // itu bukan pencarian berbasis nomor telepon.
   prisma.user.findUnique = async (args) => {
     findUniqueCallCount += 1;
-    // Panggilan pertama: verifikasi kredensial (kolom minimal).
-    if (findUniqueCallCount === 1) {
-      assert.equal(args.where.phone_number, '81234567890');
-      return {
-        id: 7,
-        role: 'customer',
-        password_hash: REAL_PASSWORD_HASH,
-        activation_status: 'active',
-      };
-    }
-    // Panggilan kedua: memuat profil lengkap setelah kredensial terbukti.
     assert.equal(args.where.id, 7);
     return {
       id: 7,
@@ -157,7 +209,8 @@ test('login: kredensial benar pada akun aktif -> sesi dibuat, cookie di-set, pas
   );
 
   assert.equal(res.statusCode, 200);
-  assert.equal(findUniqueCallCount, 2);
+  assert.equal(findFirstCallCount, 1);
+  assert.equal(findUniqueCallCount, 1);
   assert.equal(sessionCreateArgs.data.user_id, 7);
   assert.equal(typeof sessionCreateArgs.data.token, 'string');
   assert.equal(res.cookieCalls.length, 1);

@@ -10,7 +10,11 @@ const {
 const { sendActivationEmail } = require('../services/emailService');
 const { getNextReward } = require('../services/nextRewardService');
 const { respondWithServerError } = require('../lib/serverError');
-const { setSessionCookie, clearSessionCookie } = require('../lib/sessionCookie');
+const {
+  setSessionCookie,
+  clearSessionCookie,
+} = require('../lib/sessionCookie');
+const { normalizePhone, phoneVariants } = require('../lib/phoneNumber');
 
 // Konfigurasi masa berlaku token login
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
@@ -29,25 +33,8 @@ const DUMMY_PASSWORD_HASH =
 function isSyncedPlaceholderUser(user) {
   return (
     user &&
-    (user.password_hash === '' || user.activation_status === 'pending_activation')
-  );
-}
-
-// Mengubah nomor telepon menjadi format standar (8xxxxxxxx)
-function normalizePhone(raw) {
-  if (!raw) return raw;
-  const digits = raw.replace(/\D/g, '');
-  if (digits.startsWith('62')) return digits.slice(2);
-  if (digits.startsWith('0')) return digits.slice(1);
-  return digits;
-}
-
-// Membuat beberapa variasi nomor telepon untuk proses pencarian
-function phoneVariants(normalizedPhone) {
-  if (!normalizedPhone) return [];
-
-  return Array.from(
-    new Set([normalizedPhone, `0${normalizedPhone}`, `62${normalizedPhone}`]),
+    (user.password_hash === '' ||
+      user.activation_status === 'pending_activation')
   );
 }
 
@@ -189,14 +176,11 @@ async function login(req, res) {
       });
     }
 
-    // Tahap 1: ambil kolom seadanya untuk verifikasi kredensial.
-    //
-    // Relasi customer sengaja BELUM dimuat di sini. Memuatnya lebih dulu membuat
-    // permintaan dengan nomor yang terdaftar berjalan ~145 ms lebih lama
-    // daripada nomor yang tidak ada, dan selisih itu konsisten sehingga tetap
-    // bisa dipakai memetakan nomor walau pesan balasannya sudah diseragamkan.
-    const credentials = await prisma.user.findUnique({
-      where: { phone_number },
+    // Tahap 1: Mengambil hanya data yang diperlukan untuk verifikasi kredensial agar waktu respons tetap konsisten dan mengurangi risiko enumerasi akun.
+
+    // M-13: Mengubah pencarian login menjadi findFirst agar mendukung berbagai format nomor telepon tanpa mengubah konsistensi waktu respons autentikasi.
+    const credentials = await prisma.user.findFirst({
+      where: { phone_number: { in: phoneVariants(phone_number) } },
       select: {
         id: true,
         role: true,
@@ -205,13 +189,7 @@ async function login(req, res) {
       },
     });
 
-    // Nomor tidak dikenal, akun belum aktivasi, dan password salah dibalas
-    // identik. Versi sebelumnya membedakannya (444 / 409 / 401), sehingga siapa
-    // pun bisa menyapu rentang nomor dan memetakan mana yang terdaftar serta
-    // mana yang belum aktivasi.
-    //
-    // bcrypt.compare tetap dijalankan walau user tidak ada, memakai hash boneka,
-    // agar beban kerjanya sama pada semua cabang penolakan.
+    // Menyeragamkan respons autentikasi dan tetap menjalankan verifikasi bcrypt pada seluruh kondisi gagal untuk mencegah enumerasi akun melalui perbedaan respons maupun waktu eksekusi.
     const isActivated =
       Boolean(credentials) && !isSyncedPlaceholderUser(credentials);
     const validPassword = await bcrypt.compare(
@@ -319,7 +297,8 @@ async function validateActivationToken(req, res) {
 // Mengaktifkan akun dan menyimpan password hash
 async function activateAccount(req, res) {
   try {
-    const token = typeof req.body.token === 'string' ? req.body.token.trim() : '';
+    const token =
+      typeof req.body.token === 'string' ? req.body.token.trim() : '';
     const password =
       typeof req.body.password === 'string' ? req.body.password : '';
 
@@ -432,7 +411,8 @@ async function changePassword(req, res) {
 
     if (!currentPassword || newPassword.trim().length < 8) {
       return res.status(400).json({
-        message: 'Password lama wajib diisi dan password baru minimal 8 karakter',
+        message:
+          'Password lama wajib diisi dan password baru minimal 8 karakter',
       });
     }
 
@@ -528,7 +508,9 @@ async function logoutAllSessions(req, res) {
   } catch (error) {
     clearSessionCookie(res);
     console.error('Logout semua perangkat gagal:', error);
-    return res.status(500).json({ message: 'Gagal keluar dari semua perangkat' });
+    return res
+      .status(500)
+      .json({ message: 'Gagal keluar dari semua perangkat' });
   }
 }
 

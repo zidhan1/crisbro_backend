@@ -33,10 +33,21 @@ ada Vitest, tidak ada `@testing-library`, tidak ada script `test` di
 `prisma.user.findUnique`, `prisma.$transaction`, dst dengan fungsi
 tiruan), memanggil fungsi controller/service yang SESUNGGUHNYA dengan
 `req`/`res` tiruan, lalu assert pada efek sampingnya. **Tidak** memakai
-Prisma test DB sungguhan — seluruhnya mock, sehingga tidak butuh
-DATABASE_URL/koneksi apa pun untuk berjalan (dikonfirmasi lewat pengujian
-langsung: seluruh 32 test tetap lolos meski `DATABASE_URL` di-unset sama
-sekali).
+Prisma test DB sungguhan — seluruhnya mock.
+
+**Koreksi metodologi verifikasi (ditemukan saat mengerjakan M-13):**
+dokumen ini awalnya mengklaim "tetap lolos meski `DATABASE_URL` di-unset"
+sebagai bukti tidak butuh database. Klaim itu **menyesatkan** — `@prisma/client`
+memuat `.env` dari disk sendiri (lewat `prisma.config.ts` yang meng-`import
+"dotenv/config"`) terlepas dari environment variable proses Node yang
+menjalankan test, sehingga `env -u DATABASE_URL` di shell tidak benar-benar
+mencegah Prisma terhubung ke database sungguhan. Metode verifikasi yang
+BENAR (dipakai mulai dari sini): set `DATABASE_URL` ke alamat yang sengaja
+tidak bisa dihubungi (`postgresql://invalid:invalid@127.0.0.1:1/invalid`)
+alih-alih meng-unset-nya — dengan begitu, satu saja panggilan Prisma yang
+lupa di-mock akan gagal keras (connection refused/timeout), bukan diam-diam
+berhasil lewat `.env` asli. Lihat `docs/fix-M13-*.md` untuk detail temuan
+ini dan pembuktian ulangnya.
 
 Tiga file test baru mengikuti pola yang SAMA persis, satu per kategori
 yang diminta laporan:
@@ -115,7 +126,7 @@ keyboard lagi, test ini gagal di CI sebelum sampai ke production.
 
 ## 3. Verifikasi
 
-### Backend — seluruh suite (14 lama + 18 baru), tanpa DATABASE_URL sama sekali
+### Backend — seluruh suite (14 lama + 18 baru)
 
 ```
 $ env -u DATABASE_URL -u DIRECT_URL -u RUNCHISE_API_KEY npm test
@@ -130,6 +141,15 @@ $ env -u DATABASE_URL -u DIRECT_URL -u RUNCHISE_API_KEY npm test
 # todo 0
 # duration_ms 1546.3733
 ```
+
+**Catatan:** perintah di atas dijalankan dengan `env -u` (meng-unset env
+var), yang belakangan terbukti **tidak** membuktikan ketiadaan koneksi
+database (lihat koreksi di bagian 2.1 — Prisma memuat `.env` dari disk
+sendiri). Hasilnya (32 lolos) tetap valid sebagai bukti seluruh test yang
+ADA memang lolos, tapi metode `env -u` tadinya salah diklaim sebagai bukti
+"tidak butuh database". Metode verifikasi yang benar-benar membuktikan hal
+itu (set `DATABASE_URL` ke alamat yang sengaja tidak bisa dihubungi, bukan
+meng-unset-nya) dipakai mulai dari perbaikan M-13 dan seterusnya.
 
 Rincian 18 test baru:
 
