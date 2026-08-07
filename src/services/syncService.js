@@ -177,6 +177,7 @@ async function syncCustomers(locationId = null) {
   let synced = 0;
   let skippedConflicts = 0;
   let failed = 0;
+  let unresolvedLocationMemberships = 0;
 
   for (const outletId of locationIds) {
     let page = 1;
@@ -203,6 +204,11 @@ async function syncCustomers(locationId = null) {
           fallbackLocationId,
         );
         for (const result of pageResults) {
+          unresolvedLocationMemberships += Array.isArray(
+            result?.unresolved_location_ids,
+          )
+            ? result.unresolved_location_ids.length
+            : 0;
           if (result.status === 'skipped_conflict') skippedConflicts++;
           else if (result.status === 'failed') failed++;
           else synced++;
@@ -219,7 +225,53 @@ async function syncCustomers(locationId = null) {
     total: processedCustomerIds.size,
     skipped_conflicts: skippedConflicts,
     failed,
+    unresolved_location_memberships: unresolvedLocationMemberships,
   };
+}
+
+function buildLocationResolution(locationRows) {
+  const rowsByRunchiseId = new Map();
+
+  for (const row of locationRows) {
+    const runchiseId = Number(row.runchise_id);
+    if (!Number.isInteger(runchiseId) || runchiseId <= 0) continue;
+
+    const rows = rowsByRunchiseId.get(runchiseId) ?? [];
+    rows.push(row);
+    rowsByRunchiseId.set(runchiseId, rows);
+  }
+
+  const localIdByRunchiseId = new Map();
+  const ambiguousRunchiseIds = new Set();
+  for (const [runchiseId, rows] of rowsByRunchiseId) {
+    if (rows.length === 1) localIdByRunchiseId.set(runchiseId, rows[0].id);
+    else ambiguousRunchiseIds.add(runchiseId);
+  }
+
+  return { localIdByRunchiseId, ambiguousRunchiseIds };
+}
+
+async function resolveCustomerLocationMemberships(runchiseLocationIds) {
+  const uniqueIds = [
+    ...new Set(
+      runchiseLocationIds
+        .map(Number)
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  ];
+  if (uniqueIds.length === 0) {
+    return {
+      localIdByRunchiseId: new Map(),
+      ambiguousRunchiseIds: new Set(),
+    };
+  }
+
+  const locationRows = await prisma.location.findMany({
+    where: { runchise_id: { in: uniqueIds } },
+    select: { id: true, runchise_id: true },
+  });
+
+  return buildLocationResolution(locationRows);
 }
 
 // Upsert customer dari Runchise ke database lokal yang digunakan oleh impor penuh maupun worker bertahap agar tetap sesuai batas serverless.
@@ -232,34 +284,28 @@ async function upsertRunchiseCustomer(c, fallbackLocationId = null) {
   });
 
   const ownerLocationId = Number(c.owner_location_id) || fallbackLocationId;
-  const ownerLocationName = c.owner_location?.name ?? `Outlet ${ownerLocationId}`;
-  const locationIds = [
+  const runchiseLocationIds = [
     ...new Set([
       ...(c.location_ids ?? []),
       ...(ownerLocationId ? [ownerLocationId] : []),
     ].map(Number).filter((id) => Number.isInteger(id) && id > 0)),
   ];
+  const { localIdByRunchiseId, ambiguousRunchiseIds } =
+    await resolveCustomerLocationMemberships(runchiseLocationIds);
+  const locationIds = runchiseLocationIds
+    .map((runchiseId) => localIdByRunchiseId.get(runchiseId))
+    .filter((id) => id !== undefined);
+  const uniqueLocationIds = [...new Set(locationIds)];
+  const unresolvedLocationIds = runchiseLocationIds.filter(
+    (runchiseId) => !localIdByRunchiseId.has(runchiseId),
+  );
+  const ownerLocalLocationId =
+    localIdByRunchiseId.get(ownerLocationId) ?? null;
 
-  for (const locationId of locationIds) {
-    await prisma.location.upsert({
-      where: { id: locationId },
-      update: {
-        ...(locationId === ownerLocationId && { name: ownerLocationName }),
-        brand_id: c.brand_id,
-        runchise_id: locationId,
-      },
-      create: {
-        id: locationId,
-        brand_id: c.brand_id,
-        runchise_id: locationId,
-        name:
-          locationId === ownerLocationId
-            ? ownerLocationName
-            : `Outlet ${locationId}`,
-        is_active: true,
-        is_outlet: true,
-      },
-    });
+  if (unresolvedLocationIds.length > 0) {
+    console.warn(
+      `Sync customer runchise_id=${c.id}: membership lokasi belum dapat dipetakan: ${unresolvedLocationIds.join(', ')}${unresolvedLocationIds.some((id) => ambiguousRunchiseIds.has(id)) ? ' (termasuk mapping ambigu)' : ''}`,
+    );
   }
 
   const normalizedPhone = normalizePhone(c.phone_number);
@@ -289,7 +335,7 @@ async function upsertRunchiseCustomer(c, fallbackLocationId = null) {
     status: c.status ?? 'active',
     balance: parseFloat(c.balance ?? 0),
     brand_id: c.brand_id,
-    owner_location_id: ownerLocationId,
+    owner_location_id: ownerLocalLocationId,
   };
 
   const [
@@ -374,10 +420,10 @@ async function upsertRunchiseCustomer(c, fallbackLocationId = null) {
         where: { customer_id: existing.id },
       }),
     ];
-    if (locationIds.length > 0) {
+    if (uniqueLocationIds.length > 0) {
       operations.push(
         prisma.customerLocation.createMany({
-          data: locationIds.map((location_id) => ({
+          data: uniqueLocationIds.map((location_id) => ({
             customer_id: existing.id,
             location_id,
           })),
@@ -387,7 +433,11 @@ async function upsertRunchiseCustomer(c, fallbackLocationId = null) {
     }
     await prisma.$transaction(operations);
 
-    return { status: 'updated', customer_id: existing.id };
+    return {
+      status: 'updated',
+      customer_id: existing.id,
+      unresolved_location_ids: unresolvedLocationIds,
+    };
   }
 
   const createdUser = await prisma.user.create({
@@ -399,9 +449,9 @@ async function upsertRunchiseCustomer(c, fallbackLocationId = null) {
       customer: {
         create: {
           ...payload,
-          ...(locationIds.length > 0 && {
+          ...(uniqueLocationIds.length > 0 && {
             customer_locations: {
-              create: locationIds.map((location_id) => ({ location_id })),
+              create: uniqueLocationIds.map((location_id) => ({ location_id })),
             },
           }),
         },
@@ -410,7 +460,11 @@ async function upsertRunchiseCustomer(c, fallbackLocationId = null) {
     include: { customer: { select: { id: true } } },
   });
 
-  return { status: 'created', customer_id: createdUser.customer?.id ?? null };
+  return {
+    status: 'created',
+    customer_id: createdUser.customer?.id ?? null,
+    unresolved_location_ids: unresolvedLocationIds,
+  };
 }
 
 // C-2: Customer diproses dengan batch upsert untuk mengurangi round-trip database, menjaga konsistensi data, dan meningkatkan efisiensi pada lingkungan serverless.
@@ -425,8 +479,7 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
     }
 
     const ownerLocationId = Number(c.owner_location_id) || fallbackLocationId;
-    const ownerLocationName = c.owner_location?.name ?? `Outlet ${ownerLocationId}`;
-    const locationIds = [
+    const runchiseLocationIds = [
       ...new Set(
         [
           ...(c.location_ids ?? []),
@@ -462,7 +515,7 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
       status: c.status ?? 'active',
       balance: parseFloat(c.balance ?? 0),
       brand_id: c.brand_id,
-      owner_location_id: ownerLocationId,
+      owner_location_id: null,
     };
 
     return {
@@ -471,8 +524,7 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
       runchiseId,
       brandId: c.brand_id,
       ownerLocationId,
-      ownerLocationName,
-      locationIds,
+      runchiseLocationIds,
       normalizedPhone,
       phoneNumberVariants,
       payload,
@@ -490,7 +542,35 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
 
   if (validCandidates.length === 0) return results;
 
-  // ---- 2. Preload kecocokan: 3 query total, bukan sampai 3 x N ----
+  // Membership customer hanya boleh menunjuk Location master yang sudah
+  // disinkronkan. ID dari API adalah runchise_id, bukan primary key lokal.
+  const requestedLocationIds = [
+    ...new Set(validCandidates.flatMap((c) => c.runchiseLocationIds)),
+  ];
+  const { localIdByRunchiseId, ambiguousRunchiseIds } =
+    await resolveCustomerLocationMemberships(requestedLocationIds);
+  for (const candidate of validCandidates) {
+    candidate.locationIds = [
+      ...new Set(
+        candidate.runchiseLocationIds
+          .map((runchiseId) => localIdByRunchiseId.get(runchiseId))
+          .filter((id) => id !== undefined),
+      ),
+    ];
+    candidate.unresolvedLocationIds = candidate.runchiseLocationIds.filter(
+      (runchiseId) => !localIdByRunchiseId.has(runchiseId),
+    );
+    candidate.payload.owner_location_id =
+      localIdByRunchiseId.get(candidate.ownerLocationId) ?? null;
+
+    if (candidate.unresolvedLocationIds.length > 0) {
+      console.warn(
+        `Sync customer runchise_id=${candidate.runchiseId}: membership lokasi belum dapat dipetakan: ${candidate.unresolvedLocationIds.join(', ')}${candidate.unresolvedLocationIds.some((id) => ambiguousRunchiseIds.has(id)) ? ' (termasuk mapping ambigu)' : ''}`,
+      );
+    }
+  }
+
+  // ---- 2. Preload kecocokan customer: 3 query total, bukan sampai 3 x N ----
   const runchiseIds = validCandidates.map((c) => c.runchiseId);
   const allVariants = [
     ...new Set(validCandidates.flatMap((c) => c.phoneNumberVariants)),
@@ -643,62 +723,7 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
     `;
   }
 
-  // ---- 5. Bulk upsert location yang direferensikan batch ini ----
-  const locationMap = new Map();
-  for (const c of validCandidates) {
-    for (const locId of c.locationIds) {
-      const isOwner = locId === c.ownerLocationId;
-      const prev = locationMap.get(locId);
-      if (isOwner) {
-        locationMap.set(locId, {
-          id: locId,
-          brandId: c.brandId,
-          name: c.ownerLocationName,
-          isOwnerName: true,
-        });
-      } else if (!prev) {
-        locationMap.set(locId, {
-          id: locId,
-          brandId: c.brandId,
-          name: `Outlet ${locId}`,
-          isOwnerName: false,
-        });
-      }
-    }
-  }
-  const locationRows = [...locationMap.values()];
-  if (locationRows.length > 0) {
-    // Statement A: Membuat data baru dan memperbarui brand_id/runchise_id, sedangkan pembaruan nama dilakukan pada statement terpisah untuk menjaga kompatibilitas dengan PostgreSQL.
-    await prisma.$executeRaw`
-      INSERT INTO "Location" (id, brand_id, runchise_id, name, is_active, is_outlet, updated_at)
-      VALUES ${Prisma.join(
-        locationRows.map(
-          (l) =>
-            Prisma.sql`(${l.id}::int, ${l.brandId}::int, ${l.id}::int, ${l.name}::text, true, true, CURRENT_TIMESTAMP)`,
-        ),
-      )}
-      ON CONFLICT (id) DO UPDATE SET
-        brand_id = EXCLUDED.brand_id,
-        runchise_id = EXCLUDED.runchise_id,
-        updated_at = CURRENT_TIMESTAMP
-    `;
-
-    // Statement B: timpa nama hanya untuk lokasi yang menjadi owner
-    // setidaknya satu customer di batch ini (sama seperti versi per-baris).
-    const ownerRows = locationRows.filter((l) => l.isOwnerName);
-    if (ownerRows.length > 0) {
-      await prisma.$executeRaw`
-        UPDATE "Location" AS t
-        SET name = v.name, updated_at = CURRENT_TIMESTAMP
-        FROM (VALUES ${Prisma.join(
-          ownerRows.map((l) => Prisma.sql`(${l.id}::int, ${l.name}::text)`),
-        )}) AS v(id, name)
-        WHERE t.id = v.id
-      `;
-    }
-  }
-
-  // ---- 6. Bulk update customer yang sudah ada + user + customer_locations ----
+  // ---- 5. Bulk update customer yang sudah ada + user + customer_locations ----
   // Membungkus pembaruan customer, user, dan customer_locations dalam satu transaksi untuk menjaga konsistensi data jika terjadi kegagalan di tengah proses.
   if (toUpdate.length > 0) {
     await prisma.$transaction(async (tx) => {
@@ -769,11 +794,15 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
     });
 
     for (const { candidate, existingId } of toUpdate) {
-      results[candidate.index] = { status: 'updated', customer_id: existingId };
+      results[candidate.index] = {
+        status: 'updated',
+        customer_id: existingId,
+        unresolved_location_ids: candidate.unresolvedLocationIds,
+      };
     }
   }
 
-  // ---- 7. Bulk create user+customer baru (yang punya nomor telepon) ----
+  // ---- 6. Bulk create user+customer baru (yang punya nomor telepon) ----
   // Membuat user dan customer baru dalam satu transaksi untuk mencegah data yatim dan menjaga konsistensi saat terjadi kegagalan proses.
   if (bulkCreatable.length > 0) {
     await prisma.$transaction(async (tx) => {
@@ -818,7 +847,11 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
       const createLocationTuples = [];
       for (const { candidate, userId } of customerTuples) {
         const customerId = customerIdByUserId.get(userId);
-        results[candidate.index] = { status: 'created', customer_id: customerId };
+        results[candidate.index] = {
+          status: 'created',
+          customer_id: customerId,
+          unresolved_location_ids: candidate.unresolvedLocationIds,
+        };
         for (const locationId of candidate.locationIds) {
           createLocationTuples.push(
             Prisma.sql`(${customerId}::int, ${locationId}::int)`,
@@ -835,7 +868,7 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
     });
   }
 
-  // ---- 8. Kasus langka: create tanpa nomor telepon, satu-per-satu ----
+  // ---- 7. Kasus langka: create tanpa nomor telepon, satu-per-satu ----
   for (const { candidate } of singleCreatable) {
     try {
       const original = customersInput[candidate.index];

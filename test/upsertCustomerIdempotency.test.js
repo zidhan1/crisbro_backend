@@ -45,16 +45,34 @@ function makeFakeTx({
   };
 }
 
+function collectSqlValues(value, collected = []) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectSqlValues(item, collected);
+  } else if (value && typeof value === 'object' && Array.isArray(value.values)) {
+    collectSqlValues(value.values, collected);
+  } else {
+    collected.push(value);
+  }
+  return collected;
+}
+
 function installCommonMocks(t) {
   const originalExecuteRaw = prisma.$executeRaw;
   const originalTransaction = prisma.$transaction;
+  const originalLocationFindMany = prisma.location.findMany;
   t.after(() => {
     prisma.$executeRaw = originalExecuteRaw;
     prisma.$transaction = originalTransaction;
+    prisma.location.findMany = originalLocationFindMany;
   });
-  // Bulk upsert brand/location di luar transaksi -- tidak relevan untuk tes
-  // idempotensi create-vs-update, dibuat no-op.
+  // Brand bulk-upsert di luar transaksi tidak relevan untuk tes idempotensi.
   prisma.$executeRaw = async () => 0;
+  // Membership Runchise 4424 dipetakan ke primary key lokal yang berbeda.
+  // Ini sekaligus menjaga test agar tidak mengasumsikan kedua namespace ID
+  // selalu sama.
+  prisma.location.findMany = async () => [
+    { id: 77, runchise_id: RUNCHISE_CUSTOMER.owner_location_id },
+  ];
 }
 
 test('sinkronisasi PERTAMA (customer belum ada): membuat baris baru', async (t) => {
@@ -166,4 +184,118 @@ test('idempotensi dalam SATU halaman: customer yang sama muncul dua kali di resp
   assert.equal(skipped[0].reason, 'duplicate_phone_in_batch');
   // Hanya SATU transaksi create yang benar-benar dijalankan untuk kedua baris.
   assert.equal(createTransactionCount, 1);
+});
+
+test('membership customer hanya memakai Location master berdasarkan runchise_id', async (t) => {
+  const originalExecuteRaw = prisma.$executeRaw;
+  const originalTransaction = prisma.$transaction;
+  const originalLocationFindMany = prisma.location.findMany;
+  const originalCustomerFindMany = prisma.customer.findMany;
+  const originalUserFindMany = prisma.user.findMany;
+  const outerStatements = [];
+  const transactionStatements = [];
+  let locationLookup;
+
+  t.after(() => {
+    prisma.$executeRaw = originalExecuteRaw;
+    prisma.$transaction = originalTransaction;
+    prisma.location.findMany = originalLocationFindMany;
+    prisma.customer.findMany = originalCustomerFindMany;
+    prisma.user.findMany = originalUserFindMany;
+  });
+
+  prisma.location.findMany = async (args) => {
+    locationLookup = args;
+    return [{ id: 77, runchise_id: 4424 }];
+  };
+  prisma.customer.findMany = async () => [];
+  prisma.user.findMany = async () => [];
+  prisma.$executeRaw = async (strings) => {
+    outerStatements.push(strings.join(''));
+    return 0;
+  };
+  prisma.$transaction = async (callback) =>
+    callback({
+      async $queryRaw(strings) {
+        const sql = strings.join('');
+        return sql.includes('INSERT INTO "User"')
+          ? [{ id: 9001, phone_number: '81234567890' }]
+          : [{ id: 8001, user_id: 9001 }];
+      },
+      async $executeRaw(strings, ...values) {
+        transactionStatements.push({ sql: strings.join(''), values });
+        return 0;
+      },
+    });
+
+  const [result] = await upsertRunchiseCustomersBatch(
+    [RUNCHISE_CUSTOMER],
+    null,
+  );
+
+  assert.deepEqual(locationLookup.where, {
+    runchise_id: { in: [4424] },
+  });
+  assert.equal(
+    outerStatements.some((sql) => sql.includes('INSERT INTO "Location"')),
+    false,
+  );
+  const membershipInsert = transactionStatements.find((statement) =>
+    statement.sql.includes('INSERT INTO "CustomerLocation"'),
+  );
+  assert.ok(membershipInsert);
+  const membershipValues = collectSqlValues(membershipInsert.values);
+  assert.ok(membershipValues.includes(77));
+  assert.equal(membershipValues.includes(4424), false);
+  assert.deepEqual(result.unresolved_location_ids, []);
+});
+
+test('membership tanpa Location master diabaikan tanpa membuat outlet hantu', async (t) => {
+  installCommonMocks(t);
+
+  const originalCustomerFindMany = prisma.customer.findMany;
+  const originalUserFindMany = prisma.user.findMany;
+  const originalConsoleWarn = console.warn;
+  const statements = [];
+  t.after(() => {
+    prisma.customer.findMany = originalCustomerFindMany;
+    prisma.user.findMany = originalUserFindMany;
+    console.warn = originalConsoleWarn;
+  });
+
+  prisma.location.findMany = async () => [];
+  prisma.customer.findMany = async () => [];
+  prisma.user.findMany = async () => [];
+  prisma.$executeRaw = async (strings) => {
+    statements.push(strings.join(''));
+    return 0;
+  };
+  console.warn = () => {};
+  let membershipWritten = false;
+  prisma.$transaction = async (callback) =>
+    callback({
+      async $queryRaw(strings) {
+        return strings.join('').includes('INSERT INTO "User"')
+          ? [{ id: 9001, phone_number: '81234567890' }]
+          : [{ id: 8001, user_id: 9001 }];
+      },
+      async $executeRaw(strings) {
+        if (strings.join('').includes('INSERT INTO "CustomerLocation"')) {
+          membershipWritten = true;
+        }
+        return 0;
+      },
+    });
+
+  const [result] = await upsertRunchiseCustomersBatch(
+    [RUNCHISE_CUSTOMER],
+    null,
+  );
+
+  assert.equal(
+    statements.some((sql) => sql.includes('INSERT INTO "Location"')),
+    false,
+  );
+  assert.equal(membershipWritten, false);
+  assert.deepEqual(result.unresolved_location_ids, [4424]);
 });
