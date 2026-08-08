@@ -26,10 +26,6 @@
       "schedule": "10 12 * * *"
     },
     {
-      "path": "/api/cron/runchise-sync/customers",
-      "schedule": "15 12 * * *"
-    },
-    {
       "path": "/api/cron/runchise-sync/sales-transactions",
       "schedule": "20 12 * * *"
     },
@@ -40,10 +36,6 @@
     {
       "path": "/api/cron/runchise-sync/points",
       "schedule": "30 12 * * *"
-    },
-    {
-      "path": "/api/cron/runchise-sync/customer-timestamps-worker",
-      "schedule": "35 12 * * *"
     },
     {
       "path": "/api/cron/maintenance",

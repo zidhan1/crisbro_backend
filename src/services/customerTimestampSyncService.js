@@ -1,5 +1,9 @@
 const { Client } = require('pg');
 const { fetchCustomersPage } = require('./runchiseService');
+const {
+  isCustomerSyncEnabled,
+  customerSyncDisabledResult,
+} = require('../lib/customerSyncToggle');
 
 const CUSTOMER_TIMESTAMP_WORKER_LOCK_ID = 750954835;
 const DEFAULT_WORKER_BUDGET_MS = 20_000;
@@ -124,6 +128,12 @@ async function getCustomerTimestampSyncJob() {
 }
 
 async function createCustomerTimestampSyncJob() {
+  // Ikut dijeda: worker ini juga menyapu endpoint customer Runchise halaman
+  // demi halaman untuk seluruh outlet. Nol akses database saat dijeda.
+  if (!isCustomerSyncEnabled()) {
+    return { created: false, ...customerSyncDisabledResult() };
+  }
+
   const client = createDatabaseClient();
   try {
     await client.connect();
@@ -286,6 +296,10 @@ async function processCustomerTimestampSyncJob({
   timeBudgetMs = DEFAULT_WORKER_BUDGET_MS,
   maxPages = 1,
 } = {}) {
+  if (!isCustomerSyncEnabled()) {
+    return customerSyncDisabledResult();
+  }
+
   const client = createDatabaseClient();
   let lockAcquired = false;
   try {

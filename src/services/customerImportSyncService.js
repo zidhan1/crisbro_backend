@@ -3,6 +3,10 @@ const { fetchCustomersPage } = require('./runchiseService');
 const {
   upsertRunchiseCustomersBatch,
 } = require('./syncService');
+const {
+  isCustomerSyncEnabled,
+  customerSyncDisabledResult,
+} = require('../lib/customerSyncToggle');
 
 // Lock terpisah dari worker timestamp agar keduanya boleh berjalan bersamaan.
 const CUSTOMER_IMPORT_WORKER_LOCK_ID = 750954836;
@@ -60,6 +64,14 @@ async function getCustomerImportSyncJob() {
 }
 
 async function createCustomerImportSyncJob({ source = 'dashboard' } = {}) {
+  // Dijeda: jangan membuat job baru sama sekali. Job lama (kalau ada) tetap
+  // dibiarkan beserta cursor-nya supaya bisa dilanjutkan nanti.
+  // Nol akses database: status job tetap bisa dibaca dashboard lewat
+  // endpoint /sync/customers/status, jadi jalur ini tidak perlu query apa pun.
+  if (!isCustomerSyncEnabled()) {
+    return { created: false, ...customerSyncDisabledResult() };
+  }
+
   const client = createDatabaseClient();
   try {
     await client.connect();
@@ -228,6 +240,13 @@ async function processCustomerImportSyncJob({
   timeBudgetMs = DEFAULT_WORKER_BUDGET_MS,
   maxPages = DEFAULT_MAX_PAGES,
 } = {}) {
+  // Dijeda: tidak memproses halaman apa pun dan TIDAK mengubah status job,
+  // sehingga cursor terakhir tetap utuh untuk dilanjutkan setelah saklar
+  // dinyalakan kembali.
+  if (!isCustomerSyncEnabled()) {
+    return customerSyncDisabledResult();
+  }
+
   const client = createDatabaseClient();
   let lockAcquired = false;
   try {

@@ -55,6 +55,7 @@ const {
   withDistributedCronLock,
   RUNCHISE_CRON_LOCK_IDS,
 } = require('./lib/distributedCronLock');
+const { isCustomerSyncEnabled } = require('./lib/customerSyncToggle');
 const {
   createCustomerTimestampSyncJob,
   getCustomerTimestampSyncJob,
@@ -226,7 +227,12 @@ async function handleSyncCustomers(req, res) {
 
 async function handleCustomerSyncStatus(req, res) {
   try {
-    res.json({ job: await getCustomerImportSyncJob() });
+    // sync_enabled dipakai dashboard untuk berhenti menggerakkan worker dan
+    // menampilkan status "dijeda" alih-alih "sedang berjalan".
+    res.json({
+      job: await getCustomerImportSyncJob(),
+      sync_enabled: isCustomerSyncEnabled(),
+    });
   } catch (error) {
     respondWithServerError(
       res,
@@ -266,7 +272,10 @@ async function handleStartCustomerTimestampSync(req, res) {
 
 async function handleCustomerTimestampSyncStatus(req, res) {
   try {
-    res.json({ job: await getCustomerTimestampSyncJob() });
+    res.json({
+      job: await getCustomerTimestampSyncJob(),
+      sync_enabled: isCustomerSyncEnabled(),
+    });
   } catch (error) {
     respondWithServerError(res, error, 'Gagal membaca status sinkronisasi');
   }
