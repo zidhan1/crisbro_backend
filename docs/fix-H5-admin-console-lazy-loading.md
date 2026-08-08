@@ -1,12 +1,17 @@
 # H-5 (HIGH) — Admin console monolit dan tanpa code-splitting komponen berat
 
-Status: **Fixed (bundle boundary dan render isolation)**
+Status: **Fixed (bundle boundary dan render isolation)** — dead code sisa
+refactor sudah dibersihkan dan pemecahan per-tab sudah dimulai; lihat
+bagian 14 untuk lingkup yang sudah dan belum dituntaskan.
 
 File terdampak:
 
 - Frontend: `src/routes/admin.tsx`
 - Frontend: `src/routes/marketing.tsx`
 - Frontend: `src/features/admin/AdminPage.tsx`
+- Frontend: `src/features/admin/AdminActivityTab.tsx` (baru)
+- Frontend: `src/features/admin/AdminActivityTab.test.tsx` (baru)
+- Frontend: `src/features/admin/adminUiPrimitives.tsx` (baru)
 
 Kategori: **Performa frontend, Arsitektur, Bundle**
 
@@ -444,3 +449,373 @@ AdminReportCharts-*.js   4,51 KB │ gzip 1,57 KB
 Build client, SSR, dan Nitro berhasil tanpa error. Dengan desain ini,
 code-splitting tetap dipertahankan tanpa mengubah identitas child yang
 dibutuhkan Recharts.
+
+## 14. Update — dead code dibersihkan dan pemecahan per-tab dimulai
+
+Audit lanjutan menemukan tiga hal yang belum tuntas dari perbaikan H-5
+awal: (a) `AdminPage.tsx` masih 4.652 baris/176 KB, nyaris tidak berkurang;
+(b) ~360 baris kode chart lama yang sudah mati masih tertinggal di file;
+(c) pemecahan per-tab belum dilakukan sama sekali.
+
+### 14.1 Dead code dari koreksi bagian 13 dibersihkan
+
+Koreksi Recharts di bagian 13 memindahkan ketiga chart ke
+`AdminReportCharts.tsx`, tetapi implementasi lamanya **tidak ikut dihapus**
+dari `AdminPage.tsx`. Yang tertinggal dan kini dihapus:
+
+```text
+TopRewardsChart           (~120 baris)  - versi lama, tidak dirujuk siapa pun
+TopRedeemOutletsChart     (~130 baris)  - idem
+RedemptionHistoryChart    (~ 95 baris)  - idem
+useMediaQuery             (~ 18 baris)  - hanya dipakai ketiga fungsi di atas
+9 lazy import primitive Recharts        - Bar, BarChart, CartesianGrid, Cell,
+                                          LabelList, Line, LineChart, XAxis, YAxis
+5 lazy import @/components/ui/chart     - ChartContainer, ChartLegend,
+                                          ChartLegendContent, ChartTooltip,
+                                          ChartTooltipContent
+import `memo` yang tidak terpakai
+```
+
+Ketiga fungsi chart lama itu `export`, jadi statusnya diverifikasi lewat
+`grep` menyeluruh dulu (tidak ada satu pun pemakai di `src/`) sebelum
+dihapus — bukan diasumsikan mati karena "kelihatannya tidak dipakai".
+Ke-9 lazy import primitive Recharts adalah persis pola yang bagian 13
+nyatakan **rusak** (memecah identitas component yang dibutuhkan
+`findAllByType()`); pola itu kini benar-benar hilang dari codebase, bukan
+sekadar tidak dipakai lagi.
+
+Efek samping yang menguntungkan: satu error TypeScript pre-existing
+(`Type 'typeof Bar' is not assignable to type 'ComponentType<any>'` pada
+`lazy(Bar)`) ikut hilang karena penyebabnya adalah kode mati itu sendiri.
+
+### 14.2 Pemecahan per-tab dimulai: tab Activity Log
+
+Tab Activity Log dipecah jadi modul lazy tersendiri
+(`AdminActivityTab.tsx`) sebagai percontohan pola. Dipilih sebagai tab
+pertama karena paling terisolasi: murni read-only, tidak punya form CRUD,
+dan tidak menulis state tab lain — sehingga risiko regresinya paling kecil
+untuk memvalidasi polanya.
+
+Ikut dipindah ke modul itu: seluruh JSX tab, plus 9 helper yang hanya
+dipakai tab ini (`metadataLabels`, `actualCustomerChangedFields`,
+`auditValuesEqual`, `sortedAuditLocationIds`, `isRecord`, `compactJson`,
+dan komponen `ActivityMetadata`) — total ~190 baris yang sebelumnya
+dimuat semua pengguna console meski tidak pernah membuka tab activity.
+
+Primitif UI yang dipakai lebih dari satu tab (`Panel`, `FormInput`,
+`TableScrollArea`, `RequiredLabel`, `numberFormat`, `dateTimeFormat`)
+diekstrak ke `adminUiPrimitives.tsx` agar modul tab tidak perlu
+meng-import balik dari `AdminPage.tsx` (yang akan membuat siklus impor)
+maupun menduplikasi implementasinya.
+
+**Batasan yang disengaja:** state tab activity (`activityLogs`, filter,
+halaman) dan `loadActivityLogs()` **tetap** di `AdminPage.tsx`; komponen
+baru murni presentational dan menerima semuanya lewat props. Artinya
+langkah ini mengurangi ukuran bundle awal dan jumlah baris file, **tetapi
+belum** mengurangi jumlah `useState` di `AdminPage` (masih 63) maupun
+biaya re-render lintas tab. Memindahkan state per tab juga menuntut
+penyesuaian orkestrasi `loading`/`error`/`loadedTabs` di `AdminPage` —
+sengaja tidak dilakukan sekaligus agar pola dasarnya terbukti aman dulu.
+
+Perbaikan kecil yang ikut terbawa: `FormInput` sekarang benar-benar
+mendukung prop `placeholder`. Sebelumnya beberapa pemanggil sudah
+melewatkan `placeholder`, tetapi prop itu tidak ada di tipe komponen
+sehingga diam-diam dibuang dan placeholder tidak pernah tampil (3 error
+TypeScript pre-existing ikut hilang).
+
+### 14.3 Hasil terukur
+
+Ukuran file:
+
+```text
+AdminPage.tsx   4.652 baris  ->  3.904 baris   (-748 baris, -16%)
+```
+
+Chunk client hasil `vite build`:
+
+```text
+AdminPage-*.js           169 KB  ->  163,7 KB
+AdminActivityTab-*.js       (baru)     6,8 KB   <- hanya diunduh saat tab dibuka
+AdminReportCharts-*.js             401,3 KB     <- tetap terpisah (recharts)
+admin-*.js / marketing-*.js       0,9 KB each   <- route wrapper tetap tipis
+```
+
+Error TypeScript (`tsc --noEmit`), seluruh proyek:
+
+```text
+sebelum: 8 error   sesudah: 5 error   (semua sisa adalah pre-existing dan
+                                       tidak berhubungan dengan H-5)
+```
+
+### 14.4 Pengujian terukur
+
+`src/features/admin/AdminActivityTab.test.tsx` (11 test, seluruhnya lulus
+lewat `npm test`) mengunci perilaku tab agar pemecahan modul tidak
+mengubahnya secara diam-diam:
+
+- kolom tabel (waktu, actor, action, entity, metadata, IP) dan keadaan
+  kosong;
+- fallback identitas actor: email → nomor telepon → `User #<id>`;
+- peringkasan metadata `runchise_sync` dan `activation_email` jadi label,
+  bukan JSON mentah;
+- cabang khusus log lama: metadata yang menandai `last_updated_by_id`
+  (noise) memicu penghitungan ulang daftar field berubah dari
+  `before`/`after`;
+- fallback JSON ringkas untuk metadata yang polanya tidak dikenali;
+- tombol Filter memuat dari halaman 1; navigasi Sebelumnya/Berikutnya
+  memanggil halaman yang benar; tombol nonaktif di batas dan saat loading;
+- perubahan input filter diteruskan ke handler induk (membuktikan state
+  memang masih dikelola `AdminPage`, sesuai batasan di 14.2).
+
+Test ini diverifikasi **tidak vacuous** lewat mutation check: menghapus
+satu baris `changedFields.push()` di cabang penghitungan ulang membuat
+test terkait gagal, lalu kode dikembalikan.
+
+Verifikasi lain: `eslint src/features/admin/` bersih (exit 0), `vite build`
+(client + SSR + Nitro) sukses, seluruh suite frontend 14/14 lulus.
+
+Catatan: verifikasi lewat browser sungguhan tidak dapat dilakukan karena
+console admin memerlukan login akun admin; karena itu perilaku tab dikunci
+lewat test komponen di atas, bukan lewat klik manual.
+
+### 14.5 Sisa pekerjaan H-5
+
+- Lima tab lain (`report`, `sales-transactions`, `users`, `customers`,
+  `redeem`) belum dipecah; JSX-nya sudah digate kondisional sehingga tab
+  nonaktif tidak ikut dirender, tetapi kodenya masih satu chunk dengan
+  `AdminPage`.
+- 63 `useState` masih terpusat di `AdminPage`, sehingga setiap perubahan
+  state (termasuk ketikan di satu input) masih menjalankan ulang fungsi
+  komponen ~2.900 baris itu. Menuntaskannya perlu memindahkan state per
+  tab, bukan hanya JSX-nya.
+
+## 15. Update lanjutan — tab Sales Transactions dipecah + bug kontrol paginasi
+
+### 15.1 Bug ditemukan: form "Pergi" berada di tab yang salah
+
+Saat menyiapkan pemecahan tab `sales-transactions`, ditemukan bug
+pre-existing yang juga menghalangi pemisahan bersih: blok paginasi tab
+**Customers** memanggil `jumpToSalesTransactionPage()` dan membaca
+`salesTransactionPageInput` / `salesTransactionTotalPages`.
+
+Ditelusuri lewat `git log -S`, penyebabnya commit `7bc6edd`
+("feat(admin): improve customer transaction pagination"). Tombol halaman
+untuk sales-transaction ditambahkan di lokasi yang benar, tetapi form
+lompat-ke-halaman-nya tersisip pada hunk `@@ -2653,6 +2701,24 @@` — tepat
+sebelum form lompat-ke-halaman milik Customers, sehingga masuk ke blok tab
+yang salah.
+
+Akibatnya, selama ini:
+
+- tab **Customers** menampilkan **dua** tombol "Pergi" berdampingan; yang
+  pertama justru memindahkan halaman tab Transaksi (tab yang sedang tidak
+  dilihat pengguna), yang kedua baru memindahkan halaman Customers;
+- tab **Crisbro Transaction Report** tidak punya kontrol lompat-ke-halaman
+  sama sekali, padahal `jumpToSalesTransactionPage()` memang ditulis
+  untuknya dan state `salesTransactionPageInput` sudah disiapkan.
+
+Perbaikan: form tersebut dihapus dari blok paginasi Customers dan
+dikembalikan ke tab Transaksi. `jumpToCustomerPage()` milik Customers tidak
+disentuh.
+
+### 15.2 Tab Sales Transactions dipecah
+
+`AdminSalesTransactionsTab.tsx` (baru) memuat seluruh JSX tab: filter
+(cari/outlet/rentang tanggal), tabel 13 kolom, ringkasan rentang baris,
+pemilih baris-per-halaman, tombol halaman, dan form lompat-ke-halaman yang
+sudah dikembalikan. Dipilih sebagai tab kedua karena juga read-only —
+risikonya setara dengan tab activity yang polanya sudah divalidasi.
+
+Sama seperti `AdminActivityTab`: state dan `loadSalesTransactions()` tetap
+di `AdminPage.tsx`; komponen baru murni presentational.
+
+### 15.3 Modul bersama dirapikan
+
+Primitif yang kini dipakai lebih dari satu modul dipindahkan agar tidak ada
+duplikasi maupun siklus impor:
+
+```text
+adminFormatters.ts    (baru)  numberFormat, currencyFormat, toNumber,
+                              dateFormat, dateTimeFormat, paginationItems
+adminUiPrimitives.tsx         RequiredLabel, Panel, FormInput, Select,
+                              TableScrollArea
+```
+
+Pemisahan fungsi murni ke file `.ts` tersendiri dilakukan karena aturan
+`react-refresh/only-export-components`: file yang mengekspor komponen
+**dan** helper membuat Fast Refresh jatuh ke full reload saat dev. Setelah
+dipisah, `eslint src/features/admin/` bersih **tanpa error maupun
+warning** (sebelumnya 6 warning).
+
+Komponen `Select` (pembungkus Radix, dipakai 12 tempat) ikut pindah ke
+modul bersama, sehingga import `@radix-ui/react-select` tidak lagi
+diperlukan di `AdminPage.tsx`.
+
+### 15.4 Hasil terukur
+
+```text
+AdminPage.tsx   4.652 baris (awal)  ->  3.904  ->  3.624 baris
+                                        (-1.028 baris / -22% dari awal)
+```
+
+Chunk client hasil `vite build`:
+
+```text
+AdminPage-*.js                169,4 KB -> 159,3 KB
+AdminActivityTab-*.js                       6,8 KB
+AdminSalesTransactionsTab-*.js  (baru)      5,4 KB
+AdminReportCharts-*.js                    401,3 KB   (recharts, tak berubah)
+admin-*.js / marketing-*.js                 0,9 KB
+```
+
+Error TypeScript seluruh proyek tetap **5** (semua pre-existing dan tidak
+berhubungan) — tidak ada error baru dari pemecahan ini.
+
+### 15.5 Pengujian terukur
+
+`AdminSalesTransactionsTab.test.tsx` (13 test, lulus semua):
+
+- keadaan kosong; kolom transaksi; nominal `pembelian_per_order` yang
+  dikirim API sebagai **string** tetap diformat rupiah dengan benar;
+- field `null` tampil sebagai `-`, bukan tulisan `null`;
+- rincian reward yang ditukar (`2× Kopi Gratis`, `50 poin`);
+- tombol Terapkan memuat dari halaman 1; navigasi Sebelumnya/Berikutnya;
+  tombol nonaktif di batas halaman;
+- **regresi bug 15.1**: form lompat-ke-halaman ada di tab ini dan memicu
+  `onJumpToPage`, serta hanya ada **satu** tombol "Pergi";
+- pemilih baris-per-halaman meneruskan `number`, bukan `string`;
+- ringkasan rentang baris benar (halaman 3 × 50 = `101–150 dari 450`) dan
+  menampilkan `0–0 dari 0` saat kosong.
+
+Diverifikasi **tidak vacuous** lewat mutation check: melumpuhkan
+`onJumpToPage()` dan menggeser perhitungan `Math.min` membuat tepat 2 test
+terkait gagal, lalu kode dikembalikan.
+
+Seluruh suite frontend: **27/27 lulus** (3 file test). `vite build` (client
++ SSR + Nitro) sukses.
+
+### 15.6 Sisa pekerjaan H-5
+
+- Empat tab tersisa (`report`, `users`, `customers`, `redeem`) belum
+  dipecah. Ketiga tab CRUD (`users`, `customers`, `redeem`) jauh lebih
+  terikat ke state form dan dialog `AdminPage`, jadi perlu penanganan lebih
+  hati-hati daripada dua tab read-only ini.
+- Jumlah `useState` di `AdminPage` masih 63; kedua pemecahan sejauh ini
+  sengaja tidak memindahkan state, sehingga biaya re-render lintas tab
+  belum berubah.
+
+## 16. Update lanjutan — tab Report dipecah (tab read-only terakhir)
+
+### 16.1 Yang dipindahkan
+
+`AdminReportTab.tsx` (baru) memuat seluruh JSX tab report: enam kartu metrik,
+tabel customer-per-outlet, dua panel grafik, filter riwayat redemption, dan
+tabel riwayatnya.
+
+Tiga komponen ikut pindah **seluruhnya** ke modul ini karena diverifikasi
+lewat `grep` hanya dipakai tab report — jadi tidak perlu menghuni modul
+bersama, dan bobotnya benar-benar keluar dari chunk utama:
+
+| Komponen | Pemakai |
+|---|---|
+| `Metric` + `metricToneClasses` | hanya tab report (6 kartu) |
+| `DataTable` + `compareTableCell` + `parseTableNumber` | hanya tab report (2 tabel) |
+| `ReportChartBoundary` | hanya tab report (3 grafik) |
+
+Ketiga `lazy()` wrapper ke `AdminReportCharts` juga ikut pindah, sehingga
+chunk recharts (401 KB) tetap terpisah dan baru diunduh ketika grafiknya
+benar-benar dirender — bukan sekadar saat tab report dibuka.
+
+Sebaliknya, dua hal yang **dipakai lebih dari satu tab** dinaikkan ke modul
+bersama agar tidak terduplikasi:
+
+```text
+adminFormatters.ts   + nextSortState, type SortState
+adminUiPrimitives.tsx + SortableHeader   (dipakai 20 tempat: users/customers/redeem)
+```
+
+Setelah tab report keluar, delapan import yang tidak lagi terpakai di
+`AdminPage.tsx` (`ArrowDown`, `ArrowUp`, `ArrowUpDown`, `Coins`, `Gift`,
+`TicketCheck`, `UserCheck`, `WalletCards`, plus `type SortOrder`) ikut
+dibersihkan.
+
+### 16.2 Hasil terukur
+
+```text
+AdminPage.tsx   4.652 baris (awal)  ->  3.624  ->  3.220 baris
+                                        (-1.432 baris / -31% dari awal)
+```
+
+Chunk client hasil `vite build`:
+
+```text
+AdminPage-*.js                 169,4 KB -> 159,3 KB -> 152,4 KB
+AdminReportTab-*.js  (baru)                             7,9 KB
+AdminSalesTransactionsTab-*.js                          5,4 KB
+AdminActivityTab-*.js                                   6,8 KB
+AdminReportCharts-*.js                                401,3 KB  (recharts, tak berubah)
+admin-*.js / marketing-*.js                             0,9 KB
+```
+
+Ketiga tab read-only kini sudah dipecah. Error TypeScript seluruh proyek
+tetap **5** (semua pre-existing, di `AdminActivityTab`/`menu.tsx`/`promo.tsx`
+dan tidak berhubungan dengan pemecahan ini). `eslint` pada seluruh file yang
+disentuh: **bersih**; 45 error ESLint yang tersisa di `src/routes/` sudah ada
+sebelum perubahan ini (diverifikasi dengan menjalankan lint pada working tree
+yang di-stash).
+
+### 16.3 Polyfill matchMedia di lingkungan test
+
+`vitest.setup.ts` ditambahi polyfill `window.matchMedia`. JSDOM tidak
+mengimplementasikannya, sedangkan komponen responsif memanggilnya saat mount
+(`useMediaQuery` di modul grafik, dan `useIsMobile` yang dipakai
+`AdminPage`), sehingga sebelumnya komponen tersebut melempar `TypeError` di
+test. Ini melengkapi polyfill Radix/ResizeObserver yang sudah ada.
+
+### 16.4 Pengujian terukur
+
+`AdminReportTab.test.tsx` (11 test, lulus semua):
+
+- keenam kartu metrik tampil dengan angka terformat `id-ID` (`18.330`,
+  `250.000`, dst) — di-query dengan `{ selector: "p" }` karena beberapa
+  judul metrik (mis. "Customer Berpoin") kebetulan sama persis dengan nama
+  kolom tabel di tab yang sama;
+- ketiga grafik lazy selesai dimuat (3 container `[data-chart]`) dan
+  skeleton Suspense-nya hilang;
+- status outlet dipetakan ke label Indonesia (`capped` -> "Dibatasi API",
+  `empty` -> "Belum ada data"), dan field `null` tampil sebagai `-`;
+- pesan kosong untuk tabel outlet maupun riwayat redemption;
+- riwayat redemption: `menu_price` terformat rupiah, outlet berkota tampil
+  `Nama (Kota)`, `menu_price: null` tidak jadi "Rp 0";
+- `DataTable` benar-benar mengurutkan baris saat header diklik, dan
+  menandai arah urutan lewat `aria-sort` (`none` -> `ascending` ->
+  `descending`) untuk pembaca layar;
+- tombol "Terapkan Filter" memanggil handler induk dan nonaktif saat
+  `loading`.
+
+**Catatan metodologis.** Percobaan awal me-mock `./AdminReportCharts` lewat
+`vi.mock` membuat hanya grafik pertama yang ter-render di jsdom. Ditelusuri
+dan dipastikan itu **artefak mocking, bukan cacat komponen**: dengan modul
+aslinya ketiga grafik muncul lengkap (3 container `[data-chart]`, nol
+skeleton tersisa). Karena itu mock dibuang dan test memakai modul asli —
+yang justru lebih tepat, karena wiring `React.lazy`/`Suspense` itulah inti
+perubahan H-5. Durasi file test tetap ~10 detik.
+
+Diverifikasi **tidak vacuous** lewat mutation check: mengubah pemetaan status
+outlet, melumpuhkan `compareTableCell`, dan mengganti `numberFormat` dengan
+`String()` membuat tepat 3 test terkait gagal, lalu kode dikembalikan.
+
+Seluruh suite frontend: **38/38 lulus** (4 file test). `vite build` (client +
+SSR + Nitro) sukses.
+
+### 16.5 Sisa pekerjaan H-5
+
+- Tiga tab CRUD (`users`, `customers`, `redeem`) belum dipecah. Ketiganya
+  jauh lebih terikat ke state form, dialog konfirmasi, dan alur simpan/hapus
+  di `AdminPage`, jadi bukan sekadar memindahkan JSX seperti tiga tab
+  read-only ini.
+- Jumlah `useState` di `AdminPage` masih 63: ketiga pemecahan sejauh ini
+  sengaja mempertahankan state di induk agar pola pemisahannya bisa
+  diverifikasi aman lebih dulu. Selama state masih di induk, biaya
+  re-render lintas tab belum berkurang — itu langkah berikutnya, bukan
+  sesuatu yang sudah tercapai.
