@@ -5,6 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "test": "node --test test/*.test.js",
+    "test:integration:postgres": "node scripts/runPostgresIntegrationTests.js",
     "load-test:sales-worker": "node scripts/loadTestSalesWorker.js",
     "load-test:sales-postgres": "node --expose-gc scripts/integrationLoadTestSalesBulk.js",
     "verify:redeem-menu": "node scripts/verifyRedeemMenuFlow.js --confirm-db-write",
