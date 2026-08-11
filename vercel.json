@@ -30,6 +30,10 @@
       "schedule": "20 12 * * *"
     },
     {
+      "path": "/api/cron/runchise-sync/sales-transactions-worker",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/cron/runchise-sync/promos",
       "schedule": "25 12 * * *"
     },

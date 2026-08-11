@@ -1597,6 +1597,127 @@ async function syncSalesTransactionReportsForLocation(targetLocationId, options 
   };
 }
 
+// Unit kerja worker serverless: tepat satu halaman transaksi. Seluruh lookup
+// dibatasi ke customer yang muncul pada halaman ini dan seluruh write dijalankan
+// dalam satu transaksi, sehingga cursor job baru boleh maju setelah halaman
+// tersimpan lengkap.
+async function syncSalesTransactionReportsPage(
+  targetLocationId,
+  salesTransactions,
+) {
+  const runchiseCustomerIds = [
+    ...new Set(
+      salesTransactions
+        .map((sale) => Number(sale.customer_id))
+        .filter((id) => Number.isInteger(id) && id > 0),
+    ),
+  ];
+
+  const [stagedCustomers, localCustomers] = await Promise.all([
+    runchiseCustomerIds.length > 0
+      ? prisma.runchiseLocationCustomer.findMany({
+          where: {
+            source_location_id: Number(targetLocationId),
+            runchise_customer_id: { in: runchiseCustomerIds },
+          },
+          select: {
+            runchise_customer_id: true,
+            name: true,
+            phone_number: true,
+            phone_number_country_code: true,
+            runchise_created_at: true,
+            available_point: true,
+            owner_location_name: true,
+          },
+        })
+      : [],
+    runchiseCustomerIds.length > 0
+      ? prisma.customer.findMany({
+          where: { runchise_id: { in: runchiseCustomerIds } },
+          include: {
+            owner_location: { select: { id: true, name: true, city: true } },
+            customer_point: true,
+          },
+        })
+      : [],
+  ]);
+  const stagedById = new Map(
+    stagedCustomers.map((customer) => [
+      Number(customer.runchise_customer_id),
+      {
+        name: customer.name,
+        phone_number: customer.phone_number,
+        phone_number_country_code: customer.phone_number_country_code,
+        created_at: customer.runchise_created_at,
+        available_point: customer.available_point,
+        owner_location: customer.owner_location_name
+          ? { name: customer.owner_location_name }
+          : null,
+      },
+    ]),
+  );
+  const localById = new Map(
+    localCustomers.map((customer) => [Number(customer.runchise_id), customer]),
+  );
+
+  const writes = [];
+  let synced = 0;
+  let skipped = 0;
+  let skippedZeroPoints = 0;
+
+  for (const sale of salesTransactions) {
+    const saleId = Number(sale.id);
+    if (!Number.isInteger(saleId) || saleId <= 0) {
+      skipped++;
+      continue;
+    }
+
+    const customerId = Number(sale.customer_id);
+    const data = mapSalesTransactionReportData(
+      sale,
+      stagedById.get(customerId),
+      localById.get(customerId),
+      targetLocationId,
+    );
+
+    if (data.penambahan_poin === 0 && Number(data.penggunaan_poin) === 0) {
+      writes.push(
+        prisma.customerSalesTransactionReport.deleteMany({
+          where: {
+            source_location_id: Number(targetLocationId),
+            runchise_sales_transaction_id: saleId,
+          },
+        }),
+      );
+      skippedZeroPoints++;
+      continue;
+    }
+
+    writes.push(
+      prisma.customerSalesTransactionReport.upsert({
+        where: {
+          source_location_id_runchise_sales_transaction_id: {
+            source_location_id: Number(targetLocationId),
+            runchise_sales_transaction_id: saleId,
+          },
+        },
+        update: data,
+        create: data,
+      }),
+    );
+    synced++;
+  }
+
+  if (writes.length > 0) await prisma.$transaction(writes);
+  return {
+    processed: salesTransactions.length,
+    synced,
+    skipped: skipped + skippedZeroPoints,
+    skipped_invalid: skipped,
+    skipped_zero_points: skippedZeroPoints,
+  };
+}
+
 // Tanpa locationId, sinkronisasi terjadwal wajib mencakup seluruh outlet yang
 // tersedia dari Runchise. locationId eksplisit tetap didukung untuk operasi
 // manual/diagnostik satu outlet.
@@ -2118,4 +2239,6 @@ module.exports = {
   syncPromos,
   buildSaleRewardRedemptionSnapshot,
   mapSalesTransactionReportData,
+  buildSalesTransactionParams,
+  syncSalesTransactionReportsPage,
 };

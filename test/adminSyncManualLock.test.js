@@ -37,7 +37,6 @@ for (const name of [
   'syncLocations',
   'syncPromos',
   'syncCustomerPointsFromStaging',
-  'syncSalesTransactionReports',
 ]) {
   syncService[name] = (...args) => stubs[name](...args);
 }
@@ -48,11 +47,10 @@ const {
   runSyncBrandsJob,
   runSyncLocationsJob,
   runSyncPromosJob,
-  runSyncSalesTransactionReportsJob,
   runCustomerPointsSyncJob,
 } = require('../src/jobs/runchiseSyncCron');
 const app = require('../src/index');
-const { handleSyncProducts, handleSyncBrands, handleSyncLocations, handleSyncPromos, handleSyncPoints, handleSyncSalesTransactions } =
+const { handleSyncProducts, handleSyncBrands, handleSyncLocations, handleSyncPromos, handleSyncPoints } =
   app.__testables;
 
 function createDeferred() {
@@ -106,13 +104,6 @@ const stageCases = [
     stubName: 'syncPromos',
     runCronJob: runSyncPromosJob,
     callAdminHandler: (res) => handleSyncPromos({ query: {} }, res),
-  },
-  {
-    label: 'sales transactions',
-    lockId: RUNCHISE_CRON_LOCK_IDS.sales,
-    stubName: 'syncSalesTransactionReports',
-    runCronJob: runSyncSalesTransactionReportsJob,
-    callAdminHandler: (res) => handleSyncSalesTransactions({ query: {} }, res),
   },
   {
     label: 'points',

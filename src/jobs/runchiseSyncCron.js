@@ -2,7 +2,6 @@ const cron = require('node-cron');
 const {
   syncCustomers,
   syncCustomerPointsFromStaging,
-  syncSalesTransactionReports,
   syncProducts,
   syncBrands,
   syncLocations,
@@ -12,6 +11,10 @@ const {
   createCustomerImportSyncJob,
   processCustomerImportSyncJob,
 } = require('../services/customerImportSyncService');
+const {
+  createSalesTransactionSyncJob,
+  processSalesTransactionSyncJob,
+} = require('../services/salesTransactionSyncService');
 const {
   RUNCHISE_CRON_LOCK_IDS,
   withDistributedCronLock,
@@ -76,17 +79,30 @@ async function runSyncProductsJob() {
 
 async function runSyncSalesTransactionReportsJob() {
   return runLockedJob('sales', RUNCHISE_CRON_LOCK_IDS.sales, async () => {
-    // Tanpa locationId eksplisit, service mengambil dan mengiterasi seluruh
-    // outlet Runchise. RUNCHISE_SYNC_LOCATION_ID hanya menjadi fallback bila
-    // daftar lokasi dari API tidak tersedia, bukan pembatas coverage cron.
-    const result = await syncSalesTransactionReports();
-    if (result.locations_failed > 0) {
-      console.warn(
-        `[runchise-sync:sales] completed with ${result.locations_failed}/${result.locations_total} outlet failed`,
-      );
-    }
-    return result;
+    // Cron hanya membuat/mengambil job persisten lalu mengerjakan beberapa
+    // halaman sampai time budget. Invocation berikutnya melanjutkan cursor.
+    // Job cron memakai jendela tujuh hari WIB agar koreksi transaksi terlambat
+    // ikut tersapu tanpa memulai full-history scan pada setiap hari.
+    const nowWib = new Date(Date.now() + 7 * 60 * 60 * 1000);
+    const endDate = nowWib.toISOString().slice(0, 10);
+    nowWib.setUTCDate(nowWib.getUTCDate() - 6);
+    const startDate = nowWib.toISOString().slice(0, 10);
+    const creation = await createSalesTransactionSyncJob({
+      source: 'cron',
+      startDate,
+      endDate,
+    });
+    const result = await processSalesTransactionSyncJob();
+    return { created: creation.created, ...result };
   });
+}
+
+// Dipanggil lebih sering daripada enqueue harian. Worker tidak membuat job
+// baru saat idle sehingga tidak mengulang jendela yang sama terus-menerus.
+async function runSalesTransactionWorkerJob() {
+  return runLockedJob('sales', RUNCHISE_CRON_LOCK_IDS.sales, () =>
+    processSalesTransactionSyncJob(),
+  );
 }
 
 async function runSyncPromosJob() {
@@ -251,6 +267,7 @@ module.exports = {
   runSyncBrandsJob,
   runSyncProductsJob,
   runSyncSalesTransactionReportsJob,
+  runSalesTransactionWorkerJob,
   runSyncPromosJob,
   runCustomerSyncJob,
   runCustomerImportWorkerJob,

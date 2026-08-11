@@ -205,6 +205,35 @@ model CustomerImportSyncJob {
   @@index([started_at])
 }
 
+// Job sinkronisasi laporan sales Runchise. Cursor outlet + halaman disimpan
+// setelah setiap halaman selesai agar aman dilanjutkan oleh invocation cron
+// berikutnya tanpa memuat seluruh transaksi ke memori.
+model SalesTransactionSyncJob {
+  id                     Int       @id @default(autoincrement())
+  status                 String    @default("queued")
+  source                 String    @default("cron")
+  location_ids           Json
+  current_location_index Int       @default(0)
+  current_location       Int?
+  current_page           Int       @default(1)
+  start_date             String?
+  end_date               String?
+  filters                Json?
+  pages_processed        Int       @default(0)
+  processed              Int       @default(0)
+  synced                 Int       @default(0)
+  skipped                Int       @default(0)
+  failed                 Int       @default(0)
+  error                  String?   @db.Text
+  started_at             DateTime  @default(now())
+  heartbeat_at           DateTime  @default(now())
+  finished_at            DateTime?
+  last_success_at        DateTime?
+
+  @@index([status])
+  @@index([started_at])
+}
+
 // Snapshot customer yang dikembalikan endpoint Runchise per lokasi.
 // Terpisah dari Customer aplikasi agar impor POS tidak membuat akun pengguna.
 model RunchiseLocationCustomer {

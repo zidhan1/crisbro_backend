@@ -356,7 +356,7 @@ function extractSalesTransactions(data) {
   );
 }
 
-async function fetchSalesTransactionsPage(page, params = {}) {
+async function fetchSalesTransactionsPage(page, params = {}, requestOptions = {}) {
   const { data } = await requestWithRetry(
     `Fetch sales transactions Runchise page ${page}`,
     () =>
@@ -367,6 +367,7 @@ async function fetchSalesTransactionsPage(page, params = {}) {
           ...params,
         },
       }),
+    requestOptions,
   );
 
   return data;
@@ -620,6 +621,8 @@ module.exports = {
   fetchCustomersPage,
   fetchAllCustomers,
   fetchAllCustomersAcrossLocations,
+  fetchSalesTransactionsPage,
+  extractSalesTransactions,
   fetchAllSalesTransactions,
   findCustomerByPhone,
   findCustomerByPhoneAcrossLocations,

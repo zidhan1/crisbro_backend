@@ -36,7 +36,6 @@ const { respondWithServerError } = require('./lib/serverError');
 const {
   syncCustomerPoints,
   syncCustomerPointsFromStaging,
-  syncSalesTransactionReports,
 } = require('./services/syncService');
 const {
   startRunchiseSyncCron,
@@ -44,6 +43,7 @@ const {
   runSyncBrandsJob,
   runSyncProductsJob,
   runSyncSalesTransactionReportsJob,
+  runSalesTransactionWorkerJob,
   runSyncPromosJob,
   runCustomerImportWorkerJob,
   runCustomerPointsSyncJob,
@@ -66,6 +66,11 @@ const {
   getCustomerImportSyncJob,
   processCustomerImportSyncJob,
 } = require('./services/customerImportSyncService');
+const {
+  createSalesTransactionSyncJob,
+  getSalesTransactionSyncJob,
+  processSalesTransactionSyncJob,
+} = require('./services/salesTransactionSyncService');
 
 // ===================== APP SETUP =====================
 const app = express();
@@ -365,28 +370,44 @@ async function handleSyncPromos(req, res) {
 
 async function handleSyncSalesTransactions(req, res) {
   try {
-    // Tanpa fallback ke 1: tidak ada outlet Crisbar dengan ID itu di Runchise.
-    const locationId =
-      req.query.location_id || process.env.RUNCHISE_SYNC_LOCATION_ID || null;
-    const result = await runAdminSyncWithLock(
-      'sales-manual',
-      RUNCHISE_CRON_LOCK_IDS.sales,
-      () =>
-        syncSalesTransactionReports(locationId, {
-          start_date: req.query.start_date,
-          end_date: req.query.end_date,
-          status: req.query.status,
-          payment_method_ids: req.query.payment_method_ids,
-          from: req.query.from,
-          to: req.query.to,
-        }),
-    );
-    if (result?.skipped)
-      return respondSyncSkipped(res, 'sales transactions', result);
-
-    res.json({ message: 'Sync sales transactions selesai', ...result });
+    const result = await createSalesTransactionSyncJob({
+      source: 'dashboard',
+      locationId: req.query.location_id || null,
+      startDate: req.query.start_date || req.query.from || null,
+      endDate: req.query.end_date || req.query.to || null,
+      status: req.query.status || null,
+      paymentMethodIds: req.query.payment_method_ids || null,
+    });
+    res.status(result.created ? 202 : 200).json({
+      message: result.created
+        ? 'Job sync sales transactions dibuat'
+        : 'Job sync sales transactions masih berjalan',
+      ...result,
+    });
   } catch (error) {
     respondWithServerError(res, error, 'index');
+  }
+}
+
+async function handleSalesSyncStatus(req, res) {
+  try {
+    res.json({ job: await getSalesTransactionSyncJob() });
+  } catch (error) {
+    respondWithServerError(res, error, 'sales-sync-status');
+  }
+}
+
+async function handleProcessSalesSync(req, res) {
+  try {
+    const result = await runAdminSyncWithLock(
+      'sales-worker',
+      RUNCHISE_CRON_LOCK_IDS.sales,
+      () => processSalesTransactionSyncJob(),
+    );
+    if (result?.skipped) return respondSyncSkipped(res, 'sales transactions', result);
+    res.json(result);
+  } catch (error) {
+    respondWithServerError(res, error, 'sales-sync-worker');
   }
 }
 
@@ -437,6 +458,8 @@ app.post(
   ...adminOnly,
   handleSyncSalesTransactions,
 );
+app.get('/admin/sync/sales-transactions/status', ...adminOnly, handleSalesSyncStatus);
+app.post('/admin/sync/sales-transactions/process', ...adminOnly, handleProcessSalesSync);
 
 // Endpoint sync (dengan prefix /api)
 app.post('/api/admin/sync/customers', ...adminOrMarketing, handleSyncCustomers);
@@ -474,6 +497,16 @@ app.post(
   '/api/admin/sync/sales-transactions',
   ...adminOnly,
   handleSyncSalesTransactions,
+);
+app.get(
+  '/api/admin/sync/sales-transactions/status',
+  ...adminOnly,
+  handleSalesSyncStatus,
+);
+app.post(
+  '/api/admin/sync/sales-transactions/process',
+  ...adminOnly,
+  handleProcessSalesSync,
 );
 
 // ===================== VERCEL CRON SYNC ROUTES =====================
@@ -586,6 +619,22 @@ app.post(
   createCronSyncHandler(
     'runchise-sales-transactions',
     runSyncSalesTransactionReportsJob,
+  ),
+);
+app.get(
+  '/api/cron/runchise-sync/sales-transactions-worker',
+  requireCronSecret,
+  createCronSyncHandler(
+    'runchise-sales-transactions-worker',
+    runSalesTransactionWorkerJob,
+  ),
+);
+app.post(
+  '/api/cron/runchise-sync/sales-transactions-worker',
+  requireCronSecret,
+  createCronSyncHandler(
+    'runchise-sales-transactions-worker',
+    runSalesTransactionWorkerJob,
   ),
 );
 app.get(
