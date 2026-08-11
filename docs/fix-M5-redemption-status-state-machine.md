@@ -230,3 +230,155 @@ tidak pernah benar-benar mereka miliki.
   `total_point` sebagai angka historis kumulatif (bukan saldo yang
   berkurang saat redeem), pola yang sama dengan `adjustCustomerLoyalty`
   di H-1.
+
+## Update — celah residual ditutup: saldo poin bisa minus saat klaim
+
+### 1. Celah yang tersisa
+
+Perbaikan awal (state machine + debit/refund atomik) sudah benar, tetapi
+menyisakan satu lubang: di dalam transaksi klaim, yang dikunci hanya baris
+`RewardRedemption`:
+
+```js
+const [current] = await tx.$queryRaw`
+  SELECT * FROM "RewardRedemption" WHERE id = ${id} FOR UPDATE
+`;
+...
+const point = await tx.customerPoint.findUnique({   // <-- TIDAK terkunci
+  where: { customer_id: customerId },
+});
+if (point.available_point < pointsSpent) throw ...  // cek di atas data basi
+await tx.customerPoint.update({ data: { available_point: { decrement: ... } } });
+```
+
+Mengunci `RewardRedemption` hanya mencegah **redemption yang sama** diklaim
+dua kali. Baris yang sebenarnya jadi rebutan saat klaim adalah
+`CustomerPoint`. Dua klaim untuk redemption **berbeda** milik customer
+**yang sama** mengunci baris `RewardRedemption` berbeda, sehingga di
+isolation level default PostgreSQL (`READ COMMITTED`, tidak ada override di
+kode) keduanya berjalan berbarengan:
+
+```text
+Customer punya 100 poin, dua redemption pending @60 poin
+
+t1  A: kunci RewardRedemption #1
+t2  B: kunci RewardRedemption #2      <- baris beda, tidak menunggu
+t3  A: baca saldo -> 100
+t4  B: baca saldo -> 100              <- masih 100
+t5  A: cek 100 >= 60 -> LOLOS
+t6  B: cek 100 >= 60 -> LOLOS
+t7  A: decrement 60 -> 40
+t8  A: COMMIT
+t9  B: decrement 60 -> -20
+t10 B: COMMIT                         -> available_point = -20
+```
+
+Catatan penting: ini **bukan** lost update. `decrement` menghasilkan
+`SET available_point = available_point - 60`, dan UPDATE kedua menunggu lock
+baris lalu membaca ulang nilai terbaru — jadi kedua pengurangan tetap masuk.
+Yang bocor adalah **cek kecukupannya**, karena dievaluasi di atas saldo basi.
+
+### 2. Kenapa lapisan pengaman lain tidak menangkapnya
+
+- Invariant `available_point <= total_point` (H-1/M-6) tetap terpenuhi:
+  `-20 <= 100`. Lagi pula invariant itu berada di `adjustCustomerLoyalty`,
+  fungsi yang berbeda.
+- Tidak ada `CHECK` constraint di database — kolomnya hanya
+  `available_point Int @default(0)`, sehingga PostgreSQL menerima nilai
+  negatif tanpa protes.
+- Tidak ada error yang dilempar; kedua request membalas sukses.
+
+### 3. Perbaikan
+
+Saldo kini dibaca dengan kunci baris, dan nilai hasil kunci itulah yang
+dipakai untuk memutuskan:
+
+```js
+const [lockedPoint] = await tx.$queryRaw`
+  SELECT available_point FROM "CustomerPoint"
+  WHERE customer_id = ${customerId} FOR UPDATE
+`;
+const availablePoint = lockedPoint?.available_point ?? 0;
+```
+
+Transaksi kedua kini menunggu di baris `CustomerPoint` sampai transaksi
+pertama commit, lalu membaca saldo terbaru (40) dan cek kecukupannya gagal
+dengan benar (`40 < 60`) — bukan lolos lalu membuat minus.
+
+**Urutan kunci** yang berlaku di seluruh backend:
+
+| Jalur | Urutan |
+|---|---|
+| `updateRedemptionStatus` (klaim) | RewardRedemption → CustomerPoint |
+| `adjustCustomerLoyalty` | Customer → CustomerPoint |
+| `deleteAdminCustomer` | RewardRedemption → CustomerPoint |
+
+Tidak ada dua jalur yang mengambil kunci dengan urutan berlawanan, jadi tidak
+ada potensi deadlock. Aturannya didokumentasikan langsung di komentar kode:
+jalur baru yang mengubah saldo wajib mengunci `CustomerPoint` paling akhir.
+
+Jalur refund (`claimed -> expired`) sengaja **tidak** diubah: operasinya
+`increment`, yang tidak bisa membuat saldo minus dan tidak punya cek
+pra-syarat yang bisa basi.
+
+Ditelusuri juga bahwa `decrement` pada `available_point` hanya ada di **satu**
+tempat di seluruh backend (jalur klaim ini). Jalur lain yang menyebut
+`available_point` — `authController`, `customerController`,
+`summaryController` — semuanya hanya membaca. Jadi perbaikan ini menutup
+seluruh permukaan, bukan sebagian.
+
+### 4. Pengujian terukur
+
+`test/redemptionStatusTransition.test.js` naik dari 7 ke **13 test**, seluruhnya
+lulus. Enam test baru mengunci mekanismenya:
+
+- saldo dibaca dengan `FOR UPDATE` dan menyasar `customer_id` yang benar
+  (bukan seluruh tabel);
+- urutan kunci `RewardRedemption` → `CustomerPoint` terjaga;
+- `customerPoint.findUnique` yang tidak mengunci **tidak dipanggil lagi** di
+  jalur klaim;
+- saldo persis pas (`available === points_spent`) tetap diizinkan;
+- kurang satu poin ditolak dan tidak ada satu pun statement tulis yang jalan;
+- customer tanpa baris `CustomerPoint` diperlakukan sebagai saldo 0, bukan
+  lolos diam-diam.
+
+Mock `$queryRaw` pada file test dibuat sadar-SQL, karena jalur klaim kini
+melakukan dua pembacaan terkunci yang berbeda; mock lama mengembalikan baris
+redemption untuk query apa pun sehingga tidak bisa membedakan keduanya.
+
+Diverifikasi **tidak vacuous** lewat mutation check: mengembalikan kode ke
+`findUnique` tanpa kunci membuat tepat 3 test M-5 gagal, lalu kode
+dikembalikan.
+
+Seluruh suite backend: **83/83 lulus**.
+
+### 5. Batas pengujian ini — dibaca dengan jujur
+
+Race sungguhan hanya bisa dibuktikan dengan dua koneksi PostgreSQL nyata yang
+berjalan bersamaan, dan suite ini sengaja tidak menyentuh database. Yang
+dikunci test di atas adalah **mekanisme** yang membuat race itu mustahil
+(kunci baris diambil sebelum cek, dan nilai hasil kunci yang dipakai), bukan
+race-nya sendiri. Jaminan bahwa `SELECT ... FOR UPDATE` benar-benar
+menyerialkan transaksi datang dari PostgreSQL, bukan dari test ini.
+
+### 6. Tindak lanjut yang disarankan (belum dikerjakan)
+
+Tambahkan `CHECK (available_point >= 0)` sebagai lapis pertahanan terakhir,
+supaya kalaupun ada jalur baru yang lupa mengunci, database yang menolak
+alih-alih diam-diam menerima. Sebaiknya dibuat `NOT VALID` lebih dulu:
+
+```sql
+ALTER TABLE "CustomerPoint"
+  ADD CONSTRAINT "CustomerPoint_available_point_non_negative"
+  CHECK ("available_point" >= 0) NOT VALID;
+```
+
+`NOT VALID` membuat constraint berlaku untuk semua penulisan baru tanpa
+memvalidasi baris lama — penting karena bila sudah ada saldo negatif akibat
+bug ini, migration biasa akan gagal saat deploy. Setelah data lama
+dibersihkan, jalankan `VALIDATE CONSTRAINT`.
+
+Sengaja belum dikerjakan karena Prisma tidak merepresentasikan `CHECK`
+constraint di `schema.prisma`, sehingga berpotensi memunculkan drift pada
+`prisma migrate` berikutnya — keputusan itu sebaiknya diambil sadar, bukan
+menyelinap di dalam perbaikan ini.

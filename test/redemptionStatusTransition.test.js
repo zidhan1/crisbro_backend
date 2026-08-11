@@ -34,17 +34,32 @@ function request(id, status) {
 }
 
 // M-12: Membangun mock transaksi Prisma untuk mensimulasikan proses transaksi, merekam setiap operasi, dan memvalidasi perubahan data reward redemption sebelum transisi diterapkan.
-function makeFakeTx({ redemptionRow, currentAvailablePoint = 0 }) {
+function makeFakeTx({
+  redemptionRow,
+  currentAvailablePoint = 0,
+  customerPointRowExists = true,
+}) {
   const calls = {
     customerPointFindUnique: null,
     customerPointUpdate: null,
     customerPointUpsert: null,
     pointHistoryCreate: null,
     rewardRedemptionUpdate: null,
+    // M-5: jejak query mentah, dipakai untuk membuktikan baris CustomerPoint
+    // benar-benar dikunci FOR UPDATE sebelum saldonya dibaca.
+    rawQueries: [],
   };
 
   const tx = {
-    async $queryRaw() {
+    // M-5: Memperbarui mock agar dapat membedakan query RewardRedemption dan CustomerPoint pada proses penguncian transaksi.
+    async $queryRaw(strings, ...values) {
+      const sql = Array.isArray(strings) ? strings.join('?') : String(strings);
+      calls.rawQueries.push({ sql, values });
+
+      if (sql.includes('"CustomerPoint"')) {
+        if (!customerPointRowExists) return [];
+        return [{ available_point: currentAvailablePoint }];
+      }
       return [redemptionRow];
     },
     customerPoint: {
@@ -91,10 +106,17 @@ function makeFakeTx({ redemptionRow, currentAvailablePoint = 0 }) {
   return { tx, calls };
 }
 
-function installTransactionMock(t, { redemptionRow, currentAvailablePoint }) {
+function installTransactionMock(
+  t,
+  { redemptionRow, currentAvailablePoint, customerPointRowExists },
+) {
   const originalTransaction = prisma.$transaction;
   const originalAuditCreate = prisma.adminActivityLog.create;
-  const { tx, calls } = makeFakeTx({ redemptionRow, currentAvailablePoint });
+  const { tx, calls } = makeFakeTx({
+    redemptionRow,
+    currentAvailablePoint,
+    customerPointRowExists,
+  });
 
   t.after(() => {
     prisma.$transaction = originalTransaction;
@@ -262,4 +284,161 @@ test('pending -> expired (tidak pernah diklaim): tidak ada penyesuaian poin sama
   assert.equal(calls.customerPointUpdate, null);
   assert.equal(calls.customerPointUpsert, null);
   assert.equal(calls.pointHistoryCreate, null);
+});
+
+// ===================== M-5: kunci baris saldo saat klaim =====================
+//
+// M-5: Memastikan saldo CustomerPoint dikunci dengan FOR UPDATE sebelum pengecekan kecukupan untuk mencegah race condition pada klaim redemption bersamaan.
+
+function customerPointQueries(calls) {
+  return calls.rawQueries.filter((query) =>
+    query.sql.includes('"CustomerPoint"'),
+  );
+}
+
+test('M-5: saldo dibaca dengan FOR UPDATE pada baris CustomerPoint milik customer terkait', async (t) => {
+  const calls = installTransactionMock(t, {
+    redemptionRow: {
+      id: 601,
+      status: 'pending',
+      points_spent: 60,
+      customer_id: 42,
+      redeemed_at: null,
+    },
+    currentAvailablePoint: 100,
+  });
+
+  const res = responseMock();
+  await updateRedemptionStatus(request(601, 'claimed'), res);
+
+  assert.equal(res.statusCode, 200);
+
+  const pointQueries = customerPointQueries(calls);
+  assert.equal(
+    pointQueries.length,
+    1,
+    'harus ada tepat satu pembacaan saldo terkunci',
+  );
+  assert.match(
+    pointQueries[0].sql,
+    /FOR UPDATE/,
+    'pembacaan saldo wajib memakai FOR UPDATE, bukan SELECT biasa',
+  );
+  // Kunci harus menyasar baris customer yang benar, bukan seluruh tabel.
+  assert.deepEqual(pointQueries[0].values, [42]);
+});
+
+test('M-5: baris saldo dikunci SEBELUM baris redemption di-update (bukan setelah)', async (t) => {
+  const calls = installTransactionMock(t, {
+    redemptionRow: {
+      id: 602,
+      status: 'pending',
+      points_spent: 60,
+      customer_id: 42,
+      redeemed_at: null,
+    },
+    currentAvailablePoint: 100,
+  });
+
+  const res = responseMock();
+  await updateRedemptionStatus(request(602, 'claimed'), res);
+  assert.equal(res.statusCode, 200);
+
+  const order = calls.rawQueries.map((query) =>
+    query.sql.includes('"CustomerPoint"') ? 'lock-point' : 'lock-redemption',
+  );
+  assert.deepEqual(
+    order,
+    ['lock-redemption', 'lock-point'],
+    'urutan kunci harus RewardRedemption lalu CustomerPoint agar konsisten dengan jalur lain',
+  );
+});
+
+test('M-5: cek kecukupan memakai nilai hasil kunci, findUnique tak terkunci tidak dipakai lagi', async (t) => {
+  const calls = installTransactionMock(t, {
+    redemptionRow: {
+      id: 603,
+      status: 'pending',
+      points_spent: 60,
+      customer_id: 42,
+      redeemed_at: null,
+    },
+    currentAvailablePoint: 100,
+  });
+
+  const res = responseMock();
+  await updateRedemptionStatus(request(603, 'claimed'), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(
+    calls.customerPointFindUnique,
+    null,
+    'jalur klaim tidak boleh lagi membaca saldo lewat findUnique yang tidak mengunci',
+  );
+});
+
+test('M-5: saldo persis pas (available === points_spent) tetap diizinkan dan tidak membuat minus', async (t) => {
+  const calls = installTransactionMock(t, {
+    redemptionRow: {
+      id: 604,
+      status: 'pending',
+      points_spent: 100,
+      customer_id: 42,
+      redeemed_at: null,
+    },
+    currentAvailablePoint: 100,
+  });
+
+  const res = responseMock();
+  await updateRedemptionStatus(request(604, 'claimed'), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(calls.customerPointUpdate.data, {
+    available_point: { decrement: 100 },
+  });
+});
+
+test('M-5: kurang satu poin dari kebutuhan ditolak, saldo tidak disentuh sama sekali', async (t) => {
+  const calls = installTransactionMock(t, {
+    redemptionRow: {
+      id: 605,
+      status: 'pending',
+      points_spent: 100,
+      customer_id: 42,
+      redeemed_at: null,
+    },
+    currentAvailablePoint: 99,
+  });
+
+  const res = responseMock();
+  await updateRedemptionStatus(request(605, 'claimed'), res);
+
+  assert.equal(res.statusCode, 400);
+  assert.equal(calls.customerPointUpdate, null);
+  assert.equal(calls.pointHistoryCreate, null);
+  assert.equal(calls.rewardRedemptionUpdate, null);
+});
+
+test('M-5: customer tanpa baris CustomerPoint diperlakukan sebagai saldo 0, bukan lolos diam-diam', async (t) => {
+  const calls = installTransactionMock(t, {
+    redemptionRow: {
+      id: 606,
+      status: 'pending',
+      points_spent: 50,
+      customer_id: 42,
+      redeemed_at: null,
+    },
+    customerPointRowExists: false,
+  });
+
+  const res = responseMock();
+  await updateRedemptionStatus(request(606, 'claimed'), res);
+
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.message, /tidak cukup/i);
+  assert.equal(
+    calls.customerPointUpdate,
+    null,
+    'tidak boleh ada pengurangan saldo',
+  );
 });
