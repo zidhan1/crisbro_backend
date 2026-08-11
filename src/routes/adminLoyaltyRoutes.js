@@ -5,6 +5,25 @@ const {
   resendActivationTargetLimiter,
   runchiseSyncTargetLimiter,
 } = require('../lib/rateLimit');
+// L-7: validasi skema dipasang seragam di seluruh rute admin loyalty, bukan
+// hanya rute redeem. Middleware ini hanya memvalidasi bentuk request; aturan
+// domain beserta pesannya tetap di controller.
+const {
+  validateActivityLogList,
+  validateAdminUserCreate,
+  validateAdminUserList,
+  validateAdminUserUpdate,
+  validateCustomerCreate,
+  validateCustomerList,
+  validateCustomerUpdate,
+  validateIdParam,
+  validateLoyaltyAdjustment,
+  validateLoyaltySummary,
+  validateRewardCreate,
+  validateRewardList,
+  validateRewardUpdate,
+  validateSalesTransactionReportList,
+} = require('../middleware/adminLoyaltyValidation');
 const redeemAdminRoutes = require('./admin/redeemAdminRoutes');
 const {
   listAdminUsers,
@@ -36,17 +55,18 @@ const adminOrMarketing = requireRole('admin', 'marketing');
 
 router.use(auth);
 
-router.get('/activity-logs', adminOnly, listAdminActivityLogs);
+router.get('/activity-logs', adminOnly, validateActivityLogList, listAdminActivityLogs);
 
-router.get('/users', superAdminOnly, listAdminUsers);
-router.post('/users', superAdminOnly, createAdminUser);
-router.put('/users/:id', superAdminOnly, updateAdminUser);
-router.delete('/users/:id', superAdminOnly, deleteAdminUser);
+router.get('/users', superAdminOnly, validateAdminUserList, listAdminUsers);
+router.post('/users', superAdminOnly, validateAdminUserCreate, createAdminUser);
+router.put('/users/:id', superAdminOnly, validateAdminUserUpdate, updateAdminUser);
+router.delete('/users/:id', superAdminOnly, validateIdParam, deleteAdminUser);
 
-router.get('/customers', adminOrMarketing, listAdminCustomers);
+router.get('/customers', adminOrMarketing, validateCustomerList, listAdminCustomers);
 router.get(
   '/customer-sales-transaction-reports',
   adminOrMarketing,
+  validateSalesTransactionReportList,
   listCustomerSalesTransactionReports,
 );
 // M-8: memindahkan daftar outlet filter ke endpoint terpisah agar tidak melakukan distinct scan berulang pada tabel besar setiap perubahan page/filter.
@@ -55,35 +75,41 @@ router.get(
   adminOrMarketing,
   listCustomerSalesTransactionReportOutlets,
 );
-router.post('/customers', adminOrMarketing, createAdminCustomer);
-router.put('/customers/:id', adminOrMarketing, updateAdminCustomer);
+router.post('/customers', adminOrMarketing, validateCustomerCreate, createAdminCustomer);
+router.put('/customers/:id', adminOrMarketing, validateCustomerUpdate, updateAdminCustomer);
 router.post(
   '/customers/:id/loyalty-adjustment',
   adminOnly,
+  validateLoyaltyAdjustment,
   adjustCustomerLoyalty,
 );
+// Urutan limiter dipertahankan seperti semula (limiter tetap gerbang pertama
+// setelah cek role); validasi param disisipkan sesudahnya agar kuota anti-spam
+// per customer tetap dihitung persis seperti desain L-4.
 router.post(
   '/customers/:id/activation',
   adminOrMarketing,
   resendActivationTargetLimiter,
+  validateIdParam,
   resendCustomerActivation,
 );
 router.post(
   '/customers/:id/runchise-sync',
   adminOrMarketing,
   runchiseSyncTargetLimiter,
+  validateIdParam,
   retryCustomerRunchiseSync,
 );
-router.delete('/customers/:id', adminOrMarketing, deleteAdminCustomer);
+router.delete('/customers/:id', adminOrMarketing, validateIdParam, deleteAdminCustomer);
 
 router.get('/brands', adminOrMarketing, listAdminBrands);
 router.get('/locations', adminOrMarketing, listAdminLocations);
 
-router.get('/loyalty-summary', adminOrMarketing, getSummary);
+router.get('/loyalty-summary', adminOrMarketing, validateLoyaltySummary, getSummary);
 
-router.get('/rewards', adminOnly, listRewards);
-router.post('/rewards', adminOnly, createReward);
-router.put('/rewards/:id', adminOnly, updateReward);
+router.get('/rewards', adminOnly, validateRewardList, listRewards);
+router.post('/rewards', adminOnly, validateRewardCreate, createReward);
+router.put('/rewards/:id', adminOnly, validateRewardUpdate, updateReward);
 
 router.use(redeemAdminRoutes);
 

@@ -1,10 +1,16 @@
 const express = require('express');
 const requireRole = require('../../middleware/requireRole');
 const {
+  validateCatalogMenuItemList,
+  validateRedeemCategoryCreate,
+  validateRedeemCategoryList,
+  validateRedeemCategoryUpdate,
   validateRedeemItemCreate,
   validateRedeemItemId,
   validateRedeemItemList,
   validateRedeemItemUpdate,
+  validateRedemptionList,
+  validateRedemptionStatusUpdate,
 } = require('../../middleware/adminLoyaltyValidation');
 const {
   listCatalogMenuItems,
@@ -23,17 +29,29 @@ const router = express.Router();
 const adminOnly = requireRole('admin');
 const adminOrMarketing = requireRole('admin', 'marketing');
 
-router.get('/catalog/menu-items', adminOrMarketing, listCatalogMenuItems);
+router.get(
+  '/catalog/menu-items',
+  adminOrMarketing,
+  validateCatalogMenuItemList,
+  listCatalogMenuItems,
+);
 
-router.get('/redeem-menu/categories', adminOrMarketing, listRedeemCategories);
+router.get(
+  '/redeem-menu/categories',
+  adminOrMarketing,
+  validateRedeemCategoryList,
+  listRedeemCategories,
+);
 router.post(
   '/redeem-menu/categories',
   adminOrMarketing,
+  validateRedeemCategoryCreate,
   createRedeemCategory,
 );
 router.put(
   '/redeem-menu/categories/:id',
   adminOrMarketing,
+  validateRedeemCategoryUpdate,
   updateRedeemCategory,
 );
 
@@ -62,10 +80,11 @@ router.delete(
   deleteRedeemItem,
 );
 
-router.get('/redemptions', adminOnly, listRedemptions);
+router.get('/redemptions', adminOnly, validateRedemptionList, listRedemptions);
 router.put(
   '/redemptions/:id/status',
   adminOnly,
+  validateRedemptionStatusUpdate,
   updateRedemptionStatus,
 );
 
