@@ -1604,6 +1604,7 @@ async function syncSalesTransactionReportsForLocation(targetLocationId, options 
 async function syncSalesTransactionReportsPage(
   targetLocationId,
   salesTransactions,
+  db = prisma,
 ) {
   const runchiseCustomerIds = [
     ...new Set(
@@ -1615,7 +1616,7 @@ async function syncSalesTransactionReportsPage(
 
   const [stagedCustomers, localCustomers] = await Promise.all([
     runchiseCustomerIds.length > 0
-      ? prisma.runchiseLocationCustomer.findMany({
+      ? db.runchiseLocationCustomer.findMany({
           where: {
             source_location_id: Number(targetLocationId),
             runchise_customer_id: { in: runchiseCustomerIds },
@@ -1632,7 +1633,7 @@ async function syncSalesTransactionReportsPage(
         })
       : [],
     runchiseCustomerIds.length > 0
-      ? prisma.customer.findMany({
+      ? db.customer.findMany({
           where: { runchise_id: { in: runchiseCustomerIds } },
           include: {
             owner_location: { select: { id: true, name: true, city: true } },
@@ -1660,7 +1661,8 @@ async function syncSalesTransactionReportsPage(
     localCustomers.map((customer) => [Number(customer.runchise_id), customer]),
   );
 
-  const writes = [];
+  const upsertRows = [];
+  const zeroPointKeys = [];
   let synced = 0;
   let skipped = 0;
   let skippedZeroPoints = 0;
@@ -1681,34 +1683,19 @@ async function syncSalesTransactionReportsPage(
     );
 
     if (data.penambahan_poin === 0 && Number(data.penggunaan_poin) === 0) {
-      writes.push(
-        prisma.customerSalesTransactionReport.deleteMany({
-          where: {
-            source_location_id: Number(targetLocationId),
-            runchise_sales_transaction_id: saleId,
-          },
-        }),
-      );
+      zeroPointKeys.push({
+        source_location_id: Number(targetLocationId),
+        runchise_sales_transaction_id: saleId,
+      });
       skippedZeroPoints++;
       continue;
     }
 
-    writes.push(
-      prisma.customerSalesTransactionReport.upsert({
-        where: {
-          source_location_id_runchise_sales_transaction_id: {
-            source_location_id: Number(targetLocationId),
-            runchise_sales_transaction_id: saleId,
-          },
-        },
-        update: data,
-        create: data,
-      }),
-    );
+    upsertRows.push(data);
     synced++;
   }
 
-  if (writes.length > 0) await prisma.$transaction(writes);
+  await bulkWriteSalesTransactionReports(db, upsertRows, zeroPointKeys);
   return {
     processed: salesTransactions.length,
     synced,
@@ -1716,6 +1703,144 @@ async function syncSalesTransactionReportsPage(
     skipped_invalid: skipped,
     skipped_zero_points: skippedZeroPoints,
   };
+}
+
+function serializeSalesReportRow(row) {
+  const serialized = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (value instanceof Date) serialized[key] = value.toISOString();
+    else if (typeof value === 'bigint') serialized[key] = value.toString();
+    else if (value && typeof value.toNumber === 'function') {
+      serialized[key] = value.toNumber();
+    } else serialized[key] = value ?? null;
+  }
+  return serialized;
+}
+
+// Maksimal dua statement data per halaman, dibungkus satu transaksi:
+// bulk-delete koreksi nol poin dan bulk-upsert seluruh report lainnya.
+async function bulkWriteSalesTransactionReports(db, upsertRows, zeroPointKeys) {
+  if (upsertRows.length === 0 && zeroPointKeys.length === 0) return;
+
+  const serializedRows = upsertRows.map(serializeSalesReportRow);
+  await db.$transaction(async (tx) => {
+    if (zeroPointKeys.length > 0) {
+      await tx.$executeRaw`
+        DELETE FROM "CustomerSalesTransactionReport" report
+        USING jsonb_to_recordset(${JSON.stringify(zeroPointKeys)}::jsonb) AS incoming(
+          source_location_id integer,
+          runchise_sales_transaction_id integer
+        )
+        WHERE report."source_location_id" = incoming.source_location_id
+          AND report."runchise_sales_transaction_id" = incoming.runchise_sales_transaction_id
+      `;
+    }
+
+    if (serializedRows.length > 0) {
+      await tx.$executeRaw`
+        INSERT INTO "CustomerSalesTransactionReport" (
+          "source_location_id", "runchise_sales_transaction_id",
+          "runchise_customer_id", "customer_id", "runchise_location_id",
+          "nama_pelanggan", "no_telepon", "lokasi_dibuat",
+          "pelanggan_sejak", "poin_pelanggan", "tanggal_transaksi",
+          "nama_outlet", "tipe_order", "pembelian_per_order",
+          "penambahan_poin", "penggunaan_poin", "sales_no", "receipt_no",
+          "status", "is_deleted", "nominal_transaksi", "jumlah_diterima",
+          "jumlah_kembalian", "sumber_nominal", "payment_methods",
+          "customer_snapshot_at", "import_run_id", "raw", "updated_at"
+        )
+        SELECT
+          incoming.source_location_id,
+          incoming.runchise_sales_transaction_id,
+          incoming.runchise_customer_id,
+          incoming.customer_id,
+          incoming.runchise_location_id,
+          incoming.nama_pelanggan,
+          incoming.no_telepon,
+          incoming.lokasi_dibuat,
+          incoming.pelanggan_sejak,
+          COALESCE(incoming.poin_pelanggan, 0),
+          incoming.tanggal_transaksi,
+          incoming.nama_outlet,
+          incoming.tipe_order,
+          COALESCE(incoming.pembelian_per_order, 0),
+          COALESCE(incoming.penambahan_poin, 0),
+          COALESCE(incoming.penggunaan_poin, 0),
+          incoming.sales_no,
+          incoming.receipt_no,
+          incoming.status,
+          COALESCE(incoming.is_deleted, FALSE),
+          COALESCE(incoming.nominal_transaksi, 0),
+          COALESCE(incoming.jumlah_diterima, 0),
+          COALESCE(incoming.jumlah_kembalian, 0),
+          incoming.sumber_nominal,
+          incoming.payment_methods,
+          incoming.customer_snapshot_at,
+          incoming.import_run_id,
+          incoming.raw,
+          CURRENT_TIMESTAMP
+        FROM jsonb_to_recordset(${JSON.stringify(serializedRows)}::jsonb) AS incoming(
+          source_location_id integer,
+          runchise_sales_transaction_id integer,
+          runchise_customer_id integer,
+          customer_id integer,
+          runchise_location_id integer,
+          nama_pelanggan text,
+          no_telepon text,
+          lokasi_dibuat text,
+          pelanggan_sejak timestamp,
+          poin_pelanggan integer,
+          tanggal_transaksi timestamp,
+          nama_outlet text,
+          tipe_order text,
+          pembelian_per_order numeric,
+          penambahan_poin integer,
+          penggunaan_poin numeric,
+          sales_no text,
+          receipt_no text,
+          status text,
+          is_deleted boolean,
+          nominal_transaksi numeric,
+          jumlah_diterima numeric,
+          jumlah_kembalian numeric,
+          sumber_nominal text,
+          payment_methods text,
+          customer_snapshot_at timestamp,
+          import_run_id bigint,
+          raw jsonb
+        )
+        ON CONFLICT ("source_location_id", "runchise_sales_transaction_id")
+        DO UPDATE SET
+          "runchise_customer_id" = EXCLUDED."runchise_customer_id",
+          "customer_id" = EXCLUDED."customer_id",
+          "runchise_location_id" = EXCLUDED."runchise_location_id",
+          "nama_pelanggan" = EXCLUDED."nama_pelanggan",
+          "no_telepon" = EXCLUDED."no_telepon",
+          "lokasi_dibuat" = EXCLUDED."lokasi_dibuat",
+          "pelanggan_sejak" = EXCLUDED."pelanggan_sejak",
+          "poin_pelanggan" = EXCLUDED."poin_pelanggan",
+          "tanggal_transaksi" = EXCLUDED."tanggal_transaksi",
+          "nama_outlet" = EXCLUDED."nama_outlet",
+          "tipe_order" = EXCLUDED."tipe_order",
+          "pembelian_per_order" = EXCLUDED."pembelian_per_order",
+          "penambahan_poin" = EXCLUDED."penambahan_poin",
+          "penggunaan_poin" = EXCLUDED."penggunaan_poin",
+          "sales_no" = EXCLUDED."sales_no",
+          "receipt_no" = EXCLUDED."receipt_no",
+          "status" = EXCLUDED."status",
+          "is_deleted" = EXCLUDED."is_deleted",
+          "nominal_transaksi" = EXCLUDED."nominal_transaksi",
+          "jumlah_diterima" = EXCLUDED."jumlah_diterima",
+          "jumlah_kembalian" = EXCLUDED."jumlah_kembalian",
+          "sumber_nominal" = EXCLUDED."sumber_nominal",
+          "payment_methods" = EXCLUDED."payment_methods",
+          "customer_snapshot_at" = EXCLUDED."customer_snapshot_at",
+          "import_run_id" = EXCLUDED."import_run_id",
+          "raw" = EXCLUDED."raw",
+          "updated_at" = CURRENT_TIMESTAMP
+      `;
+    }
+  });
 }
 
 // Tanpa locationId, sinkronisasi terjadwal wajib mencakup seluruh outlet yang
@@ -2241,4 +2366,6 @@ module.exports = {
   mapSalesTransactionReportData,
   buildSalesTransactionParams,
   syncSalesTransactionReportsPage,
+  bulkWriteSalesTransactionReports,
+  serializeSalesReportRow,
 };

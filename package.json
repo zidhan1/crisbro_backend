@@ -5,6 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "test": "node --test test/*.test.js",
+    "load-test:sales-worker": "node scripts/loadTestSalesWorker.js",
+    "load-test:sales-postgres": "node --expose-gc scripts/integrationLoadTestSalesBulk.js",
     "verify:redeem-menu": "node scripts/verifyRedeemMenuFlow.js --confirm-db-write",
     "cleanup:redeem-menu-test": "node scripts/verifyRedeemMenuFlow.js --cleanup --confirm-db-write",
     "count:runchise-customers": "node scripts/countRunchiseCustomers.js",
