@@ -19,6 +19,10 @@ const {
   RUNCHISE_CRON_LOCK_IDS,
   withDistributedCronLock,
 } = require('../lib/distributedCronLock');
+const {
+  createSyncJobTelemetry,
+  memorySnapshot,
+} = require('../services/syncJobTelemetryService');
 
 // C-1: Memecah master sync menjadi job terpisah dengan cron, mutex, checkpoint, dan worker berbasis cursor agar setiap tahap berjalan independen serta mencegah timeout Vercel menghentikan seluruh proses sinkronisasi.
 const DEFAULT_LOCATIONS_CRON = '0 12 * * *';
@@ -32,21 +36,76 @@ const DEFAULT_POINTS_CRON = '30 12 * * *';
 let started = false;
 
 async function runLockedJob(name, lockId, job) {
-  const result = await withDistributedCronLock({
-    jobName: `runchise-sync:${name}`,
-    lockId,
-    run: async () => {
-      console.log(`[runchise-sync:${name}] started`);
-      const jobResult = await job();
-      console.log(`[runchise-sync:${name}] finished`, jobResult);
-      return jobResult;
-    },
+  const telemetry = createSyncJobTelemetry();
+  const telemetryId = await telemetry.enqueue(name).catch((error) => {
+    // Telemetry bersifat observability dan tidak boleh menghentikan pekerjaan
+    // bisnis bila migration/storage monitoring sedang bermasalah.
+    console.error(`[runchise-sync:${name}] telemetry enqueue failed:`, error.message);
+    return null;
   });
+  const startedAt = Date.now();
+  const initialMemory = memorySnapshot();
 
-  if (result?.skipped) {
-    console.log(`[runchise-sync:${name}] skipped`, result);
+  try {
+    const result = await withDistributedCronLock({
+      jobName: `runchise-sync:${name}`,
+      lockId,
+      run: async () => {
+        await telemetry.markRunning(telemetryId).catch((error) => {
+          console.error(`[runchise-sync:${name}] telemetry start failed:`, error.message);
+        });
+        console.log(`[runchise-sync:${name}] started`);
+        const jobResult = await job();
+        console.log(`[runchise-sync:${name}] finished`, jobResult);
+        return jobResult;
+      },
+    });
+
+    if (result?.skipped) {
+      console.log(`[runchise-sync:${name}] skipped`, result);
+    }
+    const finalMemory = memorySnapshot();
+    await telemetry
+      .finish(telemetryId, {
+        result,
+        durationMs: Date.now() - startedAt,
+        memory: {
+          rss: Math.max(initialMemory?.rss ?? 0, finalMemory?.rss ?? 0),
+          heapUsed: Math.max(
+            initialMemory?.heapUsed ?? 0,
+            finalMemory?.heapUsed ?? 0,
+          ),
+        },
+        lockSkipped: ['local_lock_busy', 'distributed_lock_busy'].includes(
+          result?.reason,
+        ),
+      })
+      .catch((error) => {
+        console.error(`[runchise-sync:${name}] telemetry finish failed:`, error.message);
+      });
+    return result;
+  } catch (error) {
+    const finalMemory = memorySnapshot();
+    await telemetry
+      .fail(telemetryId, {
+        error,
+        durationMs: Date.now() - startedAt,
+        memory: {
+          rss: Math.max(initialMemory?.rss ?? 0, finalMemory?.rss ?? 0),
+          heapUsed: Math.max(
+            initialMemory?.heapUsed ?? 0,
+            finalMemory?.heapUsed ?? 0,
+          ),
+        },
+      })
+      .catch((telemetryError) => {
+        console.error(
+          `[runchise-sync:${name}] telemetry failure recording failed:`,
+          telemetryError.message,
+        );
+      });
+    throw error;
   }
-  return result;
 }
 
 function getSyncConfig() {

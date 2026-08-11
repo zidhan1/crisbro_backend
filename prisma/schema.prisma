@@ -234,6 +234,35 @@ model SalesTransactionSyncJob {
   @@index([started_at])
 }
 
+// Satu baris per invocation job. Tidak menyimpan payload upstream/PII;
+// hanya metadata operasional untuk observability dan alerting.
+model SyncJobTelemetry {
+  id                     BigInt    @id @default(autoincrement())
+  job_name               String
+  source_job_id          String?
+  status                 String    @default("queued")
+  current_location       Int?
+  cursor                 Json?
+  duration_ms            Int?
+  memory_rss_bytes       BigInt?
+  memory_heap_used_bytes BigInt?
+  fetched                Int       @default(0)
+  synced                 Int       @default(0)
+  skipped                Int       @default(0)
+  failed                 Int       @default(0)
+  last_error_code        String?
+  last_error_message     String?   @db.Text
+  last_error_at          DateTime?
+  last_started_at        DateTime  @default(now())
+  last_success_at        DateTime?
+  created_at             DateTime  @default(now())
+  updated_at             DateTime  @updatedAt
+
+  @@index([job_name, last_started_at])
+  @@index([status])
+  @@index([last_success_at])
+}
+
 // Snapshot customer yang dikembalikan endpoint Runchise per lokasi.
 // Terpisah dari Customer aplikasi agar impor POS tidak membuat akun pengguna.
 model RunchiseLocationCustomer {

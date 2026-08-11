@@ -71,6 +71,9 @@ const {
   getSalesTransactionSyncJob,
   processSalesTransactionSyncJob,
 } = require('./services/salesTransactionSyncService');
+const {
+  listSyncJobTelemetry,
+} = require('./services/syncJobTelemetryService');
 
 // ===================== APP SETUP =====================
 const app = express();
@@ -411,6 +414,30 @@ async function handleProcessSalesSync(req, res) {
   }
 }
 
+async function handleSyncTelemetry(req, res) {
+  try {
+    const allowedStatuses = new Set([
+      'queued',
+      'running',
+      'paused',
+      'completed',
+      'failed',
+    ]);
+    const status = req.query.status ? String(req.query.status) : null;
+    if (status && !allowedStatuses.has(status)) {
+      return res.status(400).json({ message: 'status telemetry tidak valid' });
+    }
+    const rows = await listSyncJobTelemetry({
+      limit: req.query.limit,
+      jobName: req.query.job_name ? String(req.query.job_name).slice(0, 100) : null,
+      status,
+    });
+    res.json({ items: rows });
+  } catch (error) {
+    respondWithServerError(res, error, 'sync-telemetry');
+  }
+}
+
 // ===================== ADMIN MIDDLEWARE =====================
 
 // Middleware login dan pemeriksaan role disederhanakan dengan menghapus role `staff` yang tidak digunakan agar sesuai dengan data di database.
@@ -460,6 +487,7 @@ app.post(
 );
 app.get('/admin/sync/sales-transactions/status', ...adminOnly, handleSalesSyncStatus);
 app.post('/admin/sync/sales-transactions/process', ...adminOnly, handleProcessSalesSync);
+app.get('/admin/sync/telemetry', ...adminOnly, handleSyncTelemetry);
 
 // Endpoint sync (dengan prefix /api)
 app.post('/api/admin/sync/customers', ...adminOrMarketing, handleSyncCustomers);
@@ -508,6 +536,7 @@ app.post(
   ...adminOnly,
   handleProcessSalesSync,
 );
+app.get('/api/admin/sync/telemetry', ...adminOnly, handleSyncTelemetry);
 
 // ===================== VERCEL CRON SYNC ROUTES =====================
 
@@ -686,14 +715,27 @@ app.post(
 // Pembersihan berkala menghapus sesi kedaluwarsa dan data rate limit yang sudah tidak berlaku agar penyimpanan tetap efisien.
 async function runMaintenanceJob() {
   const now = new Date();
-  const [expiredSessions, rateLimitRows] = await Promise.all([
+  const telemetryRetentionDays = Math.min(
+    Math.max(Number(process.env.SYNC_TELEMETRY_RETENTION_DAYS) || 90, 7),
+    365,
+  );
+  const telemetryCutoff = new Date(
+    now.getTime() - telemetryRetentionDays * 24 * 60 * 60 * 1000,
+  );
+  const [expiredSessions, rateLimitRows, telemetryRows] = await Promise.all([
     prisma.session.deleteMany({ where: { expires_at: { lte: now } } }),
     pruneRateLimitCounters(),
+    prisma.$executeRaw`
+      DELETE FROM "SyncJobTelemetry"
+      WHERE "last_started_at" < ${telemetryCutoff}
+    `,
   ]);
 
   return {
     expired_sessions_removed: expiredSessions.count,
     rate_limit_rows_removed: Number(rateLimitRows),
+    telemetry_rows_removed: Number(telemetryRows),
+    telemetry_retention_days: telemetryRetentionDays,
   };
 }
 

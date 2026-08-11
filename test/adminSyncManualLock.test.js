@@ -16,6 +16,14 @@ const assert = require('node:assert/strict');
 
 const distributedCronLock = require('../src/lib/distributedCronLock');
 const syncService = require('../src/services/syncService');
+const telemetryService = require('../src/services/syncJobTelemetryService');
+
+telemetryService.createSyncJobTelemetry = () => ({
+  enqueue: async () => 1,
+  markRunning: async () => {},
+  finish: async () => {},
+  fail: async () => {},
+});
 
 const heldLocks = new Set();
 distributedCronLock.withDistributedCronLock = async ({ jobName, lockId, run }) => {
@@ -126,6 +134,8 @@ for (const stage of stageCases) {
 
     // Cron "sedang berjalan" — job dipanggil tapi sengaja digantung lewat deferred.
     const cronPromise = stage.runCronJob();
+    // Telemetry queued dicatat asynchronous sebelum advisory lock diambil.
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(
       heldLocks.has(stage.lockId),
       true,
@@ -161,6 +171,7 @@ test('arah sebaliknya: cron dilewati saat sync manual admin masih berjalan (prod
 
   const res = createMockRes();
   const adminPromise = handleSyncProducts({ query: {} }, res);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(heldLocks.has(RUNCHISE_CRON_LOCK_IDS.products), true);
 
   const cronResult = await runSyncProductsJob();
