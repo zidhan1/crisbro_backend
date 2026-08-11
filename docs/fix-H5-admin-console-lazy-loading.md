@@ -819,3 +819,105 @@ SSR + Nitro) sukses.
   diverifikasi aman lebih dulu. Selama state masih di induk, biaya
   re-render lintas tab belum berkurang — itu langkah berikutnya, bukan
   sesuatu yang sudah tercapai.
+
+## 17. Update — inti keluhan ditangani: mengetik tidak lagi me-render induk
+
+### 17.1 Yang belum tersentuh sampai bagian 16
+
+Pemecahan tab di bagian 14-16 berhasil mengecilkan file dan bundle, tetapi
+**tidak menyentuh keluhan aslinya**: "setiap ketikan di input mana pun
+me-render ulang seluruh pohon". Penyebabnya bukan besarnya file, melainkan
+**letak state**: nilai ketikan disimpan sebagai state di `AdminPage`.
+
+Satu ketikan pada kotak pencarian customer memicu:
+
+```text
+setCustomerSearch(nilai)
+  -> badan AdminPage dieksekusi ulang (64 useState, puluhan useCallback/useMemo)
+  -> seluruh JSX tab aktif dibuat ulang, termasuk tabel puluhan baris
+  -> React merekonsiliasi seluruh subtree itu
+```
+
+Padahal nilai yang berubah **hanya dipakai input itu sendiri** sampai
+pencarian benar-benar dijalankan (lewat debounce 400 ms, tombol Cari, atau
+Enter).
+
+### 17.2 Perbaikan
+
+`DebouncedSearchInput.tsx` (baru) menahan nilai ketikan sebagai state
+**lokal**, dan memberi tahu induk hanya ketika pencarian perlu dijalankan:
+
+- setelah jeda `debounceMs` berhenti mengetik (bila > 0), atau
+- saat Enter ditekan / tombol "Cari" diklik (langsung, membatalkan jeda).
+
+Detail yang penting agar tidak menukar satu bug dengan bug lain:
+
+- `onSearch` disimpan di `ref`, tidak masuk dependency efek. Tanpa ini, induk
+  yang membuat ulang callback tiap render akan me-restart timer terus-menerus
+  dan pencarian tidak pernah jalan.
+- Handle imperatif (`clear()`, `submit()`) memakai `valueRef`, bukan `value`,
+  supaya handle tidak dibuat ulang tiap huruf — membuat ulang handle akan
+  menulis ke ref induk dan justru memicu render yang ingin dihindari.
+- Timer dibersihkan saat unmount.
+- Dibungkus `memo`.
+
+Dipasang pada dua pencarian paling sering dipakai:
+
+| Input | Perilaku |
+|---|---|
+| Cari customer | debounce 400 ms (sama seperti sebelumnya) + Enter/tombol |
+| Cari user admin | tanpa auto-search; Enter/tombol saja (sama seperti sebelumnya) |
+
+Efek sampingnya: `useState` di `AdminPage` turun 64 → **62**, dan effect
+debounce manual untuk pencarian customer ikut dihapus karena sudah ditangani
+komponennya.
+
+### 17.3 Pengukuran
+
+`DebouncedSearchInput.test.tsx` (9 test) **menghitung render induk secara
+nyata**, bukan mengasumsikan perbaikannya bekerja. Dua test membentuk
+perbandingan terkontrol dengan harness dan cara ukur identik:
+
+| Test | Pola | Mengetik | Render induk |
+|---|---|---|---|
+| PEMBANDING | lama (state di induk) | 4 huruf | **+4** |
+| PENGUKURAN | baru (state lokal) | 11 huruf | **+0** |
+
+Test lain mengunci: nilai tetap tampil utuh walau induk tidak render, debounce
+memanggil `onSearch` sekali dengan nilai ter-trim, Enter menembak seketika dan
+membatalkan jeda tertunda, `debounceMs=0` tidak auto-search, callback yang
+identitasnya berubah tiap render tidak me-restart jeda, `clear()` dari luar
+membatalkan jeda, dan tidak ada timer menggantung setelah unmount.
+
+Diverifikasi **tidak vacuous** lewat mutation check: mengangkat nilai ketikan
+ke induk setiap huruf (persis pola lama) membuat 6 test gagal.
+
+**Catatan metodologis.** Percobaan awal memakai fake timer membuat SELURUH
+test menggantung — `vi.useFakeTimers()` juga memalsukan API yang dipakai
+scheduler React dan userEvent. Membatasi `toFake` tidak menolong. Akhirnya
+dipakai timer asli. Konsekuensinya test jadi sensitif waktu: satu kegagalan
+flaky sempat muncul saat suite penuh berjalan paralel, karena pengetikan
+userEvent bisa memakan lebih dari 400 ms di bawah beban sehingga debounce
+menembak di tengah. Diperbaiki dengan memakai jeda `NEVER_FIRES_MS` (10 detik)
+pada test yang memang mensyaratkan debounce tidak menembak selama interaksi,
+dan memendekkan string ketikan pada test yang mensyaratkan sebaliknya.
+Setelah itu suite dijalankan 3× berturut-turut: 47/47 lulus konsisten.
+
+Seluruh suite frontend: **47/47 lulus** (5 file). `vite build` sukses.
+`eslint src/features/admin/` bersih. `tsc` tetap 5 error pre-existing.
+
+### 17.4 Yang MASIH tersisa di H-5
+
+Perbaikan ini menutup keluhan untuk **input pencarian**, yang paling sering
+diketik. Yang belum:
+
+1. **Field form CRUD** (`customerForm` ~18 field, `userForm`, `redeemForm`)
+   masih memakai state di induk, sehingga mengetik di form edit customer masih
+   me-render ulang tab beserta tabelnya. Ini beban terbesar berikutnya.
+2. **Pencarian katalog menu** (`catalogSearch`) sengaja belum diubah: nilainya
+   dipakai **dua** input sekaligus (dialog mobile dan panel redeem desktop)
+   yang berbagi satu state. Memindahkannya ke state lokal akan membuat kedua
+   input itu diverge, jadi perlu penanganan tersendiri.
+3. **Tiga tab CRUD** (`users`, `customers`, `redeem`) masih inline di
+   `AdminPage`; belum dipecah jadi modul lazy seperti tiga tab read-only.
+4. `useState` masih **62**.
