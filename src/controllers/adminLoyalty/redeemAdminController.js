@@ -99,13 +99,17 @@ function createRedeemAdminControllers({
 
   async function listRedeemCategories(req, res) {
     try {
+      const page = parsePositiveInt(req.query.page ?? 1, 'page');
+      const limit = Math.min(parsePositiveInt(req.query.limit ?? 50, 'limit'), 100);
+      const total = await prisma.redeemMenuCategory.count();
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+      const clampedPage = Math.min(page, totalPages);
       const categories = await prisma.redeemMenuCategory.findMany({
         orderBy: [{ sort_order: 'asc' }, { name: 'asc' }],
-        // M-8: kategori redeem menu dikelola manual lewat panel admin --
-        // batas ini jaring pengaman, bukan pagination.
-        take: 1000,
+        skip: (clampedPage - 1) * limit,
+        take: limit,
       });
-      res.json(categories);
+      res.json({ items: categories, page: clampedPage, limit, total, total_pages: totalPages });
     } catch (error) {
       handleError(res, error);
     }
@@ -181,15 +185,25 @@ function createRedeemAdminControllers({
         'sort_order',
         10,
       );
+      const page = parsePositiveInt(req.query.page ?? 1, 'page');
+      const limit = Math.min(parsePositiveInt(req.query.limit ?? 50, 'limit'), 100);
+      const total = await prisma.redeemMenuItem.count();
+      const totalPages = Math.max(1, Math.ceil(total / limit));
+      const clampedPage = Math.min(page, totalPages);
       const items = await prisma.redeemMenuItem.findMany({
         select: REDEEM_ITEM_SELECT,
         orderBy: buildRedeemItemOrderBy(sortBy, sortOrder),
-        // M-8: item redeem menu dikelola manual lewat panel admin -- batas
-        // ini jaring pengaman, bukan pagination.
-        take: 1000,
+        skip: (clampedPage - 1) * limit,
+        take: limit,
       });
 
-      res.json(items.map(addRedeemPriceBreakdown));
+      res.json({
+        items: items.map(addRedeemPriceBreakdown),
+        page: clampedPage,
+        limit,
+        total,
+        total_pages: totalPages,
+      });
     } catch (error) {
       handleError(res, error);
     }

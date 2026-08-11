@@ -528,18 +528,24 @@ async function listAdminUsers(req, res) {
       'sort_order',
       10,
     );
+    const page = parsePositiveInt(req.query.page ?? 1, 'page');
+    const limit = Math.min(parsePositiveInt(req.query.limit ?? 50, 'limit'), 100);
+    const where = {
+      role: { in: ['admin', 'marketing'] },
+      ...(search && {
+        OR: [
+          { email: { contains: search, mode: 'insensitive' } },
+          { phone_number: { contains: search } },
+          { role: { contains: search, mode: 'insensitive' } },
+        ],
+      }),
+    };
+    const total = await prisma.user.count({ where });
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const clampedPage = Math.min(page, totalPages);
 
     const users = await prisma.user.findMany({
-      where: {
-        role: { in: ['admin', 'marketing'] },
-        ...(search && {
-          OR: [
-            { email: { contains: search, mode: 'insensitive' } },
-            { phone_number: { contains: search } },
-            { role: { contains: search, mode: 'insensitive' } },
-          ],
-        }),
-      },
+      where,
       select: {
         id: true,
         email: true,
@@ -549,11 +555,11 @@ async function listAdminUsers(req, res) {
         updated_at: true,
       },
       orderBy: buildAdminUserOrderBy(sortBy, sortOrder),
-      // M-8: Batas jumlah data diterapkan sebagai pengaman query karena jumlah akun admin/marketing kecil dan dikelola manual, sehingga pagination tidak diperlukan.
-      take: 1000,
+      skip: (clampedPage - 1) * limit,
+      take: limit,
     });
 
-    res.json(users);
+    res.json({ items: users, page: clampedPage, limit, total, total_pages: totalPages });
   } catch (error) {
     handleError(res, error);
   }
@@ -1864,15 +1870,19 @@ const getSummary = createGetSummary({
 
 async function listRewards(req, res) {
   try {
+    const page = parsePositiveInt(req.query.page ?? 1, 'page');
+    const limit = Math.min(parsePositiveInt(req.query.limit ?? 50, 'limit'), 100);
+    const total = await prisma.rewardsCatalog.count();
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const clampedPage = Math.min(page, totalPages);
     const rewards = await prisma.rewardsCatalog.findMany({
       include: { brand: { select: { id: true, name: true } } },
       orderBy: [{ is_active: 'desc' }, { created_at: 'desc' }],
-      // M-8: katalog reward dikelola manual lewat panel admin, bukan data
-      // transaksional -- batas ini jaring pengaman, bukan pagination.
-      take: 1000,
+      skip: (clampedPage - 1) * limit,
+      take: limit,
     });
 
-    res.json(rewards);
+    res.json({ items: rewards, page: clampedPage, limit, total, total_pages: totalPages });
   } catch (error) {
     handleError(res, error);
   }
