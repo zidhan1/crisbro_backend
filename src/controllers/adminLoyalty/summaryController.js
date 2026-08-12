@@ -121,9 +121,25 @@ function createGetSummary({
         _count: { id: true },
         _sum: { quantity: true, points_spent: true },
       }),
+      // M-4 (lanjutan): bucket harian dihitung pada kalender WIB, bukan UTC.
+      // `redeemed_at` bertipe `timestamp without time zone` berisi instant UTC,
+      // sehingga DATE_TRUNC polos mengelompokkan per hari UTC -- redemption jam
+      // 03:00 WIB tanggal 12 masuk bucket tanggal 11 pada grafik.
+      //
+      // Labelnya dikembalikan sebagai TEXT yang sudah jadi, bukan timestamp.
+      // Driver pg mem-parse `timestamp without time zone` memakai zona proses
+      // Node, jadi mengembalikan timestamp akan memindahkan ketergantungan zona
+      // dari SQL ke JavaScript alih-alih menghilangkannya.
+      //
+      // Hanya ekspresi GROUP BY/ORDER BY yang dibungkus; predikat WHERE tetap
+      // menyentuh kolom mentah supaya index (is_managed_reward, status,
+      // redeemed_at) masih terpakai.
       prisma.$queryRaw`
         SELECT
-          DATE_TRUNC('day', redemption."redeemed_at") AS date,
+          TO_CHAR(
+            DATE_TRUNC('day', redemption."redeemed_at" + INTERVAL '7 hours'),
+            'YYYY-MM-DD'
+          ) AS date,
           COALESCE(SUM(redemption."quantity"), 0)::double precision AS redemption_count,
           COALESCE(SUM(redemption."points_spent"), 0)::double precision AS points_spent
         FROM "RunchisePosRewardRedemption" redemption
@@ -132,8 +148,8 @@ function createGetSummary({
           ${redemptionFrom ? Prisma.sql`AND redemption."redeemed_at" >= ${redemptionFrom}` : Prisma.empty}
           ${redemptionTo ? Prisma.sql`AND redemption."redeemed_at" <= ${redemptionTo}` : Prisma.empty}
           ${selectedOutlet?.runchise_id ? Prisma.sql`AND redemption."location_id" = ${selectedOutlet.runchise_id}` : Prisma.empty}
-        GROUP BY DATE_TRUNC('day', redemption."redeemed_at")
-        ORDER BY DATE_TRUNC('day', redemption."redeemed_at") ASC
+        GROUP BY DATE_TRUNC('day', redemption."redeemed_at" + INTERVAL '7 hours')
+        ORDER BY DATE_TRUNC('day', redemption."redeemed_at" + INTERVAL '7 hours') ASC
       `,
       prisma.runchisePosRewardRedemption.findMany({
         where: posRedemptionWhere,

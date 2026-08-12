@@ -1,6 +1,16 @@
+// M-4 (lanjutan): query tren kini mengembalikan label hari WIB yang sudah jadi
+// berupa TEXT 'YYYY-MM-DD', sehingga tidak ada Date yang perlu diformat ulang
+// dengan zona runtime. Cabang Date dipertahankan sebagai jaring pengaman untuk
+// pemanggil lain (dan test) yang masih menyerahkan objek Date.
+function toRedemptionTrendDate(value) {
+  if (typeof value === 'string') return value.slice(0, 10);
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value ?? '').slice(0, 10);
+}
+
 function toRedemptionTrend(rows) {
   return rows.map((row) => ({
-    date: row.date.toISOString().slice(0, 10),
+    date: toRedemptionTrendDate(row.date),
     redemption_count: Number(row.redemption_count),
     points_spent: Number(row.points_spent),
   }));
@@ -27,4 +37,8 @@ function toPublicRedemptionHistory(rows, locationByRunchiseId) {
   });
 }
 
-module.exports = { toRedemptionTrend, toPublicRedemptionHistory };
+module.exports = {
+  toRedemptionTrend,
+  toRedemptionTrendDate,
+  toPublicRedemptionHistory,
+};

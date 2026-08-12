@@ -6,6 +6,11 @@ const {
 const { sendActivationEmail } = require('../../services/emailService');
 const { respondWithServerError } = require('../../lib/serverError');
 const { ValidationError } = require('../../lib/validationError');
+const {
+  endOfWibDay,
+  parseWibInstant,
+  startOfWibDay,
+} = require('../../lib/wibDate');
 
 // L-7: konfigurasi, parser, order-by builder, dan helper audit yang dipakai
 // lebih dari satu controller domain dikumpulkan di satu modul supaya
@@ -396,17 +401,34 @@ function parseOptionalDate(value, fieldName) {
   return date;
 }
 
+// M-4 (lanjutan): batas rentang tanggal dashboard SELALU merupakan batas hari
+// kalender WIB, bukan hari kalender zona runtime.
+//
+// Versi lama memakai `date.setHours(...)` yang mengikuti zona proses. Di Vercel
+// (UTC) filter "1-31 Agustus" sebenarnya mengambil 1 Agu 07:00 WIB s/d 1 Sep
+// 06:59 WIB: transaksi dini hari 1 Agustus hilang dari laporan dan transaksi
+// dini hari 1 September ikut terhitung. Sisi sync sudah benar memakai WIB
+// (lihat runchiseSyncCron dan syncService.parseRunchiseDate), jadi sisi baca
+// yang memakai UTC membuat laporan tidak cocok dengan data yang disinkronkan.
+//
+// Kontraknya kini seragam untuk semua bentuk input: nilai diurai menjadi satu
+// instant, ditentukan hari kalender WIB mana yang memuatnya, lalu dijepit ke
+// awal (00:00:00.000 WIB) atau akhir (23:59:59.999 WIB) hari itu. `from`/`to`
+// dengan demikian selalu berupa rentang hari WIB penuh yang inklusif, persis
+// seperti yang dimaksud <input type="date"> pada dashboard.
+//
+// Catatan: `parseOptionalDate` sengaja TIDAK ikut diubah. Fungsi itu dipakai
+// untuk `dob` (kolom @db.Date) yang harus tetap ditambatkan ke UTC agar tanggal
+// lahir tidak bergeser satu hari saat disimpan.
 function parseDateBoundary(value, fieldName, endOfDay = false) {
-  const date = parseOptionalDate(value, fieldName);
-  if (!date) return null;
+  if (value === undefined || value === null || value === '') return null;
 
-  if (endOfDay) {
-    date.setHours(23, 59, 59, 999);
-  } else {
-    date.setHours(0, 0, 0, 0);
+  const instant = parseWibInstant(value);
+  if (!instant) {
+    throw new ValidationError(`${fieldName} harus berupa tanggal valid`);
   }
 
-  return date;
+  return endOfDay ? endOfWibDay(instant) : startOfWibDay(instant);
 }
 
 function parseOptionalNumber(value, fieldName, { min = 0 } = {}) {
