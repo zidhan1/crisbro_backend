@@ -1,12 +1,25 @@
 const prisma = require('../lib/prisma');
 const { respondWithServerError } = require('../lib/serverError');
+const { ValidationError } = require('../lib/validationError');
+
+// L-3: kegagalan validasi dikenali dari TIPE error, bukan dari isi pesannya.
+//
+// Versi lama memakai `error.message?.includes('harus')` di setiap handler.
+// Pencocokan string itu salah di dua arah: error internal yang kebetulan memuat
+// kata "harus" (mis. pesan Prisma/Postgres) ikut terkirim ke client sebagai 400
+// beserta pesan aslinya -- membocorkan detail internal yang justru sengaja
+// disembunyikan respondWithServerError -- sedangkan pesan validasi yang tidak
+// memuat kata itu malah dilaporkan sebagai 500.
+function isValidationError(error) {
+  return error instanceof ValidationError;
+}
 
 // Memvalidasi agar nilai berupa bilangan bulat positif
 function parsePositiveInt(value, fieldName) {
   const number = Number(value);
 
   if (!Number.isInteger(number) || number <= 0) {
-    throw new Error(`${fieldName} harus berupa integer positif`);
+    throw new ValidationError(`${fieldName} harus berupa integer positif`);
   }
 
   return number;
@@ -20,7 +33,7 @@ function parseOptionalBoolean(value, fieldName) {
   if (value === 'true') return true;
   if (value === 'false') return false;
 
-  throw new Error(`${fieldName} harus berupa boolean`);
+  throw new ValidationError(`${fieldName} harus berupa boolean`);
 }
 
 // Mengirim response error validasi
@@ -54,7 +67,7 @@ async function getAll(req, res) {
     res.json(rewards);
   } catch (error) {
     // Menangani error validasi
-    if (error.message?.includes('harus')) {
+    if (isValidationError(error)) {
       return validationError(res, error);
     }
 
@@ -86,7 +99,7 @@ async function getOne(req, res) {
     // Mengirim detail reward
     res.json(reward);
   } catch (error) {
-    if (error.message?.includes('harus')) {
+    if (isValidationError(error)) {
       return validationError(res, error);
     }
 
@@ -140,7 +153,7 @@ async function create(req, res) {
     // Mengirim data reward yang berhasil dibuat
     res.status(201).json(reward);
   } catch (error) {
-    if (error.message?.includes('harus')) {
+    if (isValidationError(error)) {
       return validationError(res, error);
     }
 
@@ -198,7 +211,7 @@ async function update(req, res) {
     // Mengirim data reward terbaru
     res.json(reward);
   } catch (error) {
-    if (error.message?.includes('harus')) {
+    if (isValidationError(error)) {
       return validationError(res, error);
     }
 
@@ -230,7 +243,7 @@ async function remove(req, res) {
     // Mengirim pesan berhasil
     res.json({ message: 'Reward berhasil dihapus' });
   } catch (error) {
-    if (error.message?.includes('harus')) {
+    if (isValidationError(error)) {
       return validationError(res, error);
     }
 

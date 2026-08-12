@@ -12,6 +12,7 @@ const {
   toRedemptionTrend,
   toPublicRedemptionHistory,
 } = require('../lib/loyaltySummaryProjection');
+const { ValidationError } = require('../lib/validationError');
 const {
   REDEEM_ITEM_SELECT,
   REDEEM_ITEM_AUDIT_INCLUDE,
@@ -74,6 +75,7 @@ const getSummary = createGetSummary({
   toRedemptionTrend,
   toPublicRedemptionHistory,
   handleError,
+  ValidationError,
 });
 
 const {

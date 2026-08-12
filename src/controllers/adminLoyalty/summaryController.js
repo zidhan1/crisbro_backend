@@ -6,6 +6,7 @@ function createGetSummary({
   toRedemptionTrend,
   toPublicRedemptionHistory,
   handleError,
+  ValidationError,
 }) {
   return async function getSummary(req, res) {
   try {
@@ -42,8 +43,16 @@ function createGetSummary({
           select: { runchise_id: true },
         })
       : null;
+    // L-3: `outlet_id` yang tidak dikenal adalah kesalahan input pengguna,
+    // bukan kegagalan server. `Error` biasa tidak dikenali `handleError` dan
+    // jatuh ke respondWithServerError -- pemakai menerima 500 "kesalahan
+    // server" beserta error_id, sementara log error terisi noise yang menutupi
+    // kegagalan sungguhan. ValidationError memetakannya ke 400 dengan pesan
+    // yang bisa ditindaklanjuti.
     if (outletId && !selectedOutlet?.runchise_id) {
-      throw new Error('outlet_id tidak ditemukan atau bukan outlet Runchise');
+      throw new ValidationError(
+        'outlet_id tidak ditemukan atau bukan outlet Runchise',
+      );
     }
     const posRedemptionWhere = {
       status: 'valid',
