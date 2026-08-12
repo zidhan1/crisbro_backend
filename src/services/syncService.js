@@ -11,7 +11,7 @@ function isUniqueConstraintError(error) {
 
 // Mengimpor service Runchise (API eksternal)
 const {
-  fetchAllSalesTransactions,
+  iterateSalesTransactionPages,
   fetchAllSubBrands,
   fetchAllLocations,
   fetchCustomersPage,
@@ -1503,97 +1503,31 @@ async function syncSalesTransactionReportsForLocation(targetLocationId, options 
     status: options.status,
     paymentMethodIds: options.paymentMethodIds ?? options.payment_method_ids,
   });
-  const [salesTransactions, runchiseCustomerById] = await Promise.all([
-    fetchAllSalesTransactions(params),
-    fetchRunchiseCustomerLookupForLocation(targetLocationId),
-  ]);
-  const runchiseCustomerIds = Array.from(
-    new Set(
-      salesTransactions
-        .map((sale) => Number(sale.customer_id))
-        .filter((id) => Number.isInteger(id) && id > 0),
-    ),
-  );
-  const localCustomers =
-    runchiseCustomerIds.length > 0
-      ? await prisma.customer.findMany({
-          where: { runchise_id: { in: runchiseCustomerIds } },
-          include: {
-            owner_location: { select: { id: true, name: true, city: true } },
-            customer_point: true,
-          },
-        })
-      : [];
-  const localCustomerByRunchiseId = new Map(
-    localCustomers.map((customer) => [Number(customer.runchise_id), customer]),
-  );
-
   let synced = 0;
   let skipped = 0;
   let skippedZeroPoints = 0;
-  let deletedZeroPoints = 0;
+  let total = 0;
 
-  for (const sale of salesTransactions) {
-    const saleId = Number(sale.id);
-    if (!Number.isInteger(saleId) || saleId <= 0) {
-      skipped++;
-      continue;
-    }
-
-    const runchiseCustomerId = Number(sale.customer_id);
-    const runchiseCustomer = runchiseCustomerById.get(runchiseCustomerId);
-    const localCustomer = localCustomerByRunchiseId.get(runchiseCustomerId);
-    const data = mapSalesTransactionReportData(
-      sale,
-      runchiseCustomer,
-      localCustomer,
+  // Jalur manual/CLI juga memakai unit kerja page+bulk yang sama dengan
+  // worker cron. Tidak ada lagi array full-history maupun upsert per sale.
+  for await (const batch of iterateSalesTransactionPages(params)) {
+    const result = await syncSalesTransactionReportsPage(
       targetLocationId,
+      batch.transactions,
     );
-
-    // Tabel ini adalah laporan aktivitas poin. Transaksi tanpa penambahan dan
-    // tanpa penggunaan poin tidak memberi nilai pada laporan dan tidak perlu
-    // memenuhi penyimpanan. Tetap hapus pasangan lama bila Runchise mengoreksi
-    // transaksi yang sebelumnya memiliki poin menjadi nol-nol.
-    if (
-      data.penambahan_poin === 0 &&
-      Number(data.penggunaan_poin) === 0
-    ) {
-      const deleted = await prisma.customerSalesTransactionReport.deleteMany({
-        where: {
-          source_location_id: targetLocationId,
-          runchise_sales_transaction_id: saleId,
-        },
-      });
-      skippedZeroPoints++;
-      deletedZeroPoints += deleted.count;
-      continue;
-    }
-
-    // Identitas baris adalah pasangan outlet sumber + ID transaksi. Unique
-    // index kolom tunggal sudah dihapus migration
-    // 20260729120000_use_composite_sales_transaction_identity, jadi upsert
-    // harus memakai composite key-nya.
-    await prisma.customerSalesTransactionReport.upsert({
-      where: {
-        source_location_id_runchise_sales_transaction_id: {
-          source_location_id: targetLocationId,
-          runchise_sales_transaction_id: saleId,
-        },
-      },
-      update: data,
-      create: data,
-    });
-
-    synced++;
+    total += result.processed;
+    synced += result.synced;
+    skipped += result.skipped_invalid;
+    skippedZeroPoints += result.skipped_zero_points;
   }
 
   return {
     location_id: targetLocationId,
     synced,
-    total: salesTransactions.length,
+    total,
     skipped,
     skipped_zero_points: skippedZeroPoints,
-    deleted_zero_points: deletedZeroPoints,
+    deleted_zero_points: skippedZeroPoints,
   };
 }
 

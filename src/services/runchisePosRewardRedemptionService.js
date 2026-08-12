@@ -119,12 +119,109 @@ function extractRewardRedemptions(report, managedByProductId = new Map()) {
 // selalu terbatas ke satu halaman.
 const REPORT_PAGE_SIZE = 200;
 
-// M-9: versi lama memanggil `await prisma.$transaction(writes)` di DALAM
-// loop per-report -- satu transaksi database terpisah untuk SETIAP baris
-// report (N transaksi untuk N report). Sekarang seluruh write untuk SATU
-// HALAMAN report (sampai 200 x deleteMany+upsert) digabung jadi SATU
-// transaksi, memangkas jumlah transaksi dari N menjadi kira-kira N/200
-// tanpa pernah menumpuk lebih dari satu halaman report jadi write pending.
+function serializeRedemptionRow(row) {
+  return {
+    ...row,
+    redeemed_at:
+      row.redeemed_at instanceof Date
+        ? row.redeemed_at.toISOString()
+        : row.redeemed_at,
+    raw: row.raw ?? null,
+  };
+}
+
+// Satu halaman report ditulis dengan maksimal dua statement SQL. Statement
+// pertama menghapus detail lama yang tidak lagi muncul pada snapshot sale;
+// statement kedua melakukan INSERT ... ON CONFLICT untuk semua detail baru.
+async function bulkWritePosRewardRedemptions(db, reportSnapshots, rows) {
+  if (reportSnapshots.length === 0) return;
+  const snapshots = reportSnapshots.map((snapshot) => ({
+    sale_transaction_id: Number(snapshot.sale_transaction_id),
+    detail_ids: snapshot.detail_ids.map(Number),
+  }));
+  const serializedRows = rows.map(serializeRedemptionRow);
+
+  await db.$transaction(async (tx) => {
+    await tx.$executeRaw`
+      DELETE FROM "RunchisePosRewardRedemption" redemption
+      USING jsonb_to_recordset(${JSON.stringify(snapshots)}::jsonb) AS snapshot(
+        sale_transaction_id integer,
+        detail_ids jsonb
+      )
+      WHERE redemption."sale_transaction_id" = snapshot.sale_transaction_id
+        AND NOT EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(snapshot.detail_ids) detail_id
+          WHERE detail_id::integer = redemption."sale_detail_transaction_id"
+        )
+    `;
+
+    if (serializedRows.length === 0) return;
+    await tx.$executeRaw`
+      INSERT INTO "RunchisePosRewardRedemption" (
+        "sale_transaction_id", "sale_detail_transaction_id",
+        "runchise_product_id", "runchise_customer_id", "customer_id",
+        "customer_name", "customer_phone_number", "redeem_menu_item_id",
+        "product_name", "location_id", "location_name", "redeemed_at",
+        "quantity", "point_per_item", "points_spent", "selling_price",
+        "status", "is_managed_reward", "raw", "updated_at"
+      )
+      SELECT
+        incoming.sale_transaction_id, incoming.sale_detail_transaction_id,
+        incoming.runchise_product_id, incoming.runchise_customer_id,
+        incoming.customer_id, incoming.customer_name,
+        incoming.customer_phone_number, incoming.redeem_menu_item_id,
+        incoming.product_name, incoming.location_id, incoming.location_name,
+        incoming.redeemed_at, incoming.quantity, incoming.point_per_item,
+        incoming.points_spent, incoming.selling_price, incoming.status,
+        incoming.is_managed_reward, incoming.raw, CURRENT_TIMESTAMP
+      FROM jsonb_to_recordset(${JSON.stringify(serializedRows)}::jsonb) AS incoming(
+        sale_transaction_id integer,
+        sale_detail_transaction_id integer,
+        runchise_product_id integer,
+        runchise_customer_id integer,
+        customer_id integer,
+        customer_name text,
+        customer_phone_number text,
+        redeem_menu_item_id integer,
+        product_name text,
+        location_id integer,
+        location_name text,
+        redeemed_at timestamp,
+        quantity numeric,
+        point_per_item integer,
+        points_spent integer,
+        selling_price numeric,
+        status text,
+        is_managed_reward boolean,
+        raw jsonb
+      )
+      ON CONFLICT ("sale_transaction_id", "sale_detail_transaction_id")
+      DO UPDATE SET
+        "runchise_product_id" = EXCLUDED."runchise_product_id",
+        "runchise_customer_id" = EXCLUDED."runchise_customer_id",
+        "customer_id" = EXCLUDED."customer_id",
+        "customer_name" = EXCLUDED."customer_name",
+        "customer_phone_number" = EXCLUDED."customer_phone_number",
+        "redeem_menu_item_id" = EXCLUDED."redeem_menu_item_id",
+        "product_name" = EXCLUDED."product_name",
+        "location_id" = EXCLUDED."location_id",
+        "location_name" = EXCLUDED."location_name",
+        "redeemed_at" = EXCLUDED."redeemed_at",
+        "quantity" = EXCLUDED."quantity",
+        "point_per_item" = EXCLUDED."point_per_item",
+        "points_spent" = EXCLUDED."points_spent",
+        "selling_price" = EXCLUDED."selling_price",
+        "status" = EXCLUDED."status",
+        "is_managed_reward" = EXCLUDED."is_managed_reward",
+        "raw" = EXCLUDED."raw",
+        "updated_at" = CURRENT_TIMESTAMP
+    `;
+  });
+}
+
+// M-9: satu halaman report menjadi satu transaksi dengan maksimal dua bulk
+// statement, tanpa membuat object Prisma delete/upsert per report/detail.
 async function syncRunchisePosRewardRedemptions({
   locationId,
   startDate,
@@ -176,7 +273,8 @@ async function syncRunchisePosRewardRedemptions({
 
     if (reports.length === 0) break;
 
-    const writes = [];
+    const reportSnapshots = [];
+    const redemptionRows = [];
 
     for (const report of reports) {
       const extracted = extractRewardRedemptions(report, managedByProductId);
@@ -185,30 +283,11 @@ async function syncRunchisePosRewardRedemptions({
         (item) => item.sale_detail_transaction_id,
       );
 
-      writes.push(
-        prisma.runchisePosRewardRedemption.deleteMany({
-          where: {
-            sale_transaction_id: saleTransactionId,
-            ...(detailIds.length > 0
-              ? { sale_detail_transaction_id: { notIn: detailIds } }
-              : {}),
-          },
-        }),
-      );
-      for (const row of extracted.rows) {
-        writes.push(
-          prisma.runchisePosRewardRedemption.upsert({
-            where: {
-              sale_transaction_id_sale_detail_transaction_id: {
-                sale_transaction_id: row.sale_transaction_id,
-                sale_detail_transaction_id: row.sale_detail_transaction_id,
-              },
-            },
-            create: row,
-            update: row,
-          }),
-        );
-      }
+      reportSnapshots.push({
+        sale_transaction_id: saleTransactionId,
+        detail_ids: detailIds,
+      });
+      redemptionRows.push(...extracted.rows);
 
       summary.transactions_scanned += 1;
       summary.redemption_rows += extracted.rows.length;
@@ -220,7 +299,11 @@ async function syncRunchisePosRewardRedemptions({
       else summary.transactions_point_mismatch += 1;
     }
 
-    await prisma.$transaction(writes);
+    await bulkWritePosRewardRedemptions(
+      prisma,
+      reportSnapshots,
+      redemptionRows,
+    );
 
     cursorId = reports[reports.length - 1].id;
     hasMore = reports.length === REPORT_PAGE_SIZE;
@@ -231,6 +314,8 @@ async function syncRunchisePosRewardRedemptions({
 
 module.exports = {
   extractRewardRedemptions,
+  bulkWritePosRewardRedemptions,
+  serializeRedemptionRow,
   syncRunchisePosRewardRedemptions,
   unwrapSale,
 };

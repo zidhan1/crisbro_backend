@@ -194,16 +194,10 @@ async function fetchCustomersPage(locationId, page) {
   return data;
 }
 
-// M-9: menumpuk SELURUH customer satu outlet (bisa sampai ribuan) jadi satu
-// array sebelum mengembalikan apa pun -- aman untuk kebutuhan yang memang
-// butuh daftar lengkap sekaligus (mis. pencarian/pencocokan lintas
-// halaman), tapi BUKAN pilihan yang tepat kalau pemanggilnya sebenarnya
-// cuma perlu memproyeksikan beberapa field per customer (poin, nama,
-// telepon, dst) -- untuk kasus itu, stream per halaman langsung lewat
-// fetchCustomersPage() seperti syncCustomers()/syncCustomerPoints() di
-// syncService.js, jangan lewat fungsi ini.
-async function fetchAllCustomers(locationId) {
-  let allCustomers = [];
+// M-9: async generator menjaga maksimal satu halaman customer di memori.
+// Pemanggil wajib menyelesaikan pemrosesan batch sebelum meminta halaman
+// berikutnya, sehingga backpressure terjadi secara alami.
+async function* iterateCustomerPages(locationId) {
   let page = 1;
   let hasMore = true;
 
@@ -211,29 +205,16 @@ async function fetchAllCustomers(locationId) {
     assertPageWithinLimit('customers', page);
     const data = await fetchCustomersPage(locationId, page);
 
-    allCustomers = allCustomers.concat(data.customers);
-    hasMore = data.paging.next_page !== null;
+    const customers = Array.isArray(data.customers) ? data.customers : [];
+    yield { page, customers, paging: data.paging ?? {} };
+    hasMore = data.paging?.next_page !== null;
     page++;
   }
-
-  return allCustomers;
 }
 
-// M-9: memanggil fetchAllCustomers() di atas untuk SETIAP outlet lalu
-// menggabungkan semuanya ke satu Map -- untuk instalasi dengan puluhan
-// outlet x ribuan customer per outlet, ini bisa berarti puluhan/ratusan
-// ribu objek customer lengkap menumpuk di memori sekaligus. syncCustomerPoints
-// di syncService.js dulu memakai fungsi ini untuk sinkronisasi poin
-// seluruh outlet; sekarang sudah diganti stream per halaman per outlet
-// (lihat komentar M-9 di syncCustomerPoints). Fungsi ini dipertahankan
-// untuk kebutuhan lain yang genuinely perlu daftar customer lintas outlet
-// sekaligus, TAPI pemanggil baru sebaiknya mempertimbangkan pola stream
-// per halaman terlebih dulu sebelum memakai fungsi ini.
-//
-// Mengambil customer dari seluruh outlet yang dapat diakses API lalu
-// menggabungkannya berdasarkan ID customer Runchise. Customer dapat terdaftar
-// di beberapa outlet, sehingga nomor telepon tidak aman dijadikan kunci.
-async function fetchAllCustomersAcrossLocations() {
+// Mengalirkan customer lintas outlet secara sekuensial. Deduplikasi dilakukan
+// oleh writer/upsert pemanggil, bukan dengan Map global di RAM.
+async function* iterateCustomersAcrossLocations() {
   const locations = await fetchAllLocations();
   const locationIds = [
     ...new Set(
@@ -259,31 +240,13 @@ async function fetchAllCustomersAcrossLocations() {
     locationIds.push(fallbackLocationId);
   }
 
-  const customerById = new Map();
-
   // Sengaja sekuensial agar satu request dashboard tidak membanjiri API
   // Runchise ketika akun mempunyai banyak outlet.
   for (const locationId of locationIds) {
-    const customers = await fetchAllCustomers(locationId);
-    for (const customer of customers) {
-      const customerId = Number(customer.id);
-      if (Number.isInteger(customerId) && customerId > 0) {
-        const existing = customerById.get(customerId);
-        customerById.set(customerId, {
-          ...(existing ?? {}),
-          ...customer,
-          location_ids: [
-            ...new Set([
-              ...(existing?.location_ids ?? []),
-              ...(customer.location_ids ?? []),
-            ].map(Number).filter((id) => Number.isInteger(id) && id > 0)),
-          ],
-        });
-      }
+    for await (const batch of iterateCustomerPages(locationId)) {
+      yield { locationId, ...batch };
     }
   }
-
-  return [...customerById.values()];
 }
 
 // Daftar location_id tempat customer Runchise terdaftar, termasuk outlet
@@ -373,30 +336,28 @@ async function fetchSalesTransactionsPage(page, params = {}, requestOptions = {}
   return data;
 }
 
-async function fetchAllSalesTransactions(params = {}) {
-  let allTransactions = [];
+async function* iterateSalesTransactionPages(params = {}, requestOptions = {}) {
   let page = 1;
+  let processed = 0;
   let hasMore = true;
 
   while (hasMore) {
     assertPageWithinLimit('sales transactions', page);
-    const data = await fetchSalesTransactionsPage(page, params);
+    const data = await fetchSalesTransactionsPage(page, params, requestOptions);
     const pageTransactions = extractSalesTransactions(data);
-
-    allTransactions = allTransactions.concat(pageTransactions);
+    processed += pageTransactions.length;
+    yield { page, transactions: pageTransactions, paging: data.paging ?? {} };
 
     if (data.paging?.next_page !== undefined) {
       hasMore = data.paging.next_page !== null;
     } else if (data.paging?.total_item !== undefined) {
-      hasMore = allTransactions.length < data.paging.total_item;
+      hasMore = processed < data.paging.total_item;
     } else {
       hasMore = pageTransactions.length === RUNCHISE_PAGE_SIZE;
     }
 
     page++;
   }
-
-  return allTransactions;
 }
 
 // Filter phone_number berlaku lintas outlet, jadi satu request sudah mewakili
@@ -619,11 +580,11 @@ module.exports = {
   assertPageWithinLimit,
   requestWithRetry,
   fetchCustomersPage,
-  fetchAllCustomers,
-  fetchAllCustomersAcrossLocations,
+  iterateCustomerPages,
+  iterateCustomersAcrossLocations,
   fetchSalesTransactionsPage,
   extractSalesTransactions,
-  fetchAllSalesTransactions,
+  iterateSalesTransactionPages,
   findCustomerByPhone,
   findCustomerByPhoneAcrossLocations,
   normalizeIndonesianPhone,
