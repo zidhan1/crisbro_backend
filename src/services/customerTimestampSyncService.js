@@ -3,11 +3,16 @@ const {
   fetchCustomersPage,
   assertPageWithinLimit,
   RUNCHISE_MAX_PAGES,
+  RUNCHISE_REQUEST_TIMEOUT_MS,
 } = require('./runchiseService');
 const {
   isCustomerSyncEnabled,
   customerSyncDisabledResult,
 } = require('../lib/customerSyncToggle');
+const {
+  clampWorkerBudgetMs,
+  hasTimeForNextRequest,
+} = require('../lib/serverlessBudget');
 
 const CUSTOMER_TIMESTAMP_WORKER_LOCK_ID = 750954835;
 const DEFAULT_WORKER_BUDGET_MS = 20_000;
@@ -222,7 +227,9 @@ async function processTimestampPage(client, job, dependencies = {}) {
   // outlet, jadi `paging.next_page` yang tidak pernah null membuat cursor
   // `current_page` naik tanpa batas lintas invocation tanpa sinyal gagal.
   assertPageWithinLimit('customer timestamp worker', page, RUNCHISE_MAX_PAGES);
-  const data = await fetchPage(locationId, page);
+  // Worker persisten mengulang halaman yang sama pada invocation selanjutnya;
+  // jangan menghabiskan deadline dengan retry HTTP di dalam satu invocation.
+  const data = await fetchPage(locationId, page, { retries: 0 });
   const customers = Array.isArray(data.customers) ? data.customers : [];
   const { rows, invalid } = normalizeTimestampRows(customers);
   const localById = await getLocalTimestampMap(
@@ -354,7 +361,7 @@ async function processCustomerTimestampSyncJob(
 
     const deadline =
       Date.now() +
-      Math.min(Math.max(Number(timeBudgetMs) || 20_000, 5_000), 25_000);
+      clampWorkerBudgetMs(timeBudgetMs, DEFAULT_WORKER_BUDGET_MS, { min: 5_000 });
     const safeMaxPages = Math.min(Math.max(Number(maxPages) || 1, 1), 10);
     let pagesProcessed = 0;
     do {
@@ -362,7 +369,10 @@ async function processCustomerTimestampSyncJob(
       pagesProcessed++;
       job = result.job;
       if (result.completed) return { status: 'completed', job };
-    } while (pagesProcessed < safeMaxPages && Date.now() < deadline);
+    } while (
+      pagesProcessed < safeMaxPages &&
+      hasTimeForNextRequest(deadline, RUNCHISE_REQUEST_TIMEOUT_MS)
+    );
 
     return { status: 'running', job: serializeJob(job) };
   } catch (error) {

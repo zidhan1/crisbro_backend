@@ -1,6 +1,7 @@
 const { Client } = require('pg');
 const {
   RUNCHISE_MAX_PAGES,
+  RUNCHISE_REQUEST_TIMEOUT_MS,
   assertPageWithinLimit,
   extractSalesTransactions,
   fetchSalesTransactionsPage,
@@ -9,12 +10,16 @@ const {
   buildSalesTransactionParams,
   syncSalesTransactionReportsPage,
 } = require('./syncService');
+const {
+  clampWorkerBudgetMs,
+  hasTimeForNextRequest,
+} = require('../lib/serverlessBudget');
 
 const SALES_SYNC_WORKER_LOCK_ID = 750954837;
 const configuredBudgetMs = Number(process.env.RUNCHISE_SALES_WORKER_BUDGET_MS);
 const configuredMaxPages = Number(process.env.RUNCHISE_SALES_WORKER_MAX_PAGES);
 const DEFAULT_WORKER_BUDGET_MS = Number.isFinite(configuredBudgetMs)
-  ? Math.min(Math.max(configuredBudgetMs, 3_000), 25_000)
+  ? clampWorkerBudgetMs(configuredBudgetMs, 8_000, { min: 3_000 })
   : 8_000;
 const DEFAULT_MAX_PAGES_PER_INVOCATION = Number.isInteger(configuredMaxPages)
   ? Math.min(Math.max(configuredMaxPages, 1), 20)
@@ -236,16 +241,28 @@ async function processSalesTransactionSyncJob(
     );
     job = running.rows[0];
 
-    const budget = Math.min(
-      Math.max(Number(timeBudgetMs) || DEFAULT_WORKER_BUDGET_MS, 1_000),
-      25_000,
-    );
+    const budget = clampWorkerBudgetMs(timeBudgetMs, DEFAULT_WORKER_BUDGET_MS);
     const deadline = now() + budget;
     const safeMaxPages = Math.min(Math.max(Number(maxPages) || 1, 1), 20);
     let pagesProcessed = 0;
     let serialized = serializeJob(job);
 
-    while (pagesProcessed < safeMaxPages && now() < deadline) {
+    // Halaman pertama selalu dicoba selama deadline belum lewat. Halaman
+    // berikutnya hanya dimulai bila worst-case timeout upstream masih muat
+    // penuh sebelum deadline worker.
+    while (pagesProcessed < safeMaxPages) {
+      const currentTime = now();
+      if (currentTime >= deadline) break;
+      if (
+        pagesProcessed > 0 &&
+        !hasTimeForNextRequest(
+          deadline,
+          RUNCHISE_REQUEST_TIMEOUT_MS,
+          currentTime,
+        )
+      ) {
+        break;
+      }
       const pageResult = await processSalesPage(client, job, dependencies);
       pagesProcessed++;
       serialized = pageResult.job;

@@ -3,6 +3,7 @@ const {
   fetchCustomersPage,
   assertPageWithinLimit,
   RUNCHISE_MAX_PAGES,
+  RUNCHISE_REQUEST_TIMEOUT_MS,
 } = require('./runchiseService');
 const {
   upsertRunchiseCustomersBatch,
@@ -11,14 +12,13 @@ const {
   isCustomerSyncEnabled,
   customerSyncDisabledResult,
 } = require('../lib/customerSyncToggle');
+const {
+  clampWorkerBudgetMs,
+  hasTimeForNextRequest,
+} = require('../lib/serverlessBudget');
 
 // Lock terpisah dari worker timestamp agar keduanya boleh berjalan bersamaan.
 const CUSTOMER_IMPORT_WORKER_LOCK_ID = 750954836;
-// vercel.json tidak menyetel maxDuration, jadi function mati di ~10 detik.
-// Budget dibuat lebih pendek supaya worker sempat menyimpan cursor sebelum
-// dipotong; job yang terpotong tetap bisa dilanjutkan karena baris 'running'
-// ikut terambil oleh worker berikutnya dan advisory lock lepas sendiri saat
-// koneksi putus.
 const DEFAULT_WORKER_BUDGET_MS = 8_000;
 const DEFAULT_MAX_PAGES = 10;
 
@@ -154,7 +154,9 @@ async function processImportPage(client, job, dependencies = {}) {
   // karena dibatasi maxPages + time budget -- justru itu yang membuat
   // kegagalannya tidak terlihat.
   assertPageWithinLimit('customer import worker', page, RUNCHISE_MAX_PAGES);
-  const data = await fetchPage(locationId, page);
+  // Retry dilakukan oleh invocation cron berikutnya dari cursor yang sama.
+  // Retry HTTP internal dapat melampaui deadline sebelum checkpoint tersimpan.
+  const data = await fetchPage(locationId, page, { retries: 0 });
   const customers = Array.isArray(data.customers) ? data.customers : [];
 
   let created = 0;
@@ -310,10 +312,7 @@ async function processCustomerImportSyncJob(
 
     const deadline =
       Date.now() +
-      Math.min(
-        Math.max(Number(timeBudgetMs) || DEFAULT_WORKER_BUDGET_MS, 3_000),
-        25_000,
-      );
+      clampWorkerBudgetMs(timeBudgetMs, DEFAULT_WORKER_BUDGET_MS, { min: 3_000 });
     const safeMaxPages = Math.min(Math.max(Number(maxPages) || 1, 1), 20);
     let pagesProcessed = 0;
     let serialized = serializeJob(job);
@@ -326,7 +325,10 @@ async function processCustomerImportSyncJob(
         return { status: serialized.status, job: serialized };
       }
       job = { ...job, ...result.job };
-    } while (pagesProcessed < safeMaxPages && Date.now() < deadline);
+    } while (
+      pagesProcessed < safeMaxPages &&
+      hasTimeForNextRequest(deadline, RUNCHISE_REQUEST_TIMEOUT_MS)
+    );
 
     return { status: 'running', job: serialized };
   } catch (error) {

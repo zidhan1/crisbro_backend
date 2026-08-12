@@ -182,13 +182,14 @@ const RUNCHISE_PAGE_SIZE = 100;
 const RUNCHISE_SALES_TRANSACTIONS_PATH =
   process.env.RUNCHISE_SALES_TRANSACTIONS_PATH || '/sale_transactions';
 
-async function fetchCustomersPage(locationId, page) {
+async function fetchCustomersPage(locationId, page, requestOptions = {}) {
   const { data } = await requestWithRetry(
     `Fetch customers Runchise page ${page}`,
     () =>
       runchiseClient.get(`/locations/${locationId}/customers`, {
         params: { page, item_per_page: RUNCHISE_PAGE_SIZE },
       }),
+    requestOptions,
   );
 
   return data;
