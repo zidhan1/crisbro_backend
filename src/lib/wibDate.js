@@ -94,6 +94,16 @@ function endOfWibDay(date) {
   return wibWallClockToInstant(year, month, day, 23, 59, 59, 999);
 }
 
+/**
+ * Apakah nilai mentah hanya menyebut tanggal ('2026-08-01'), tanpa jam?
+ *
+ * Dipakai untuk membedakan "sepanjang hari itu" dari "pada instant ini persis".
+ * Penjadwalan yang menyebut jam eksplisit tidak boleh dijepit ke batas hari.
+ */
+function isWibDateOnlyInput(value) {
+  return typeof value === 'string' && DATE_ONLY_PATTERN.test(value.trim());
+}
+
 /** Label tanggal kalender WIB ('YYYY-MM-DD') dari sebuah instant. */
 function formatWibDate(date) {
   const { year, month, day } = getWibDateParts(date);
@@ -107,6 +117,7 @@ module.exports = {
   WIB_OFFSET_SUFFIX,
   parseWibInstant,
   getWibDateParts,
+  isWibDateOnlyInput,
   startOfWibDay,
   endOfWibDay,
   formatWibDate,

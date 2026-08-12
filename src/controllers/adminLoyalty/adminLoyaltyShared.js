@@ -8,6 +8,7 @@ const { respondWithServerError } = require('../../lib/serverError');
 const { ValidationError } = require('../../lib/validationError');
 const {
   endOfWibDay,
+  isWibDateOnlyInput,
   parseWibInstant,
   startOfWibDay,
 } = require('../../lib/wibDate');
@@ -431,6 +432,37 @@ function parseDateBoundary(value, fieldName, endOfDay = false) {
   return endOfDay ? endOfWibDay(instant) : startOfWibDay(instant);
 }
 
+// M-4 (lanjutan): jendela penjadwalan (RedeemMenuItem.start_at / end_at) juga
+// mengikuti kalender WIB.
+//
+// Jendelanya inklusif di kedua ujung (`start_at <= now` dan `end_at >= now`,
+// lihat redeemMenuRoutes dan nextRewardService), jadi "berlaku 1-31 Agustus"
+// berarti 1 Agu 00:00:00.000 WIB s/d 31 Agu 23:59:59.999 WIB. Dengan
+// `parseOptionalDate`, '2026-08-01' menjadi tengah malam UTC sehingga item baru
+// muncul pukul 07:00 WIB -- dan pada tanggal akhir item menghilang pukul 07:00
+// WIB, tujuh jam sebelum harinya benar-benar berakhir. Ini menyamakan
+// perilakunya dengan promo Runchise yang sudah benar (syncService:
+// parseRunchiseDate(start, false) / parseRunchiseDate(end, true)).
+//
+// Nilai yang menyebut jam secara eksplisit TIDAK dijepit ke batas hari: jadwal
+// seperti '2026-08-01T14:00:00+07:00' memang berarti instant itu persis.
+// Bentuk ISO tanpa offset dibaca sebagai jam WIB, bukan jam zona runtime.
+function parseScheduleBoundary(value, fieldName, endOfDay = false) {
+  // `undefined` berarti field tidak dikirim; dipertahankan agar Prisma
+  // memperlakukannya sebagai "tidak diubah", sama seperti parseOptionalDate.
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+
+  const instant = parseWibInstant(value);
+  if (!instant) {
+    throw new ValidationError(`${fieldName} harus berupa tanggal valid`);
+  }
+
+  if (!isWibDateOnlyInput(value)) return instant;
+
+  return endOfDay ? endOfWibDay(instant) : startOfWibDay(instant);
+}
+
 function parseOptionalNumber(value, fieldName, { min = 0 } = {}) {
   if (value === undefined) return undefined;
   if (value === null || value === '') return null;
@@ -560,6 +592,7 @@ module.exports = {
   parseAdminUserRole,
   parseOptionalDate,
   parseDateBoundary,
+  parseScheduleBoundary,
   parseOptionalNumber,
   parseLocationIds,
   normalizeReportName,

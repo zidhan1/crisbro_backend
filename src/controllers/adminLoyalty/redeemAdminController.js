@@ -9,7 +9,7 @@ function createRedeemAdminControllers({
   parsePositiveInt,
   parseBoolean,
   parseNonNegativeInt,
-  parseOptionalDate,
+  parseScheduleBoundary,
   buildRedeemItemOrderBy,
   addRedeemPriceBreakdown,
   getDefaultRedeemCategoryId,
@@ -230,8 +230,10 @@ function createRedeemAdminControllers({
             req.body.sort_order ?? 0,
             'sort_order',
           ),
-          start_at: parseOptionalDate(req.body.start_at, 'start_at'),
-          end_at: parseOptionalDate(req.body.end_at, 'end_at'),
+          // M-4 (lanjutan): jendela berlaku dijepit ke hari WIB -- awal hari
+          // untuk start_at, akhir hari untuk end_at (jendela inklusif).
+          start_at: parseScheduleBoundary(req.body.start_at, 'start_at'),
+          end_at: parseScheduleBoundary(req.body.end_at, 'end_at', true),
           stock_limit: parsePositiveInt(req.body.stock_limit, 'stock_limit', {
             required: false,
           }),
@@ -287,9 +289,9 @@ function createRedeemAdminControllers({
           'sort_order',
         );
       if (req.body.start_at !== undefined)
-        data.start_at = parseOptionalDate(req.body.start_at, 'start_at');
+        data.start_at = parseScheduleBoundary(req.body.start_at, 'start_at');
       if (req.body.end_at !== undefined)
-        data.end_at = parseOptionalDate(req.body.end_at, 'end_at');
+        data.end_at = parseScheduleBoundary(req.body.end_at, 'end_at', true);
       if (req.body.stock_limit !== undefined)
         data.stock_limit = parsePositiveInt(
           req.body.stock_limit,

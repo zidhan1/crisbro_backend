@@ -1,5 +1,9 @@
 const { Client } = require('pg');
-const { fetchCustomersPage } = require('./runchiseService');
+const {
+  fetchCustomersPage,
+  assertPageWithinLimit,
+  RUNCHISE_MAX_PAGES,
+} = require('./runchiseService');
 const {
   isCustomerSyncEnabled,
   customerSyncDisabledResult,
@@ -108,8 +112,10 @@ function serializeJob(row) {
   };
 }
 
-async function getCustomerTimestampSyncJob() {
-  const client = createDatabaseClient();
+async function getCustomerTimestampSyncJob({
+  createClient = createDatabaseClient,
+} = {}) {
+  const client = createClient();
   try {
     await client.connect();
     const result = await client.query(
@@ -201,14 +207,22 @@ async function createCustomerTimestampSyncJob() {
   }
 }
 
-async function processTimestampPage(client, job) {
+// `dependencies` mengikuti pola yang sama dengan worker impor customer dan
+// salesTransactionSyncService: titik injeksi tipis untuk pengujian.
+async function processTimestampPage(client, job, dependencies = {}) {
+  const fetchPage = dependencies.fetchPage || fetchCustomersPage;
   const locationIds = Array.isArray(job.location_ids) ? job.location_ids : [];
   const locationIndex = Number(job.current_location_index);
   if (locationIndex >= locationIds.length) return { completed: true };
 
   const locationId = Number(locationIds[locationIndex]);
   const page = Number(job.current_page) || 1;
-  const data = await fetchCustomersPage(locationId, page);
+  // M-2: hard cap halaman, sama seperti worker impor customer. Worker ini
+  // menyapu endpoint customer Runchise halaman demi halaman untuk seluruh
+  // outlet, jadi `paging.next_page` yang tidak pernah null membuat cursor
+  // `current_page` naik tanpa batas lintas invocation tanpa sinyal gagal.
+  assertPageWithinLimit('customer timestamp worker', page, RUNCHISE_MAX_PAGES);
+  const data = await fetchPage(locationId, page);
   const customers = Array.isArray(data.customers) ? data.customers : [];
   const { rows, invalid } = normalizeTimestampRows(customers);
   const localById = await getLocalTimestampMap(
@@ -292,16 +306,19 @@ async function processTimestampPage(client, job) {
   }
 }
 
-async function processCustomerTimestampSyncJob({
-  timeBudgetMs = DEFAULT_WORKER_BUDGET_MS,
-  maxPages = 1,
-} = {}) {
+async function processCustomerTimestampSyncJob(
+  { timeBudgetMs = DEFAULT_WORKER_BUDGET_MS, maxPages = 1 } = {},
+  dependencies = {},
+) {
+  const createClient = dependencies.createClient || createDatabaseClient;
+
   if (!isCustomerSyncEnabled()) {
     return customerSyncDisabledResult();
   }
 
-  const client = createDatabaseClient();
+  const client = createClient();
   let lockAcquired = false;
+  let activeJobId = null;
   try {
     await client.connect();
     const lock = await client.query(
@@ -312,7 +329,7 @@ async function processCustomerTimestampSyncJob({
     if (!lockAcquired) {
       return {
         status: 'already_running',
-        job: await getCustomerTimestampSyncJob(),
+        job: await getCustomerTimestampSyncJob({ createClient }),
       };
     }
 
@@ -322,7 +339,11 @@ async function processCustomerTimestampSyncJob({
     );
     let job = active.rows[0];
     if (!job)
-      return { status: 'idle', job: await getCustomerTimestampSyncJob() };
+      return {
+        status: 'idle',
+        job: await getCustomerTimestampSyncJob({ createClient }),
+      };
+    activeJobId = job.id;
 
     await client.query(
       `UPDATE "CustomerTimestampSyncJob"
@@ -337,7 +358,7 @@ async function processCustomerTimestampSyncJob({
     const safeMaxPages = Math.min(Math.max(Number(maxPages) || 1, 1), 10);
     let pagesProcessed = 0;
     do {
-      const result = await processTimestampPage(client, job);
+      const result = await processTimestampPage(client, job, dependencies);
       pagesProcessed++;
       job = result.job;
       if (result.completed) return { status: 'completed', job };
@@ -346,14 +367,24 @@ async function processCustomerTimestampSyncJob({
     return { status: 'running', job: serializeJob(job) };
   } catch (error) {
     const message = String(error.message || error).slice(0, 4000);
-    await client
-      .query(
-        `UPDATE "CustomerTimestampSyncJob"
-         SET "status" = 'queued', "error" = $1, "heartbeat_at" = NOW()
-         WHERE "status" = 'running'`,
-        [message],
-      )
-      .catch(() => {});
+    // M-2: sama seperti worker impor customer -- melewati cap halaman bersifat
+    // terminal, bukan sementara. Requeue hanya akan mengulang halaman yang
+    // melanggar cap tanpa henti, jadi job dihentikan sebagai 'failed'.
+    const isPageCapExceeded = error.code === 'RUNCHISE_MAX_PAGES_EXCEEDED';
+    const nextStatus = isPageCapExceeded ? 'failed' : 'queued';
+    if (activeJobId !== null) {
+      await client
+        .query(
+          `UPDATE "CustomerTimestampSyncJob"
+           SET "status" = $2,
+               "error" = $1,
+               "heartbeat_at" = NOW(),
+               "finished_at" = CASE WHEN $2 = 'failed' THEN NOW() ELSE NULL END
+           WHERE "id" = $3`,
+          [message, nextStatus, activeJobId],
+        )
+        .catch(() => {});
+    }
     throw error;
   } finally {
     if (lockAcquired) {
@@ -371,5 +402,6 @@ module.exports = {
   createCustomerTimestampSyncJob,
   getCustomerTimestampSyncJob,
   processCustomerTimestampSyncJob,
+  processTimestampPage,
   normalizeTimestampRows,
 };

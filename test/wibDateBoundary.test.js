@@ -17,6 +17,7 @@ const { execFileSync } = require('node:child_process');
 const {
   parseDateBoundary,
   parseOptionalDate,
+  parseScheduleBoundary,
 } = require('../src/controllers/adminLoyalty/adminLoyaltyShared');
 const { ValidationError } = require('../src/lib/validationError');
 const {
@@ -132,6 +133,82 @@ test('parseOptionalDate TIDAK ikut bergeser ke WIB (dob kolom @db.Date)', () => 
   assert.equal(
     parseOptionalDate('1990-05-12', 'dob').toISOString(),
     '1990-05-12T00:00:00.000Z',
+  );
+});
+
+// ===================== JENDELA JADWAL REDEEM ITEM =====================
+//
+// RedeemMenuItem.start_at/end_at dievaluasi inklusif (`start_at <= now` dan
+// `end_at >= now`, lihat redeemMenuRoutes dan nextRewardService). Dengan
+// parseOptionalDate, item berjadwal "1 Agustus" baru muncul pukul 07:00 WIB,
+// dan pada tanggal akhir menghilang pukul 07:00 WIB -- tujuh jam sebelum
+// harinya benar-benar berakhir.
+
+test('start_at tanggal-saja aktif tepat tengah malam WIB', () => {
+  assert.equal(
+    parseScheduleBoundary('2026-08-01', 'start_at').toISOString(),
+    AUG_1_START_WIB,
+  );
+});
+
+test('end_at tanggal-saja berlaku sampai akhir hari WIB, bukan pagi harinya', () => {
+  assert.equal(
+    parseScheduleBoundary('2026-08-31', 'end_at', true).toISOString(),
+    AUG_31_END_WIB,
+  );
+});
+
+test('item berjadwal 1-31 Agustus benar-benar aktif sepanjang kedua hari tepi', () => {
+  const startAt = parseScheduleBoundary('2026-08-01', 'start_at');
+  const endAt = parseScheduleBoundary('2026-08-31', 'end_at', true);
+
+  // 1 Agustus 00:30 WIB -- sebelumnya item belum aktif (baru jam 07:00 WIB).
+  const awalHariPertama = new Date('2026-07-31T17:30:00.000Z');
+  // 31 Agustus 22:00 WIB -- sebelumnya item sudah menghilang sejak pagi.
+  const malamHariTerakhir = new Date('2026-08-31T15:00:00.000Z');
+
+  assert.ok(startAt <= awalHariPertama && awalHariPertama <= endAt);
+  assert.ok(startAt <= malamHariTerakhir && malamHariTerakhir <= endAt);
+
+  // Bukti perilaku LAMA: keduanya jatuh di luar jendela versi parseOptionalDate.
+  assert.ok(awalHariPertama < new Date('2026-08-01T00:00:00.000Z'));
+  assert.ok(malamHariTerakhir > new Date('2026-08-31T00:00:00.000Z'));
+});
+
+test('jadwal dengan jam eksplisit TIDAK dijepit ke batas hari', () => {
+  // Flash sale pukul 14:00 WIB harus tetap 14:00, bukan mundur ke tengah malam.
+  assert.equal(
+    parseScheduleBoundary('2026-08-01T14:00:00+07:00', 'start_at').toISOString(),
+    '2026-08-01T07:00:00.000Z',
+  );
+  assert.equal(
+    parseScheduleBoundary('2026-08-31T22:00:00+07:00', 'end_at', true).toISOString(),
+    '2026-08-31T15:00:00.000Z',
+  );
+});
+
+test('jadwal ISO tanpa offset dibaca sebagai jam WIB', () => {
+  assert.equal(
+    parseScheduleBoundary('2026-08-01T14:00', 'start_at').toISOString(),
+    '2026-08-01T07:00:00.000Z',
+  );
+});
+
+test('field jadwal yang tidak dikirim tetap undefined, yang dikosongkan jadi null', () => {
+  // undefined = "tidak diubah" bagi Prisma; null = "dihapus jadwalnya".
+  assert.equal(parseScheduleBoundary(undefined, 'start_at'), undefined);
+  assert.equal(parseScheduleBoundary(null, 'start_at'), null);
+  assert.equal(parseScheduleBoundary('', 'end_at', true), null);
+});
+
+test('jadwal tidak valid ditolak sebagai ValidationError', () => {
+  assert.throws(
+    () => parseScheduleBoundary('bukan-tanggal', 'start_at'),
+    (error) => {
+      assert.ok(error instanceof ValidationError);
+      assert.equal(error.message, 'start_at harus berupa tanggal valid');
+      return true;
+    },
   );
 });
 

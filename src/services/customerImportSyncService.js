@@ -1,5 +1,9 @@
 const { Client } = require('pg');
-const { fetchCustomersPage } = require('./runchiseService');
+const {
+  fetchCustomersPage,
+  assertPageWithinLimit,
+  RUNCHISE_MAX_PAGES,
+} = require('./runchiseService');
 const {
   upsertRunchiseCustomersBatch,
 } = require('./syncService');
@@ -128,14 +132,29 @@ async function createCustomerImportSyncJob({ source = 'dashboard' } = {}) {
 }
 
 // Memproses satu halaman API (maksimal 100 customer) lalu memajukan cursor.
-async function processImportPage(client, job) {
+//
+// `dependencies` mengikuti pola salesTransactionSyncService.processSalesPage:
+// titik injeksi tipis supaya perilaku cursor dan guard halaman bisa diuji tanpa
+// menembak API Runchise maupun database sungguhan.
+async function processImportPage(client, job, dependencies = {}) {
+  const fetchPage = dependencies.fetchPage || fetchCustomersPage;
   const locationIds = Array.isArray(job.location_ids) ? job.location_ids : [];
   const locationIndex = Number(job.current_location_index);
   if (locationIndex >= locationIds.length) return { completed: true, job: serializeJob(job) };
 
   const locationId = Number(locationIds[locationIndex]);
   const page = Number(job.current_page) || 1;
-  const data = await fetchCustomersPage(locationId, page);
+  // M-2: hard cap halaman, sejajar dengan jalur sales
+  // (salesTransactionSyncService.processSalesPage) dan paginator di
+  // runchiseService. Cursor `current_page` bertahan lintas invocation, jadi
+  // tanpa cap ini `paging.next_page` yang tidak pernah null (endpoint customer
+  // Runchise dilaporkan selalu melaporkan total_item 10000) membuat job tidak
+  // akan pernah `completed`: cron */10 menit menggempur API selamanya, per
+  // outlet, tanpa satu pun sinyal gagal. Satu invocation memang tidak hang
+  // karena dibatasi maxPages + time budget -- justru itu yang membuat
+  // kegagalannya tidak terlihat.
+  assertPageWithinLimit('customer import worker', page, RUNCHISE_MAX_PAGES);
+  const data = await fetchPage(locationId, page);
   const customers = Array.isArray(data.customers) ? data.customers : [];
 
   let created = 0;
@@ -236,10 +255,14 @@ async function processImportPage(client, job) {
   return { completed, job: serializeJob(result.rows[0]) };
 }
 
-async function processCustomerImportSyncJob({
-  timeBudgetMs = DEFAULT_WORKER_BUDGET_MS,
-  maxPages = DEFAULT_MAX_PAGES,
-} = {}) {
+async function processCustomerImportSyncJob(
+  {
+    timeBudgetMs = DEFAULT_WORKER_BUDGET_MS,
+    maxPages = DEFAULT_MAX_PAGES,
+  } = {},
+  dependencies = {},
+) {
+  const createClient = dependencies.createClient || createDatabaseClient;
   // Dijeda: tidak memproses halaman apa pun dan TIDAK mengubah status job,
   // sehingga cursor terakhir tetap utuh untuk dilanjutkan setelah saklar
   // dinyalakan kembali.
@@ -247,8 +270,9 @@ async function processCustomerImportSyncJob({
     return customerSyncDisabledResult();
   }
 
-  const client = createDatabaseClient();
+  const client = createClient();
   let lockAcquired = false;
+  let activeJobId = null;
   try {
     await client.connect();
     const lock = await client.query(
@@ -275,6 +299,7 @@ async function processCustomerImportSyncJob({
       );
       return { status: 'idle', job: serializeJob(latest.rows[0]) };
     }
+    activeJobId = job.id;
 
     await client.query(
       `UPDATE "CustomerImportSyncJob"
@@ -294,7 +319,7 @@ async function processCustomerImportSyncJob({
     let serialized = serializeJob(job);
 
     do {
-      const result = await processImportPage(client, job);
+      const result = await processImportPage(client, job, dependencies);
       pagesProcessed++;
       serialized = result.job;
       if (result.completed) {
@@ -306,16 +331,33 @@ async function processCustomerImportSyncJob({
     return { status: 'running', job: serialized };
   } catch (error) {
     const message = String(error.message || error).slice(0, 4000);
-    // Dikembalikan ke 'queued' agar percobaan berikutnya melanjutkan dari
-    // cursor tersimpan, bukan mengulang job dari awal.
-    await client
-      .query(
-        `UPDATE "CustomerImportSyncJob"
-         SET "status" = 'queued', "error" = $1, "heartbeat_at" = NOW()
-         WHERE "status" = 'running'`,
-        [message],
-      )
-      .catch(() => {});
+    // Default: dikembalikan ke 'queued' agar percobaan berikutnya melanjutkan
+    // dari cursor tersimpan, bukan mengulang job dari awal.
+    //
+    // M-2: melewati cap halaman BUKAN error sementara. Cursor sudah berada di
+    // halaman yang melanggar cap, jadi requeue hanya membuat invocation cron
+    // berikutnya mengulang halaman yang sama dan gagal lagi -- selamanya, tanpa
+    // pernah terlihat. Job dihentikan sebagai 'failed' supaya muncul di
+    // dashboard dan telemetry; enqueue harian berikutnya membuat job baru yang
+    // bersih karena hanya job 'queued'/'running' yang menghalangi pembuatan.
+    const isPageCapExceeded = error.code === 'RUNCHISE_MAX_PAGES_EXCEEDED';
+    const nextStatus = isPageCapExceeded ? 'failed' : 'queued';
+    // Dibatasi ke job yang benar-benar sedang dikerjakan invocation ini; baris
+    // 'running' yatim dari invocation yang mati mendadak tidak boleh ikut
+    // ditandai gagal oleh error yang bukan miliknya.
+    if (activeJobId !== null) {
+      await client
+        .query(
+          `UPDATE "CustomerImportSyncJob"
+           SET "status" = $2,
+               "error" = $1,
+               "heartbeat_at" = NOW(),
+               "finished_at" = CASE WHEN $2 = 'failed' THEN NOW() ELSE NULL END
+           WHERE "id" = $3`,
+          [message, nextStatus, activeJobId],
+        )
+        .catch(() => {});
+    }
     throw error;
   } finally {
     if (lockAcquired) {
@@ -331,4 +373,5 @@ module.exports = {
   createCustomerImportSyncJob,
   getCustomerImportSyncJob,
   processCustomerImportSyncJob,
+  processImportPage,
 };
