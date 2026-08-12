@@ -364,3 +364,127 @@ disarankan sebelum production rollout.
    pada staging.
 7. Pertimbangkan pencabutan seluruh sesi lama saat rollout jika ada dugaan
    token localStorage sebelumnya telah terekspos.
+
+---
+
+# H-2 (lanjutan) — TTL sesi 7 hari untuk semua peran
+
+File terdampak: `src/lib/sessionPolicy.js` (baru), `src/controllers/authController.js`,
+`src/middleware/auth.js`, `test/sessionPolicy.test.js` (baru),
+`test/authSessionSliding.test.js` (baru)
+
+## 11. Sisa masalah setelah perbaikan cookie
+
+Perbaikan di bagian 1-10 menutup jalur exfiltrasi token lewat XSS, tetapi tidak
+menyentuh masa berlakunya:
+
+```js
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+```
+
+Satu angka itu berlaku untuk admin, marketing, dan customer sekaligus. Untuk
+konsol admin, jendela tujuh hari tetap terlalu lebar pada skenario yang tidak
+melibatkan XSS sama sekali: laptop dipinjam atau hilang, sesi lupa di-logout di
+perangkat bersama, atau token bocor lewat jalur lain. Tidak ada pula batas idle,
+sehingga sesi yang tidak disentuh enam hari tetap sah.
+
+## 12. Perbaikan: dua batas waktu per sesi
+
+Satu sesi sekarang punya dua timer yang berbeda peran:
+
+| Timer | Disimpan di | Bisa diperpanjang | Fungsi |
+|---|---|---|---|
+| Idle TTL | `Session.expires_at` | Ya, selama user aktif | Mematikan sesi yang ditinggalkan |
+| Batas absolut | Klaim `exp` pada JWT | Tidak pernah | Umur maksimum sesi, wajib login ulang |
+
+Batas absolut sengaja diletakkan pada klaim `exp` token, bukan kolom baru.
+Konsekuensinya `jwt.verify` yang menegakkannya dan **tidak diperlukan migration
+maupun perubahan skema** — konsisten dengan catatan di bagian 9.
+
+### 12.1 Kebijakan per peran
+
+Nilainya dibedakan supaya perbaikan untuk konsol admin tidak menghukum aplikasi
+loyalty customer:
+
+| Peran | Idle TTL | Batas absolut | Env override |
+|---|---|---|---|
+| `admin`, `marketing` | 8 jam | 24 jam | `ADMIN_SESSION_IDLE_MINUTES`, `ADMIN_SESSION_ABSOLUTE_HOURS` |
+| `customer` (lainnya) | 7 hari | 7 hari | `CUSTOMER_SESSION_IDLE_DAYS`, `JWT_EXPIRES_IN` |
+
+Untuk customer, idle sama dengan absolut sehingga `expires_at` jatuh tepat di
+`exp` token — **identik dengan perilaku sebelum perubahan ini**. Tidak ada
+regresi UX di sisi aplikasi customer, dan tidak ada tambahan operasi tulis.
+
+`JWT_EXPIRES_IN` sengaja dipertahankan sebagai knob sesi customer supaya
+konfigurasi produksi yang sudah ada tetap berarti sama. Knob itu **tidak lagi
+berlaku untuk sesi staff**, dan justru itu inti perbaikannya.
+
+### 12.2 Pergeseran idle di middleware auth
+
+`src/middleware/auth.js` menggeser `expires_at` maju setelah sesi tervalidasi,
+dengan plafon `decoded.exp`:
+
+```js
+const slidingExpiry = computeSlidingSessionExpiry({
+  role: decoded.role,
+  now: Date.now(),
+  tokenExpMs: decoded.exp * 1000,
+  currentExpiresAt: session.expires_at,
+});
+```
+
+Tiga hal yang dijaga di sini:
+
+1. **Tidak satu UPDATE per request.** Penulisan hanya terjadi bila selisihnya
+   sudah melewati `SESSION_RENEW_INTERVAL_MINUTES` (default 5 menit). Untuk
+   admin aktif berarti sekitar satu tulis per lima menit, bukan per request.
+2. **Best-effort.** Kegagalan menulis dicatat ke log dan request tetap
+   dilanjutkan; sesi masih sah sampai `expires_at` yang tersimpan.
+3. **Simetris.** Selisih dihitung dengan nilai absolut, sehingga sesi staff yang
+   terlanjur dibuat dengan TTL 7 hari ikut **diperpendek** pada request
+   pertamanya. Tanpa itu, perbaikan baru berlaku untuk login berikutnya saja dan
+   semua sesi yang sedang berjalan tetap memegang jendela lama.
+
+### 12.3 Umur cookie
+
+Cookie tetap memakai batas absolut token, bukan batas idle, agar tidak perlu
+mengirim ulang `Set-Cookie` setiap perpanjangan. Batas idle ditegakkan server:
+request dengan sesi yang idle-nya sudah lewat dijawab 401 sekaligus menghapus
+cookie-nya lewat jalur `clearSessionCookie` yang sudah ada.
+
+## 13. Perbandingan sebelum dan sesudah
+
+| Aspek | Sebelum | Sesudah |
+|---|---|---|
+| TTL sesi admin/marketing | 7 hari | Idle 8 jam, absolut 24 jam |
+| TTL sesi customer | 7 hari | 7 hari (tidak berubah) |
+| Batas idle | Tidak ada | Ada, digeser saat aktif |
+| Umur maksimum sesi | Dapat diperpanjang dengan mengubah env | Melekat pada tanda tangan token |
+| Sesi staff yang sedang berjalan | Tetap 7 hari | Diperpendek saat dipakai lagi |
+| Beban tulis database | — | Maks. 1 UPDATE / 5 menit / sesi staff aktif |
+
+## 14. Verifikasi
+
+```text
+npm test
+
+# tests 120
+# pass 120
+# fail 0
+```
+
+Cakupan baru: `test/sessionPolicy.test.js` (10 test — kebijakan per peran,
+plafon absolut, throttle penulisan, pemendekan sesi lama, penolakan `exp` tidak
+sah) dan `test/authSessionSliding.test.js` (4 test — pergeseran nyata lewat
+middleware, jalur customer tanpa UPDATE, penolakan sesi idle, dan kegagalan
+tulis yang tidak menggagalkan request).
+
+## 15. Checklist deployment (tambahan)
+
+8. Setelah rilis, sesi staff yang sedang berjalan otomatis mengikuti kebijakan
+   baru pada request berikutnya — tidak perlu mencabut sesi secara manual.
+9. Bila 8 jam idle terlalu ketat untuk operasional outlet, naikkan lewat
+   `ADMIN_SESSION_IDLE_MINUTES`; jangan kembalikan `JWT_EXPIRES_IN` karena knob
+   itu sudah tidak memengaruhi sesi staff.
+10. `SESSION_RENEW_INTERVAL_MINUTES` dapat dinaikkan bila beban tulis sesi
+    terasa pada database, dengan konsekuensi batas idle bergeser lebih kasar.

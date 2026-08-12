@@ -15,9 +15,10 @@ const {
   clearSessionCookie,
 } = require('../lib/sessionCookie');
 const { normalizePhone, phoneVariants } = require('../lib/phoneNumber');
-
-// Konfigurasi masa berlaku token login
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+const {
+  computeSessionExpiry,
+  getSessionPolicy,
+} = require('../lib/sessionPolicy');
 
 // Satu pesan untuk semua kegagalan login, apa pun sebabnya.
 const INVALID_CREDENTIALS_MESSAGE =
@@ -211,15 +212,26 @@ async function login(req, res) {
       },
     });
 
-    // Membuat JWT Token untuk autentikasi
+    // H-2: masa berlaku sesi ditentukan per peran, bukan satu angka 7 hari untuk
+    // semua orang. `exp` token menjadi batas absolut yang tidak bisa diperpanjang,
+    // sedangkan baris Session menyimpan batas idle yang digeser middleware auth
+    // selama user masih aktif.
+    const sessionPolicy = getSessionPolicy(user.role);
     const token = jwt.sign({ id: user.id, role: user.role }, getJwtSecret(), {
-      expiresIn: JWT_EXPIRES_IN,
+      expiresIn: sessionPolicy.absoluteExpiresIn,
     });
     const decodedToken = jwt.decode(token);
-    const expiresAt =
+    const now = Date.now();
+    const tokenExpMs =
       decodedToken && typeof decodedToken.exp === 'number'
-        ? new Date(decodedToken.exp * 1000)
-        : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        ? decodedToken.exp * 1000
+        : now + sessionPolicy.idleMs;
+    const absoluteExpiresAt = new Date(tokenExpMs);
+    const expiresAt = computeSessionExpiry({
+      role: user.role,
+      now,
+      tokenExpMs,
+    });
 
     await prisma.session.create({
       data: {
@@ -229,10 +241,13 @@ async function login(req, res) {
       },
     });
 
-    // Token sesi tidak diekspos ke JavaScript browser.
-    setSessionCookie(res, token, expiresAt);
+    // Token sesi tidak diekspos ke JavaScript browser. Umur cookie disamakan
+    // dengan batas absolut token: batas idle ditegakkan server lewat
+    // `Session.expires_at`, dan request yang idle-nya sudah lewat tetap ditolak
+    // 401 sekaligus menghapus cookie-nya.
+    setSessionCookie(res, token, absoluteExpiresAt);
     res.json({
-      expiresIn: JWT_EXPIRES_IN,
+      expiresIn: sessionPolicy.absoluteExpiresIn,
       user: serializeAuthUser(user),
     });
   } catch (error) {

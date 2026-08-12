@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const getJwtSecret = require('../lib/jwtSecret');
 const prisma = require('../lib/prisma');
 const { getSessionCookie, clearSessionCookie } = require('../lib/sessionCookie');
+const { computeSlidingSessionExpiry } = require('../lib/sessionPolicy');
 
 // Middleware untuk memverifikasi token JWT pada setiap request
 module.exports = async (req, res, next) => {
@@ -36,6 +37,31 @@ module.exports = async (req, res, next) => {
       return res.status(401).json({
         message: 'Session tidak valid atau sudah berakhir',
       });
+    }
+
+    // H-2: menggeser batas idle sesi selama user masih aktif. Batas absolut
+    // (`decoded.exp`) tidak ikut bergeser, jadi sesi tetap punya umur maksimum
+    // yang tegas. Penulisan di-throttle di `computeSlidingSessionExpiry` supaya
+    // tidak menjadi satu UPDATE per request.
+    const slidingExpiry = computeSlidingSessionExpiry({
+      role: decoded.role,
+      now: Date.now(),
+      tokenExpMs: decoded.exp * 1000,
+      currentExpiresAt: session.expires_at,
+    });
+
+    if (slidingExpiry) {
+      try {
+        await prisma.session.update({
+          where: { token },
+          data: { expires_at: slidingExpiry },
+        });
+      } catch (renewError) {
+        // Perpanjangan bersifat best-effort. Sesi masih sah sampai
+        // `expires_at` yang tersimpan, jadi kegagalan menulis tidak boleh
+        // menggagalkan request yang sudah terautentikasi.
+        console.error('Gagal memperbarui masa berlaku sesi:', renewError.message);
+      }
     }
 
     // Menyimpan data hasil decode ke request agar dapat digunakan di controller
