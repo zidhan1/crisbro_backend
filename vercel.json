@@ -26,6 +26,14 @@
       "schedule": "10 12 * * *"
     },
     {
+      "path": "/api/cron/runchise-sync/customers",
+      "schedule": "15 12 * * *"
+    },
+    {
+      "path": "/api/cron/runchise-sync/customers-worker",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/cron/runchise-sync/sales-transactions",
       "schedule": "20 12 * * *"
     },

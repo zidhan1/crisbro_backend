@@ -1,5 +1,11 @@
 # C-1 (CRITICAL) — Master sync job menjalankan 6 tahap berat berurutan dalam satu invocation
 
+> Pembaruan: tahap customer kini dipisahkan menjadi enqueue harian
+> `/api/cron/runchise-sync/customers` (`15 12 * * *`) dan worker yang hanya
+> melanjutkan job aktif di `/api/cron/runchise-sync/customers-worker`
+> (`*/10 * * * *`). Worker tidak membuat full-import baru saat idle dan
+> keduanya inert saat `RUNCHISE_CUSTOMER_SYNC_ENABLED` bukan `true`.
+
 Status: **Fixed**
 File terdampak: `src/jobs/runchiseSyncCron.js`, `src/index.js`, `vercel.json`, `README.md`
 

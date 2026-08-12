@@ -1,5 +1,14 @@
 # Menjeda sinkronisasi customer Runchise (sementara)
 
+> Pembaruan: cron customer kini dipisahkan menjadi enqueue harian
+> `/api/cron/runchise-sync/customers` (`15 12 * * *`) dan worker cursor
+> `/api/cron/runchise-sync/customers-worker` (`*/10 * * * *`). Worker hanya
+> melanjutkan job aktif dan tidak membuat impor baru saat idle. Ketika
+> `RUNCHISE_CUSTOMER_SYNC_ENABLED` bukan `true`, kedua wrapper berhenti
+> sebelum telemetry/advisory lock dan service berhenti sebelum koneksi DB.
+> Untuk mengaktifkannya nanti cukup set flag ke `true` lalu redeploy; cron
+> tidak perlu ditambahkan kembali.
+
 Status: **dijeda** — impor customer baru dari Runchise dimatikan sampai
 kapasitas database ditambah. Aplikasi memakai data customer yang sudah
 tersimpan.

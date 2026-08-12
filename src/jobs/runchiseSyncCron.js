@@ -12,6 +12,10 @@ const {
   processCustomerImportSyncJob,
 } = require('../services/customerImportSyncService');
 const {
+  isCustomerSyncEnabled,
+  customerSyncDisabledResult,
+} = require('../lib/customerSyncToggle');
+const {
   createSalesTransactionSyncJob,
   processSalesTransactionSyncJob,
 } = require('../services/salesTransactionSyncService');
@@ -28,7 +32,8 @@ const {
 const DEFAULT_LOCATIONS_CRON = '0 12 * * *';
 const DEFAULT_BRANDS_CRON = '5 12 * * *';
 const DEFAULT_PRODUCTS_CRON = '10 12 * * *';
-const DEFAULT_CUSTOMERS_IMPORT_CRON = '15,45 12 * * *';
+const DEFAULT_CUSTOMERS_IMPORT_CRON = '15 12 * * *';
+const DEFAULT_CUSTOMERS_IMPORT_WORKER_CRON = '*/10 * * * *';
 const DEFAULT_SALES_CRON = '20 12 * * *';
 const DEFAULT_PROMOS_CRON = '25 12 * * *';
 const DEFAULT_POINTS_CRON = '30 12 * * *';
@@ -178,22 +183,37 @@ async function runCustomerSyncJob() {
   );
 }
 
-// Sinkronisasi customer terjadwal menggunakan worker berbasis cursor agar pemrosesan bertahap dapat dilanjutkan dari checkpoint terakhir tanpa berisiko timeout.
-async function runCustomerImportWorkerJob() {
+// Enqueue harian hanya membuat satu job bila tidak ada job aktif. Pemrosesan
+// dipisahkan agar cron worker yang sering tidak pernah memulai full import baru
+// saat antrean sedang idle.
+async function runCustomerImportEnqueueJob() {
+  if (!isCustomerSyncEnabled()) return customerSyncDisabledResult();
+
   return runLockedJob(
-    'customers-import',
+    'customers-import-enqueue',
     RUNCHISE_CRON_LOCK_IDS.customersImport,
     async () => {
-    const { created, job } = await createCustomerImportSyncJob({
-      source: 'cron',
-    });
-    if (created) {
-      console.log('[runchise-sync:customers-import] new job created', job?.id);
-    }
-
-    const result = await processCustomerImportSyncJob();
-    return result;
+      const result = await createCustomerImportSyncJob({ source: 'cron' });
+      if (result.created) {
+        console.log(
+          '[runchise-sync:customers-import-enqueue] new job created',
+          result.job?.id,
+        );
+      }
+      return result;
     },
+  );
+}
+
+// Worker berkala hanya melanjutkan job queued/running. Saat tidak ada job aktif
+// hasilnya `idle`; worker tidak membuat job pengganti secara otomatis.
+async function runCustomerImportWorkerJob() {
+  if (!isCustomerSyncEnabled()) return customerSyncDisabledResult();
+
+  return runLockedJob(
+    'customers-import-worker',
+    RUNCHISE_CRON_LOCK_IDS.customersImport,
+    processCustomerImportSyncJob,
   );
 }
 
@@ -231,6 +251,9 @@ function startRunchiseSyncCron() {
     customersImport:
       process.env.RUNCHISE_CUSTOMERS_IMPORT_SYNC_CRON ||
       DEFAULT_CUSTOMERS_IMPORT_CRON,
+    customersImportWorker:
+      process.env.RUNCHISE_CUSTOMERS_IMPORT_WORKER_SYNC_CRON ||
+      DEFAULT_CUSTOMERS_IMPORT_WORKER_CRON,
     sales: process.env.RUNCHISE_SALES_SYNC_CRON || DEFAULT_SALES_CRON,
     promos: process.env.RUNCHISE_PROMOS_SYNC_CRON || DEFAULT_PROMOS_CRON,
     points: process.env.RUNCHISE_POINTS_SYNC_CRON || DEFAULT_POINTS_CRON,
@@ -240,7 +263,8 @@ function startRunchiseSyncCron() {
     ['locations', runSyncLocationsJob],
     ['brands', runSyncBrandsJob],
     ['products', runSyncProductsJob],
-    ['customers-import', runCustomerImportWorkerJob],
+    ['customers-import-enqueue', runCustomerImportEnqueueJob],
+    ['customers-import-worker', runCustomerImportWorkerJob],
     ['sales', runSyncSalesTransactionReportsJob],
     ['promos', runSyncPromosJob],
     ['points', runCustomerPointsSyncJob],
@@ -285,13 +309,24 @@ function startRunchiseSyncCron() {
     });
   });
   tasks.customersImportTask = cron.schedule(schedules.customersImport, () => {
-    runCustomerImportWorkerJob().catch((error) => {
+    runCustomerImportEnqueueJob().catch((error) => {
       console.error(
-        '[runchise-sync:customers-import] scheduled run failed:',
+        '[runchise-sync:customers-import-enqueue] scheduled run failed:',
         error.message,
       );
     });
   });
+  tasks.customersImportWorkerTask = cron.schedule(
+    schedules.customersImportWorker,
+    () => {
+      runCustomerImportWorkerJob().catch((error) => {
+        console.error(
+          '[runchise-sync:customers-import-worker] scheduled run failed:',
+          error.message,
+        );
+      });
+    },
+  );
   tasks.salesTask = cron.schedule(schedules.sales, () => {
     runSyncSalesTransactionReportsJob().catch((error) => {
       console.error(
@@ -329,6 +364,7 @@ module.exports = {
   runSalesTransactionWorkerJob,
   runSyncPromosJob,
   runCustomerSyncJob,
+  runCustomerImportEnqueueJob,
   runCustomerImportWorkerJob,
   runCustomerPointsSyncJob,
 };

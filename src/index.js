@@ -45,6 +45,7 @@ const {
   runSyncSalesTransactionReportsJob,
   runSalesTransactionWorkerJob,
   runSyncPromosJob,
+  runCustomerImportEnqueueJob,
   runCustomerImportWorkerJob,
   runCustomerPointsSyncJob,
 } = require('./jobs/runchiseSyncCron');
@@ -690,16 +691,28 @@ app.post(
     processCustomerTimestampSyncJob({ maxPages: 5 }),
   ),
 );
-// Worker berbasis cursor memproses data secara bertahap dengan menyimpan progres sehingga setiap eksekusi dapat melanjutkan dari checkpoint terakhir dan aman dijalankan berulang oleh scheduler.
+// Enqueue harian membuat job baru hanya bila tidak ada job aktif.
 app.get(
   '/api/cron/runchise-sync/customers',
   requireCronSecret,
-  createCronSyncHandler('runchise-customers', runCustomerImportWorkerJob),
+  createCronSyncHandler('runchise-customers-enqueue', runCustomerImportEnqueueJob),
 );
 app.post(
   '/api/cron/runchise-sync/customers',
   requireCronSecret,
-  createCronSyncHandler('runchise-customers', runCustomerImportWorkerJob),
+  createCronSyncHandler('runchise-customers-enqueue', runCustomerImportEnqueueJob),
+);
+// Worker berbasis cursor hanya melanjutkan job aktif. Invocation saat idle tidak
+// membuat impor penuh baru, sehingga endpoint ini aman dijadwalkan lebih sering.
+app.get(
+  '/api/cron/runchise-sync/customers-worker',
+  requireCronSecret,
+  createCronSyncHandler('runchise-customers-worker', runCustomerImportWorkerJob),
+);
+app.post(
+  '/api/cron/runchise-sync/customers-worker',
+  requireCronSecret,
+  createCronSyncHandler('runchise-customers-worker', runCustomerImportWorkerJob),
 );
 app.get(
   '/api/cron/runchise-sync/points',
