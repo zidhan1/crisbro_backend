@@ -1,10 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../lib/prisma');
-const {
-  createResponseCache,
-  setSharedResponseCacheHeaders,
-} = require('../lib/responseCache');
+const { setSharedResponseCacheHeaders } = require('../lib/responseCache');
 const { respondWithServerError } = require('../lib/serverError');
 
 const {
@@ -15,8 +12,6 @@ const {
 const CATALOG_CACHE_TTL_MS = Number(
   process.env.CATALOG_RESPONSE_CACHE_TTL_MS || 5 * 60 * 1000,
 );
-const cache = createResponseCache(CATALOG_CACHE_TTL_MS, { maxEntries: 100 });
-
 function sendCacheableJson(res, value) {
   setSharedResponseCacheHeaders(res, CATALOG_CACHE_TTL_MS);
   return res.json(value);
@@ -51,13 +46,6 @@ async function getVisibleCrisbarProducts() {
 router.get('/', async (req, res) => {
   try {
     const { category_id } = req.query;
-    const cacheKey = `products:${category_id || 'all'}`;
-    const cached = cache.get(cacheKey);
-
-    if (cached) {
-      return sendCacheableJson(res, cached);
-    }
-
     let items = await getVisibleCrisbarProducts();
 
     if (category_id) {
@@ -77,7 +65,6 @@ router.get('/', async (req, res) => {
       sku: item.runchise_id ? `RUNCHISE-${item.runchise_id}` : null,
     }));
 
-    cache.set(cacheKey, result);
     sendCacheableJson(res, result);
   } catch (error) {
     respondWithServerError(res, error, 'productCatalogRoutes');
@@ -87,13 +74,6 @@ router.get('/', async (req, res) => {
 // GET /api/catalog/products/categories
 router.get('/categories', async (req, res) => {
   try {
-    const cacheKey = 'categories';
-    const cached = cache.get(cacheKey);
-
-    if (cached) {
-      return sendCacheableJson(res, cached);
-    }
-
     const items = await getVisibleCrisbarProducts();
     const categoryMap = new Map();
 
@@ -115,7 +95,6 @@ router.get('/categories', async (req, res) => {
       (a, b) => b.total_products - a.total_products,
     );
 
-    cache.set(cacheKey, categories);
     sendCacheableJson(res, categories);
   } catch (error) {
     respondWithServerError(res, error, 'productCatalogRoutes');

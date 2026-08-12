@@ -9,6 +9,7 @@ const { openApiSpec, renderSwaggerHtml } = require('./docs/swagger');
 const { safeStringEqual } = require('./lib/safeCompare');
 const { globalLimiter, pruneRateLimitCounters } = require('./lib/rateLimit');
 const { createCorsPolicy } = require('./lib/corsPolicy');
+const { setPrivateNoStoreHeaders } = require('./lib/responseCache');
 
 // Prisma ORM (database client)
 const prisma = require('./lib/prisma');
@@ -114,6 +115,10 @@ app.use(cors(corsPolicy.corsOptions));
 
 // Menetapkan batas ukuran request body secara eksplisit agar tetap konsisten dan tidak berubah mengikuti pembaruan Express.
 app.use(express.json({ limit: '100kb' }));
+
+// L-5: deny-by-default. Semua respons API private/no-store kecuali route GET
+// publik yang secara eksplisit memasang shared CDN cache sesaat sebelum send.
+app.use(setPrivateNoStoreHeaders);
 
 // Batas laju umum untuk seluruh API.
 app.use(globalLimiter);
