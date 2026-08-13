@@ -983,6 +983,12 @@ function parseInteger(value, fallback = 0) {
   return Number.isInteger(number) ? number : Math.trunc(number);
 }
 
+function parsePointSnapshotInteger(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) ? number : null;
+}
+
 // Mengembalikan ID Runchise yang valid tanpa fallback numerik agar sinkronisasi selalu mengarah ke outlet yang benar.
 function parseRunchiseId(value) {
   const number = Number(value);
@@ -1025,13 +1031,21 @@ function getOrderPurchaseAmount(sale) {
 // Menyimpan saldo poin dengan bulk upsert untuk mengurangi round-trip database dan meningkatkan efisiensi sinkronisasi.
 async function bulkUpsertCustomerPoints(rows) {
   let written = 0;
+  const validRows = rows.filter(
+    (row) =>
+      Number.isInteger(row.totalPoint) &&
+      Number.isInteger(row.availablePoint) &&
+      row.totalPoint >= 0 &&
+      row.availablePoint >= 0 &&
+      row.availablePoint <= row.totalPoint,
+  );
 
   for (
     let index = 0;
-    index < rows.length;
+    index < validRows.length;
     index += CUSTOMER_POINT_UPSERT_CHUNK
   ) {
-    const chunk = rows.slice(index, index + CUSTOMER_POINT_UPSERT_CHUNK);
+    const chunk = validRows.slice(index, index + CUSTOMER_POINT_UPSERT_CHUNK);
     const tuples = Prisma.join(
       chunk.map(
         (row) =>
@@ -1062,6 +1076,26 @@ async function bulkUpsertCustomerPoints(rows) {
         "runchise_total_point" = EXCLUDED."runchise_total_point",
         "runchise_available_point" = EXCLUDED."runchise_available_point",
         "updated_at" = CURRENT_TIMESTAMP
+      WHERE
+        "CustomerPoint"."total_point" +
+          (EXCLUDED."runchise_total_point" - COALESCE(
+            "CustomerPoint"."runchise_total_point",
+            EXCLUDED."runchise_total_point"
+          )) >= 0
+        AND "CustomerPoint"."available_point" +
+          (EXCLUDED."runchise_available_point" - COALESCE(
+            "CustomerPoint"."runchise_available_point",
+            EXCLUDED."runchise_available_point"
+          )) >= 0
+        AND "CustomerPoint"."available_point" +
+          (EXCLUDED."runchise_available_point" - COALESCE(
+            "CustomerPoint"."runchise_available_point",
+            EXCLUDED."runchise_available_point"
+          )) <= "CustomerPoint"."total_point" +
+          (EXCLUDED."runchise_total_point" - COALESCE(
+            "CustomerPoint"."runchise_total_point",
+            EXCLUDED."runchise_total_point"
+          ))
     `;
   }
 
@@ -1122,8 +1156,8 @@ async function syncCustomerPoints({ locationId = null } = {}) {
         // menerima deltanya agar mutasi lokal tidak terhapus saat sync.
         pointsByCustomerId.set(localId, {
           customerId: localId,
-          totalPoint: parseInteger(c.total_point, 0),
-          availablePoint: parseInteger(c.available_point, 0),
+          totalPoint: parsePointSnapshotInteger(c.total_point),
+          availablePoint: parsePointSnapshotInteger(c.available_point),
         });
       }
 
@@ -1138,6 +1172,7 @@ async function syncCustomerPoints({ locationId = null } = {}) {
   return {
     scope: targetLocationId ? `location:${targetLocationId}` : 'all-locations',
     synced,
+    rejected_invalid_balance: rows.length - synced,
     matched: rows.length,
     unmatched,
     total: totalScanned,
@@ -1147,9 +1182,19 @@ async function syncCustomerPoints({ locationId = null } = {}) {
 
 // Sinkronisasi poin menggunakan data staging untuk mempercepat proses tanpa request API, sekaligus memverifikasi konsistensi poin customer antar outlet.
 async function syncCustomerPointsFromStaging() {
-  const [divergence] = await prisma.$queryRaw`
-    SELECT COUNT(*)::int AS divergent_customers
-    FROM (
+  const [diagnostics] = await prisma.$queryRaw`
+    WITH source_rows AS (
+      SELECT DISTINCT ON (c."id")
+        c."id",
+        rlc."total_point" AS total_point,
+        rlc."available_point" AS available_point
+      FROM "Customer" c
+      JOIN "RunchiseLocationCustomer" rlc
+        ON rlc."runchise_customer_id" = c."runchise_id"
+      WHERE c."runchise_id" IS NOT NULL
+      ORDER BY c."id", rlc."updated_at" DESC NULLS LAST,
+        rlc."source_location_id" DESC
+    ), divergent AS (
       SELECT c."id"
       FROM "Customer" c
       JOIN "RunchiseLocationCustomer" rlc
@@ -1160,7 +1205,18 @@ async function syncCustomerPointsFromStaging() {
                <> MAX(COALESCE(rlc."total_point", 0))
           OR MIN(COALESCE(rlc."available_point", 0))
                <> MAX(COALESCE(rlc."available_point", 0))
-    ) divergent
+    )
+    SELECT
+      (SELECT COUNT(*)::int FROM divergent) AS divergent_customers,
+      COUNT(*)::int AS source_customers,
+      COUNT(*) FILTER (
+        WHERE total_point IS NULL
+           OR available_point IS NULL
+           OR total_point < 0
+           OR available_point < 0
+           OR available_point > total_point
+      )::int AS invalid_source_customers
+    FROM source_rows
   `;
 
 // Menggunakan `DISTINCT ON` untuk mengambil snapshot terbaru setiap customer sebelum proses insert atau update.
@@ -1168,8 +1224,8 @@ async function syncCustomerPointsFromStaging() {
     WITH latest_points AS (
       SELECT DISTINCT ON (c."id")
         c."id" AS customer_id,
-        COALESCE(rlc."total_point", 0) AS total_point,
-        COALESCE(rlc."available_point", 0) AS available_point
+        rlc."total_point" AS total_point,
+        rlc."available_point" AS available_point
       FROM "Customer" c
       JOIN "RunchiseLocationCustomer" rlc
         ON rlc."runchise_customer_id" = c."runchise_id"
@@ -1193,6 +1249,11 @@ async function syncCustomerPointsFromStaging() {
       ${DEFAULT_NEXT_REWARD_THRESHOLD}::int,
       CURRENT_TIMESTAMP
     FROM latest_points
+    WHERE "total_point" IS NOT NULL
+      AND "available_point" IS NOT NULL
+      AND "total_point" >= 0
+      AND "available_point" >= 0
+      AND "available_point" <= "total_point"
     ON CONFLICT ("customer_id") DO UPDATE SET
       "total_point" = "CustomerPoint"."total_point" +
         (EXCLUDED."runchise_total_point" - COALESCE(
@@ -1207,13 +1268,36 @@ async function syncCustomerPointsFromStaging() {
       "runchise_total_point" = EXCLUDED."runchise_total_point",
       "runchise_available_point" = EXCLUDED."runchise_available_point",
       "updated_at" = CURRENT_TIMESTAMP
+    WHERE
+      "CustomerPoint"."total_point" +
+        (EXCLUDED."runchise_total_point" - COALESCE(
+          "CustomerPoint"."runchise_total_point",
+          EXCLUDED."runchise_total_point"
+        )) >= 0
+      AND "CustomerPoint"."available_point" +
+        (EXCLUDED."runchise_available_point" - COALESCE(
+          "CustomerPoint"."runchise_available_point",
+          EXCLUDED."runchise_available_point"
+        )) >= 0
+      AND "CustomerPoint"."available_point" +
+        (EXCLUDED."runchise_available_point" - COALESCE(
+          "CustomerPoint"."runchise_available_point",
+          EXCLUDED."runchise_available_point"
+        )) <= "CustomerPoint"."total_point" +
+        (EXCLUDED."runchise_total_point" - COALESCE(
+          "CustomerPoint"."runchise_total_point",
+          EXCLUDED."runchise_total_point"
+        ))
   `;
 
   return {
     scope: 'all-locations',
     source: 'staging',
     synced,
-    divergent_customers: divergence?.divergent_customers ?? 0,
+    divergent_customers: diagnostics?.divergent_customers ?? 0,
+    rejected_invalid_balance:
+      (diagnostics?.source_customers ?? 0) - synced,
+    invalid_source_customers: diagnostics?.invalid_source_customers ?? 0,
   };
 }
 
@@ -2309,6 +2393,7 @@ module.exports = {
   syncProducts,
   syncCustomerPoints,
   syncCustomerPointsFromStaging,
+  bulkUpsertCustomerPoints,
   inspectCustomerPointSources,
   syncSalesTransactionReports,
   syncBrands,

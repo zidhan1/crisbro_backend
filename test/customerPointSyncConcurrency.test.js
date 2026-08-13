@@ -29,13 +29,17 @@ test('M-6: kedua jalur sync menyimpan snapshot Runchise dan menerapkan delta, bu
       .length,
     2,
   );
-  assert.equal(
-    (syncSource.match(/"CustomerPoint"\."available_point" \+/g) || []).length,
-    2,
+  assert.ok(
+    (syncSource.match(/"CustomerPoint"\."available_point" \+/g) || []).length >= 2,
   );
   assert.doesNotMatch(
     syncSource,
     /"available_point"\s*=\s*EXCLUDED\."available_point"/,
+  );
+  assert.equal(
+    (syncSource.match(/WHERE\s+[\s\S]*?"CustomerPoint"\."total_point" \+/g) || []).length >= 2,
+    true,
+    'kedua upsert wajib fail-closed bila hasil rebase melanggar invariant',
   );
 });
 

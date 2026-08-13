@@ -28,6 +28,7 @@ const { deleteAdminCustomer } = require('../src/controllers/adminLoyaltyControll
 const {
   bulkWriteSalesTransactionReports,
   syncSalesTransactionReportsPage,
+  bulkUpsertCustomerPoints,
 } = require('../src/services/syncService');
 const {
   SALES_SYNC_WORKER_LOCK_ID,
@@ -168,6 +169,98 @@ test('dua request claim bersamaan hanya mendebit satu kali', async () => {
   ]);
   assert.equal(point.available_point, 350);
   assert.equal(historyCount, 1);
+});
+
+test('M-6: sync nyata menunggu row lock dan mempertahankan debit redemption', async () => {
+  const fixture = await baseCustomer();
+  await prisma.customerPoint.create({
+    data: {
+      customer_id: fixture.customer.id,
+      total_point: 500,
+      available_point: 500,
+      runchise_total_point: 500,
+      runchise_available_point: 500,
+    },
+  });
+
+  let locked;
+  const lockedPromise = new Promise((resolve) => { locked = resolve; });
+  let release;
+  const releasePromise = new Promise((resolve) => { release = resolve; });
+  const debit = prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "CustomerPoint" WHERE customer_id = ${fixture.customer.id} FOR UPDATE`;
+    await tx.customerPoint.update({
+      where: { customer_id: fixture.customer.id },
+      data: { available_point: { decrement: 150 } },
+    });
+    locked();
+    await releasePromise;
+  });
+
+  await lockedPromise;
+  let syncFinished = false;
+  const sync = bulkUpsertCustomerPoints([{
+    customerId: fixture.customer.id,
+    totalPoint: 525,
+    availablePoint: 525,
+  }]).then((value) => { syncFinished = true; return value; });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(syncFinished, false, 'sync harus menunggu mutasi lokal yang memegang row lock');
+  release();
+  await Promise.all([debit, sync]);
+
+  const point = await prisma.customerPoint.findUnique({
+    where: { customer_id: fixture.customer.id },
+  });
+  assert.equal(point.total_point, 525);
+  assert.equal(point.available_point, 375);
+  assert.equal(point.runchise_available_point, 525);
+});
+
+test('M-6: constraint database menolak seluruh bentuk saldo CustomerPoint invalid', async () => {
+  const fixture = await baseCustomer();
+  const invalidRows = [
+    { total: -1, available: 0 },
+    { total: 10, available: -1 },
+    { total: 10, available: 11 },
+  ];
+  for (const row of invalidRows) {
+    await assert.rejects(
+      prisma.customerPoint.create({
+        data: {
+          customer_id: fixture.customer.id,
+          total_point: row.total,
+          available_point: row.available,
+        },
+      }),
+    );
+  }
+});
+
+test('M-6: snapshot invalid ditolak tanpa mengubah saldo efektif atau baseline', async () => {
+  const fixture = await baseCustomer();
+  await prisma.customerPoint.create({
+    data: {
+      customer_id: fixture.customer.id,
+      total_point: 500,
+      available_point: 350,
+      runchise_total_point: 500,
+      runchise_available_point: 500,
+    },
+  });
+  const written = await bulkUpsertCustomerPoints([{
+    customerId: fixture.customer.id,
+    totalPoint: 100,
+    availablePoint: 200,
+  }]);
+  assert.equal(written, 0);
+  const point = await prisma.customerPoint.findUnique({
+    where: { customer_id: fixture.customer.id },
+  });
+  assert.deepEqual(
+    [point.total_point, point.available_point, point.runchise_total_point, point.runchise_available_point],
+    [500, 350, 500, 500],
+  );
 });
 
 test('advisory lock saling mengecualikan antar-koneksi PostgreSQL', async () => {

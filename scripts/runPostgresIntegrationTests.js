@@ -8,6 +8,7 @@ const executables = {
   initdb: path.join(pgBin, process.platform === 'win32' ? 'initdb.exe' : 'initdb'),
   pgCtl: path.join(pgBin, process.platform === 'win32' ? 'pg_ctl.exe' : 'pg_ctl'),
   createdb: path.join(pgBin, process.platform === 'win32' ? 'createdb.exe' : 'createdb'),
+  psql: path.join(pgBin, process.platform === 'win32' ? 'psql.exe' : 'psql'),
 };
 for (const [name, executable] of Object.entries(executables)) {
   if (!fs.existsSync(executable)) throw new Error(`${name} tidak ditemukan: ${executable}`);
@@ -32,15 +33,24 @@ try {
   run(executables.pgCtl, ['-D', data, '-o', `-p ${port} -h 127.0.0.1`, '-l', log, 'start']);
   started = true;
   run(executables.createdb, ['-h', '127.0.0.1', '-p', String(port), '-U', 'postgres', database]);
+  // Supabase provides these roles. Create non-login stand-ins so its
+  // grant/revoke migrations can also be replayed on disposable PostgreSQL.
+  run(executables.psql, [
+    '-h', '127.0.0.1', '-p', String(port), '-U', 'postgres', '-d', database,
+    '-v', 'ON_ERROR_STOP=1',
+    '-c', 'CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN;',
+  ]);
   const env = {
     ...process.env,
     LOAD_TEST_DATABASE_URL: url,
     DATABASE_URL: url,
     DIRECT_URL: url,
   };
+  // Run the real migration chain so integration tests exercise database-only
+  // guarantees (CHECK constraints, repair SQL), not merely the Prisma model.
   run(process.execPath, [
     path.join('node_modules', 'prisma', 'build', 'index.js'),
-    'db', 'push', '--config', 'prisma.load-test.config.ts', '--skip-generate',
+    'migrate', 'deploy', '--config', 'prisma.load-test.config.ts',
   ], { env });
   run(process.execPath, ['--test', '--test-concurrency=1', 'test-integration/*.test.js'], { env });
 } finally {

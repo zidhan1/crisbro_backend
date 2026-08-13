@@ -467,7 +467,7 @@ function createRedeemAdminControllers({
             INSERT INTO "CustomerPoint" (
               "customer_id", "total_point", "available_point",
               "next_reward_threshold", "updated_at"
-            ) VALUES (${customerId}, 0, 0, ${getDefaultRewardThreshold()}, CURRENT_TIMESTAMP)
+            ) VALUES (${customerId}, ${pointsSpent}, 0, ${getDefaultRewardThreshold()}, CURRENT_TIMESTAMP)
             ON CONFLICT ("customer_id") DO NOTHING
           `;
           const [lockedPoint] = await tx.$queryRaw`
