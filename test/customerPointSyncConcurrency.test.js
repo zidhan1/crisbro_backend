@@ -7,17 +7,6 @@ const syncSource = fs.readFileSync(
   path.join(__dirname, '..', 'src', 'services', 'syncService.js'),
   'utf8',
 );
-const adminSource = fs.readFileSync(
-  path.join(
-    __dirname,
-    '..',
-    'src',
-    'controllers',
-    'adminLoyalty',
-    'adminCustomerController.js',
-  ),
-  'utf8',
-);
 const importerSource = fs.readFileSync(
   path.join(__dirname, '..', 'scripts', 'importSelectedCustomers.js'),
   'utf8',
@@ -51,15 +40,6 @@ test('M-6: rumus rebase mempertahankan koreksi admin dan debit redemption', () =
   assert.equal(rebase(450, 500, 525), 475);
   // Row lama dari sebelum migration tidak punya baseline: sync pertama aman.
   assert.equal(rebase(350, null, 900), 350);
-});
-
-test('M-6: jalur admin membuat row sebelum SELECT FOR UPDATE', () => {
-  const insertAt = adminSource.indexOf('ON CONFLICT ("customer_id") DO NOTHING');
-  const lockAt = adminSource.indexOf(
-    'SELECT total_point, available_point FROM "CustomerPoint"',
-  );
-  assert.ok(insertAt >= 0);
-  assert.ok(lockAt > insertAt);
 });
 
 test('M-6: importer customer yang rerunnable juga tidak meng-overwrite saldo efektif', () => {

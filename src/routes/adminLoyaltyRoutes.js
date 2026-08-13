@@ -17,7 +17,6 @@ const {
   validateCustomerList,
   validateCustomerUpdate,
   validateIdParam,
-  validateLoyaltyAdjustment,
   validateLoyaltySummary,
   validateRewardCreate,
   validateRewardList,
@@ -36,7 +35,6 @@ const {
   listCustomerSalesTransactionReportOutlets,
   createAdminCustomer,
   updateAdminCustomer,
-  adjustCustomerLoyalty,
   resendCustomerActivation,
   retryCustomerRunchiseSync,
   deleteAdminCustomer,
@@ -77,12 +75,6 @@ router.get(
 );
 router.post('/customers', adminOrMarketing, validateCustomerCreate, createAdminCustomer);
 router.put('/customers/:id', adminOrMarketing, validateCustomerUpdate, updateAdminCustomer);
-router.post(
-  '/customers/:id/loyalty-adjustment',
-  adminOnly,
-  validateLoyaltyAdjustment,
-  adjustCustomerLoyalty,
-);
 // Urutan limiter dipertahankan seperti semula (limiter tetap gerbang pertama
 // setelah cek role); validasi param disisipkan sesudahnya agar kuota anti-spam
 // per customer tetap dihitung persis seperti desain L-4.

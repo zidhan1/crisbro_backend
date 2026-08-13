@@ -18,10 +18,8 @@ const {
   parseCustomerStatus,
   parseDateBoundary,
   parseLocationIds,
-  parseNonNegativeInt,
   parseOptionalDate,
   parseOptionalEmail,
-  parseOptionalNumber,
   parseOptionalString,
   parsePositiveInt,
   parseRequiredString,
@@ -219,6 +217,16 @@ async function listAdminCustomers(req, res) {
 
 async function createAdminCustomer(req, res) {
   try {
+    if (
+      ['balance', 'total_point', 'available_point'].some(
+        (field) => req.body[field] !== undefined,
+      )
+    ) {
+      return badRequest(
+        res,
+        'Saldo dan poin dikelola otomatis dan tidak dapat diubah admin',
+      );
+    }
     const name = parseRequiredString(req.body.name, 'name', 120);
     const phone_number = normalizePhone(req.body.phone_number);
     const email = parseOptionalEmail(req.body.email);
@@ -357,6 +365,16 @@ async function createAdminCustomer(req, res) {
 
 async function updateAdminCustomer(req, res) {
   try {
+    if (
+      ['balance', 'total_point', 'available_point'].some(
+        (field) => req.body[field] !== undefined,
+      )
+    ) {
+      return badRequest(
+        res,
+        'Saldo dan poin dikelola otomatis dan tidak dapat diubah admin',
+      );
+    }
     const id = parsePositiveInt(req.params.id, 'id');
     const beforeCustomer = await getCustomerAuditSnapshot(id);
     const data = {};
@@ -396,37 +414,6 @@ async function updateAdminCustomer(req, res) {
       data.gender = parseCustomerGender(req.body.gender);
     if (req.body.status !== undefined)
       data.status = parseCustomerStatus(req.body.status);
-    // H-1: Field saldo poin diabaikan pada endpoint ini agar perubahan hanya dapat dilakukan melalui mekanisme khusus yang tervalidasi dan tercatat, tanpa mengganggu pembaruan profil biasa.
-    const blockedLoyaltyMutationAttempt = {};
-    if (
-      req.body.balance !== undefined &&
-      Number(req.body.balance) !== Number(beforeCustomer?.balance ?? 0)
-    ) {
-      blockedLoyaltyMutationAttempt.balance = {
-        attempted: req.body.balance,
-        kept: beforeCustomer?.balance ?? 0,
-      };
-    }
-    if (
-      req.body.total_point !== undefined &&
-      Number(req.body.total_point) !==
-        Number(beforeCustomer?.customer_point?.total_point ?? 0)
-    ) {
-      blockedLoyaltyMutationAttempt.total_point = {
-        attempted: req.body.total_point,
-        kept: beforeCustomer?.customer_point?.total_point ?? 0,
-      };
-    }
-    if (
-      req.body.available_point !== undefined &&
-      Number(req.body.available_point) !==
-        Number(beforeCustomer?.customer_point?.available_point ?? 0)
-    ) {
-      blockedLoyaltyMutationAttempt.available_point = {
-        attempted: req.body.available_point,
-        kept: beforeCustomer?.customer_point?.available_point ?? 0,
-      };
-    }
     if (req.body.brand_id !== undefined)
       data.brand_id = parsePositiveInt(req.body.brand_id, 'brand_id');
     if (req.body.owner_location_id !== undefined) {
@@ -526,13 +513,6 @@ async function updateAdminCustomer(req, res) {
       locationIdsTouched: req.body.location_ids !== undefined,
     });
 
-    if (Object.keys(blockedLoyaltyMutationAttempt).length > 0) {
-      console.warn(
-        `[admin-loyalty] blocked point/balance mutation attempt via profile update: customer_id=${id}, actor_user_id=${req.user.id}, actor_role=${req.user.role}`,
-        blockedLoyaltyMutationAttempt,
-      );
-    }
-
     const runchiseSync = await syncCustomerToRunchise(customer.id);
     const syncedCustomer = await prisma.customer.findUnique({
       where: { id: customer.id },
@@ -563,9 +543,6 @@ async function updateAdminCustomer(req, res) {
         changed_fields: changedFields,
         runchise_sync: runchiseSync,
         activation_email: activationEmail,
-        ...(Object.keys(blockedLoyaltyMutationAttempt).length > 0 && {
-          blocked_loyalty_mutation_attempt: blockedLoyaltyMutationAttempt,
-        }),
       },
     });
 
@@ -575,170 +552,6 @@ async function updateAdminCustomer(req, res) {
       activation_email: activationEmail,
     });
   } catch (error) {
-    handleError(res, error);
-  }
-}
-
-// H-1: Perubahan saldo poin hanya dapat dilakukan melalui endpoint khusus admin yang tervalidasi, mewajibkan alasan, menjaga konsistensi data, dan mencatat seluruh riwayat perubahan.
-
-// M-6: Menggunakan locking dalam transaksi agar penyesuaian saldo poin tetap konsisten dan terhindar dari race condition pada permintaan bersamaan.
-async function adjustCustomerLoyalty(req, res) {
-  try {
-    const id = parsePositiveInt(req.params.id, 'id');
-    const reason = parseRequiredString(req.body.reason, 'reason', 500);
-
-    const hasTotalPoint = req.body.total_point !== undefined;
-    const hasAvailablePoint = req.body.available_point !== undefined;
-    const hasBalance = req.body.balance !== undefined;
-
-    if (!hasTotalPoint && !hasAvailablePoint && !hasBalance) {
-      return badRequest(
-        res,
-        'Isi minimal salah satu dari total_point, available_point, atau balance',
-      );
-    }
-
-    const nextTotalPoint = hasTotalPoint
-      ? parseNonNegativeInt(req.body.total_point, 'total_point')
-      : undefined;
-    const nextAvailablePoint = hasAvailablePoint
-      ? parseNonNegativeInt(req.body.available_point, 'available_point')
-      : undefined;
-    const nextBalance = hasBalance
-      ? (parseOptionalNumber(req.body.balance, 'balance') ?? 0)
-      : undefined;
-
-    // Snapshot ini hanya digunakan untuk audit log, sedangkan validasi dilakukan ulang di dalam transaksi menggunakan data terbaru yang telah dikunci.
-    const beforeCustomer = await getCustomerAuditSnapshot(id);
-    if (!beforeCustomer) {
-      return res.status(404).json({ message: 'Customer tidak ditemukan' });
-    }
-
-    const { customer, currentTotalPoint, currentAvailablePoint } =
-      await prisma.$transaction(async (tx) => {
-        // Mengunci baris Customer selama transaksi untuk memastikan data masih valid dan mencegah perubahan bersamaan.
-        const [customerRow] = await tx.$queryRaw`
-          SELECT id FROM "Customer" WHERE id = ${id} FOR UPDATE
-        `;
-        if (!customerRow) {
-          throw Object.assign(new Error('Customer tidak ditemukan'), {
-            code: 'P2025',
-          });
-        }
-
-        let lockedTotalPoint = 0;
-        let lockedAvailablePoint = 0;
-
-        if (hasTotalPoint || hasAvailablePoint) {
-          // Ensure there is a physical row to lock. SELECT FOR UPDATE cannot
-          // lock an absent row, so concurrent first-time writers need this
-          // idempotent insert before taking the row lock.
-          await tx.$executeRaw`
-            INSERT INTO "CustomerPoint" (
-              "customer_id", "total_point", "available_point",
-              "next_reward_threshold", "updated_at"
-            ) VALUES (${id}, 0, 0, ${getDefaultRewardThreshold()}, CURRENT_TIMESTAMP)
-            ON CONFLICT ("customer_id") DO NOTHING
-          `;
-          // M-6: Mengunci baris selama transaksi agar permintaan bersamaan selalu menggunakan data terbaru dan mencegah race condition.
-          const [pointRow] = await tx.$queryRaw`
-            SELECT total_point, available_point FROM "CustomerPoint"
-            WHERE customer_id = ${id} FOR UPDATE
-          `;
-          lockedTotalPoint = pointRow?.total_point ?? 0;
-          lockedAvailablePoint = pointRow?.available_point ?? 0;
-
-          const effectiveTotalPoint = nextTotalPoint ?? lockedTotalPoint;
-          const effectiveAvailablePoint =
-            nextAvailablePoint ?? lockedAvailablePoint;
-
-          if (effectiveAvailablePoint > effectiveTotalPoint) {
-            throw Object.assign(
-              new Error('available_point tidak boleh melebihi total_point'),
-              { code: 'INVALID_INVARIANT' },
-            );
-          }
-
-          await tx.customerPoint.upsert({
-            where: { customer_id: id },
-            update: {
-              ...(hasTotalPoint && { total_point: nextTotalPoint }),
-              ...(hasAvailablePoint && {
-                available_point: nextAvailablePoint,
-              }),
-            },
-            create: {
-              customer_id: id,
-              total_point: effectiveTotalPoint,
-              available_point: effectiveAvailablePoint,
-              next_reward_threshold: getDefaultRewardThreshold(),
-            },
-          });
-
-          // Mencatat setiap penyesuaian poin sebagai transaksi terpisah agar riwayat koreksi manual tetap terlacak dan dapat dibedakan dari transaksi POS.
-          const pointsChange = effectiveAvailablePoint - lockedAvailablePoint;
-          if (pointsChange !== 0) {
-            await tx.pointHistory.create({
-              data: {
-                customer_id: id,
-                points_change: pointsChange,
-                type: 'admin_adjustment',
-                description: reason,
-              },
-            });
-          }
-        }
-
-        if (hasBalance) {
-          await tx.customer.update({
-            where: { id },
-            data: { balance: nextBalance, last_updated_by_id: req.user.id },
-          });
-        }
-
-        const updatedCustomer = await tx.customer.findUnique({
-          where: { id },
-          include: getAdminCustomerInclude(),
-        });
-
-        return {
-          customer: updatedCustomer,
-          currentTotalPoint: lockedTotalPoint,
-          currentAvailablePoint: lockedAvailablePoint,
-        };
-      });
-
-    await recordAdminActivity({
-      req,
-      action: 'adjust_customer_loyalty',
-      entityType: 'customer',
-      entityId: id,
-      before: beforeCustomer,
-      after: customer,
-      metadata: {
-        reason,
-        changes: {
-          ...(hasTotalPoint && {
-            total_point: { before: currentTotalPoint, after: nextTotalPoint },
-          }),
-          ...(hasAvailablePoint && {
-            available_point: {
-              before: currentAvailablePoint,
-              after: nextAvailablePoint,
-            },
-          }),
-          ...(hasBalance && {
-            balance: { before: beforeCustomer.balance, after: nextBalance },
-          }),
-        },
-      },
-    });
-
-    res.json(customer);
-  } catch (error) {
-    if (error.code === 'INVALID_INVARIANT') {
-      return badRequest(res, error.message);
-    }
     handleError(res, error);
   }
 }
@@ -895,7 +708,6 @@ module.exports = {
   listAdminCustomers,
   createAdminCustomer,
   updateAdminCustomer,
-  adjustCustomerLoyalty,
   resendCustomerActivation,
   retryCustomerRunchiseSync,
   deleteAdminCustomer,

@@ -8,7 +8,6 @@ const {
   validateCustomerList,
   validateCustomerUpdate,
   validateIdParam,
-  validateLoyaltyAdjustment,
   validateLoyaltySummary,
   validateRedeemItemCreate,
   validateRedeemItemId,
@@ -122,54 +121,6 @@ test('L-7: query list yang wajar tetap diteruskan apa adanya', () => {
     },
   });
   assert.equal(customers.nextCalled, true);
-});
-
-// H-1 mensyaratkan endpoint profil TETAP menerima field poin/saldo lalu
-// mengabaikannya sambil mencatat percobaannya ke audit log. Kalau boundary
-// menolaknya, perilaku yang dirancang H-1 ikut mati -- karena itu dikunci test.
-test('L-7 tidak mematikan H-1: field poin/saldo tetap lolos boundary customer', () => {
-  const payload = {
-    name: 'Budi',
-    phone_number: '81234567890',
-    email: 'budi@example.com',
-    brand_id: 1,
-    owner_location_id: 7,
-    location_ids: [7],
-    balance: 15000,
-    total_point: 900,
-    available_point: 250,
-  };
-
-  const create = run(validateCustomerCreate, { body: payload });
-  assert.equal(create.nextCalled, true);
-
-  const update = run(validateCustomerUpdate, {
-    params: { id: '12' },
-    body: payload,
-  });
-  assert.equal(update.nextCalled, true);
-});
-
-test('L-7: mutasi poin lewat endpoint khusus menolak field liar dan reason kosong', () => {
-  const valid = run(validateLoyaltyAdjustment, {
-    params: { id: '12' },
-    body: { reason: 'koreksi manual kasir', available_point: 100 },
-  });
-  assert.equal(valid.nextCalled, true);
-
-  const wildField = run(validateLoyaltyAdjustment, {
-    params: { id: '12' },
-    body: { reason: 'koreksi', role: 'admin' },
-  });
-  assert.equal(wildField.nextCalled, false);
-  assert.equal(wildField.res.statusCode, 400);
-
-  const negativePoint = run(validateLoyaltyAdjustment, {
-    params: { id: '12' },
-    body: { reason: 'koreksi', available_point: -1 },
-  });
-  assert.equal(negativePoint.nextCalled, false);
-  assert.equal(negativePoint.res.statusCode, 400);
 });
 
 // updateAdminUser punya guard field liar sendiri beserta pesannya

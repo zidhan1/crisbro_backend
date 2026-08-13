@@ -25,10 +25,6 @@ const optionalNonNegativeInt = z.preprocess(
   blankToUndefined,
   z.coerce.number().int().nonnegative().optional(),
 );
-const optionalNonNegativeNumber = z.preprocess(
-  blankToUndefined,
-  z.coerce.number().nonnegative().optional(),
-);
 const optionalDate = z.preprocess(
   blankToUndefined,
   z.coerce.date().optional(),
@@ -124,10 +120,10 @@ const customerListQuerySchema = z
   })
   .passthrough();
 
-// H-1: `balance`, `total_point`, dan `available_point` MASIH dikirim frontend
-// dan sengaja diabaikan controller (percobaan perubahannya dicatat ke audit
-// log). Field-field itu karena itu harus tetap diterima di boundary — menolaknya
-// di sini akan mematikan perilaku "abaikan + catat" yang dirancang di H-1.
+// Catatan kebijakan:
+// Field saldo dan poin tidak diterima sebagai bagian dari pembaruan profil.
+// Saldo dan poin sengaja tidak termasuk field profil yang dapat ditulis admin.
+// Controller juga menolaknya secara eksplisit untuk melindungi klien lama.
 const customerWritableBodyShape = {
   name: z.string().max(120).optional(),
   email: optionalNullableString(255),
@@ -146,9 +142,6 @@ const customerWritableBodyShape = {
   brand_id: optionalPositiveInt,
   owner_location_id: optionalPositiveInt,
   location_ids: z.array(z.coerce.number()).optional(),
-  balance: optionalNonNegativeNumber,
-  total_point: optionalNonNegativeInt,
-  available_point: optionalNonNegativeInt,
 };
 
 const customerCreateBodySchema = z
@@ -157,17 +150,6 @@ const customerCreateBodySchema = z
 const customerUpdateBodySchema = z
   .object(customerWritableBodyShape)
   .passthrough();
-
-// Endpoint khusus H-1/M-6 untuk mutasi saldo poin. Tidak ada pemanggil selain
-// admin console/tooling, jadi field liar ditolak tegas di boundary.
-const loyaltyAdjustmentBodySchema = z
-  .object({
-    reason: z.string().max(500),
-    total_point: optionalNonNegativeInt,
-    available_point: optionalNonNegativeInt,
-    balance: optionalNonNegativeNumber,
-  })
-  .strict();
 
 const salesTransactionReportQuerySchema = z
   .object({
@@ -325,10 +307,6 @@ module.exports = {
   validateCustomerUpdate: validateRequest({
     params: positiveIdParamsSchema,
     body: customerUpdateBodySchema,
-  }),
-  validateLoyaltyAdjustment: validateRequest({
-    params: positiveIdParamsSchema,
-    body: loyaltyAdjustmentBodySchema,
   }),
   validateSalesTransactionReportList: validateRequest({
     query: salesTransactionReportQuerySchema,
