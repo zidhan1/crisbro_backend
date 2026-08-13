@@ -17,6 +17,7 @@ const assert = require('node:assert/strict');
 const distributedCronLock = require('../src/lib/distributedCronLock');
 const syncService = require('../src/services/syncService');
 const telemetryService = require('../src/services/syncJobTelemetryService');
+const catalogJobService = require('../src/services/catalogSyncJobService');
 
 telemetryService.createSyncJobTelemetry = () => ({
   enqueue: async () => 1,
@@ -39,6 +40,13 @@ distributedCronLock.withDistributedCronLock = async ({ jobName, lockId, run }) =
 };
 
 const stubs = {};
+let activeCatalogKind = null;
+catalogJobService.createCatalogSyncJob = async (kind) => {
+  activeCatalogKind = kind;
+  return { created: true, job: { kind } };
+};
+catalogJobService.processCatalogSyncJobs = async () =>
+  stubs[`sync${activeCatalogKind[0].toUpperCase()}${activeCatalogKind.slice(1)}`]();
 for (const name of [
   'syncProducts',
   'syncBrands',
@@ -157,7 +165,10 @@ for (const stage of stageCases) {
     // Selesaikan cron, pastikan lock dilepas dan hasil aslinya tetap utuh.
     deferred.resolve();
     const cronResult = await cronPromise;
-    assert.deepEqual(cronResult, { synced: 1 });
+    assert.deepEqual(
+      cronResult,
+      stage.label === 'points' ? { synced: 1 } : { created: true, synced: 1 },
+    );
     assert.equal(heldLocks.has(stage.lockId), false);
   });
 }

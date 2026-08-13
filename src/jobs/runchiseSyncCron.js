@@ -2,10 +2,6 @@ const cron = require('node-cron');
 const {
   syncCustomers,
   syncCustomerPointsFromStaging,
-  syncProducts,
-  syncBrands,
-  syncLocations,
-  syncPromos,
 } = require('../services/syncService');
 const {
   createCustomerImportSyncJob,
@@ -27,6 +23,10 @@ const {
   createSyncJobTelemetry,
   memorySnapshot,
 } = require('../services/syncJobTelemetryService');
+const {
+  createCatalogSyncJob,
+  processCatalogSyncJobs,
+} = require('../services/catalogSyncJobService');
 
 // C-1: Memecah master sync menjadi job terpisah dengan cron, mutex, checkpoint, dan worker berbasis cursor agar setiap tahap berjalan independen serta mencegah timeout Vercel menghentikan seluruh proses sinkronisasi.
 const DEFAULT_LOCATIONS_CRON = '0 12 * * *';
@@ -127,18 +127,24 @@ function getSyncConfig() {
 }
 
 async function runSyncLocationsJob() {
-  const { brandId } = getSyncConfig();
-  return runLockedJob('locations', RUNCHISE_CRON_LOCK_IDS.locations, () =>
-    syncLocations(brandId),
-  );
+  return runLockedJob('locations', RUNCHISE_CRON_LOCK_IDS.locations, async () => {
+    const creation = await createCatalogSyncJob('locations');
+    return { created: creation.created, ...(await processCatalogSyncJobs({ kind: 'locations' })) };
+  });
 }
 
 async function runSyncBrandsJob() {
-  return runLockedJob('brands', RUNCHISE_CRON_LOCK_IDS.brands, syncBrands);
+  return runLockedJob('brands', RUNCHISE_CRON_LOCK_IDS.brands, async () => {
+    const creation = await createCatalogSyncJob('brands');
+    return { created: creation.created, ...(await processCatalogSyncJobs({ kind: 'brands' })) };
+  });
 }
 
 async function runSyncProductsJob() {
-  return runLockedJob('products', RUNCHISE_CRON_LOCK_IDS.products, syncProducts);
+  return runLockedJob('products', RUNCHISE_CRON_LOCK_IDS.products, async () => {
+    const creation = await createCatalogSyncJob('products');
+    return { created: creation.created, ...(await processCatalogSyncJobs({ kind: 'products' })) };
+  });
 }
 
 async function runSyncSalesTransactionReportsJob() {
@@ -170,7 +176,16 @@ async function runSalesTransactionWorkerJob() {
 }
 
 async function runSyncPromosJob() {
-  return runLockedJob('promos', RUNCHISE_CRON_LOCK_IDS.promos, syncPromos);
+  return runLockedJob('promos', RUNCHISE_CRON_LOCK_IDS.promos, async () => {
+    const creation = await createCatalogSyncJob('promos');
+    return { created: creation.created, ...(await processCatalogSyncJobs({ kind: 'promos' })) };
+  });
+}
+
+async function runCatalogSyncWorkerJob() {
+  // Outer lock serializes invocations/telemetry; service owns a different
+  // inner lock that also protects direct callers and page checkpointing.
+  return runLockedJob('catalog-worker', 750954840, () => processCatalogSyncJobs());
 }
 
 // Impor customer penuh hanya untuk eksekusi manual/CLI, bukan cron, guna menghindari risiko timeout pada lingkungan serverless.
@@ -363,6 +378,7 @@ module.exports = {
   runSyncSalesTransactionReportsJob,
   runSalesTransactionWorkerJob,
   runSyncPromosJob,
+  runCatalogSyncWorkerJob,
   runCustomerSyncJob,
   runCustomerImportEnqueueJob,
   runCustomerImportWorkerJob,

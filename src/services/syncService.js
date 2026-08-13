@@ -34,7 +34,7 @@ const TARGET_PROMO_SUB_BRAND_IDS = new Set([TARGET_PROMO_SUB_BRAND_RUNCHISE_ID])
 const CUSTOMER_PROMO_CHANNELS = new Set(['grabfood', 'gofood', 'shopeefood']);
 const PROMO_PAGE_SIZE = 50;
 const PROMO_WRITE_CHUNK_SIZE = 20;
-const PROMO_MAX_PAGES = 1000;
+const PROMO_MAX_PAGES = 200;
 
 // Sama dengan default kolom CustomerPoint.next_reward_threshold di schema.
 const DEFAULT_NEXT_REWARD_THRESHOLD = 2000;
@@ -1922,8 +1922,10 @@ async function syncProducts() {
 // ===================== SYNC BRANDS =====================
 
 // Sync brand & sub-brand dari Runchise
-async function syncBrands() {
-  const subBrandsArray = await fetchAllSubBrands();
+async function syncBrands(subBrandsOverride = null) {
+  const subBrandsArray = Array.isArray(subBrandsOverride)
+    ? subBrandsOverride
+    : await fetchAllSubBrands();
 
   if (!subBrandsArray || subBrandsArray.length === 0) {
     console.warn('Tidak ada data sub_brands dari API.');
@@ -1936,6 +1938,7 @@ async function syncBrands() {
   );
 
   let synced = 0;
+  let failed = 0;
   const seenParentBrandIds = new Set();
   const localBrandByRunchiseId = new Map();
 
@@ -1988,6 +1991,7 @@ async function syncBrands() {
           `Gagal upsert parent brand runchise_id=${parentBrandId}:`,
           error.message,
         );
+        failed++;
         continue;
       }
     }
@@ -2060,17 +2064,20 @@ async function syncBrands() {
       console.log(`Sub_brand synced: runchise_id=${sb.id}, name=${sb.name}`);
     } catch (error) {
       console.error(`Gagal menyimpan sub_brand id=${sb.id}:`, error.message);
+      failed++;
     }
   }
 
-  return { synced, total: subBrandsArray.length };
+  return { synced, failed, total: subBrandsArray.length };
 }
 
 // ===================== SYNC LOCATIONS =====================
 
 // Sync lokasi outlet dari Runchise
-async function syncLocations(brandId = 1) {
-  const locations = await fetchAllLocations();
+async function syncLocations(brandId = 1, locationsOverride = null) {
+  const locations = Array.isArray(locationsOverride)
+    ? locationsOverride
+    : await fetchAllLocations();
 
   let synced = 0;
 
@@ -2403,6 +2410,7 @@ module.exports = {
   getCrisbarPromoEvidence,
   loadCrisbarPromoContext,
   mapRunchisePromoToLocalData,
+  upsertPromoChunk,
   syncPromos,
   buildSaleRewardRedemptionSnapshot,
   mapSalesTransactionReportData,

@@ -51,6 +51,10 @@
       "schedule": "25 12 * * *"
     },
     {
+      "path": "/api/cron/runchise-sync/catalog-worker",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/runchise-sync/points",
       "schedule": "30 12 * * *"
     },

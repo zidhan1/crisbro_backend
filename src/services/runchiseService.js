@@ -396,13 +396,14 @@ async function findCustomerByPhoneAcrossLocations(phoneNumber, excludedLocationI
 
 // ===================== PRODUCTS =====================
 
-async function fetchProductsPage({ page = 1, itemPerPage = 50, status } = {}) {
+async function fetchProductsPage({ page = 1, itemPerPage = 50, status } = {}, requestOptions = {}) {
   const params = { page, item_per_page: itemPerPage };
   if (status) params.status = status;
 
   const { data } = await requestWithRetry(
     `Fetch products Runchise page ${page}`,
     () => runchiseClient.get('/products', { params }),
+    requestOptions,
   );
 
   if (!Array.isArray(data?.products) || !data?.paging) {
@@ -466,6 +467,18 @@ async function fetchAllSubBrands() {
   return allSubBrands;
 }
 
+async function fetchSubBrandsPage(page = 1, requestOptions = {}, itemPerPage = 10) {
+  const { data } = await requestWithRetry(
+    `Fetch sub brands Runchise page ${page}`,
+    () => runchiseClient.get('/sub_brands', { params: { page, item_per_page: itemPerPage } }),
+    requestOptions,
+  );
+  if (!Array.isArray(data?.sub_brands) || !data?.paging) {
+    throw new Error(`Response sub brands halaman ${page} tidak valid`);
+  }
+  return data;
+}
+
 // ===================== LOCATIONS =====================
 
 // Mengambil semua lokasi dari Runchise
@@ -495,16 +508,28 @@ async function fetchAllLocations() {
   return allLocations;
 }
 
+async function fetchLocationsPage(page = 1, requestOptions = {}, itemPerPage = 10) {
+  const { data } = await requestWithRetry(
+    `Fetch locations Runchise page ${page}`,
+    () => runchiseClient.get('/locations', { params: { page, item_per_page: itemPerPage } }),
+    requestOptions,
+  );
+  if (!Array.isArray(data?.locations) || !data?.paging) {
+    throw new Error(`Response locations halaman ${page} tidak valid`);
+  }
+  return data;
+}
+
 // ===================== PROMOS =====================
 
-async function fetchPromosPage({ page = 1, itemPerPage = 50 } = {}) {
+async function fetchPromosPage({ page = 1, itemPerPage = 50 } = {}, requestOptions = {}) {
   const { data } = await requestWithRetry(
     `Fetch promos Runchise page ${page}`,
     () =>
       runchiseClient.get('/promos', {
         params: { page, item_per_page: itemPerPage },
       }),
-    { retries: 3 },
+    requestOptions,
   );
 
   if (!Array.isArray(data?.promos) || !data?.paging) {
@@ -592,7 +617,9 @@ module.exports = {
   fetchProductsPage,
   fetchAllProducts,
   fetchAllSubBrands,
+  fetchSubBrandsPage,
   fetchAllLocations,
+  fetchLocationsPage,
   fetchPromosPage,
   fetchAllPromos,
   createCustomer,

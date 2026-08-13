@@ -46,6 +46,7 @@ const {
   runSyncSalesTransactionReportsJob,
   runSalesTransactionWorkerJob,
   runSyncPromosJob,
+  runCatalogSyncWorkerJob,
   runCustomerImportEnqueueJob,
   runCustomerImportWorkerJob,
   runCustomerPointsSyncJob,
@@ -681,6 +682,16 @@ app.post(
   '/api/cron/runchise-sync/promos',
   requireCronSecret,
   createCronSyncHandler('runchise-promos', runSyncPromosJob),
+);
+app.get(
+  '/api/cron/runchise-sync/catalog-worker',
+  requireCronSecret,
+  createCronSyncHandler('runchise-catalog-worker', runCatalogSyncWorkerJob),
+);
+app.post(
+  '/api/cron/runchise-sync/catalog-worker',
+  requireCronSecret,
+  createCronSyncHandler('runchise-catalog-worker', runCatalogSyncWorkerJob),
 );
 app.get(
   '/api/cron/runchise-sync/customer-timestamps-worker',

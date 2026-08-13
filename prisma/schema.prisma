@@ -234,6 +234,28 @@ model SalesTransactionSyncJob {
   @@index([started_at])
 }
 
+model CatalogSyncJob {
+  id                   Int       @id @default(autoincrement())
+  kind                 String
+  status               String    @default("queued")
+  source               String    @default("cron")
+  current_page         Int       @default(1)
+  reported_total       Int?
+  pages_processed      Int       @default(0)
+  processed            Int       @default(0)
+  synced               Int       @default(0)
+  consecutive_failures Int       @default(0)
+  seen_ids             Json      @default("[]")
+  metrics              Json      @default("{}")
+  error                String?   @db.Text
+  started_at           DateTime  @default(now())
+  heartbeat_at         DateTime  @default(now())
+  finished_at          DateTime?
+
+  @@index([kind, status])
+  @@index([started_at])
+}
+
 // Satu baris per invocation job. Tidak menyimpan payload upstream/PII;
 // hanya metadata operasional untuk observability dan alerting.
 model SyncJobTelemetry {

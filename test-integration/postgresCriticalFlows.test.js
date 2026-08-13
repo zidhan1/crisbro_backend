@@ -34,6 +34,10 @@ const {
   SALES_SYNC_WORKER_LOCK_ID,
   processSalesPage,
 } = require('../src/services/salesTransactionSyncService');
+const {
+  createCatalogSyncJob,
+  processCatalogSyncJobs,
+} = require('../src/services/catalogSyncJobService');
 
 let sequence = 0;
 const unique = (prefix) => `${prefix}-${process.pid}-${Date.now()}-${++sequence}`;
@@ -278,6 +282,61 @@ test('advisory lock saling mengecualikan antar-koneksi PostgreSQL', async () => 
       second.query('SELECT pg_advisory_unlock($1)', [SALES_SYNC_WORKER_LOCK_ID]),
     ]);
     await Promise.allSettled([first.end(), second.end()]);
+  }
+});
+
+test('C-1: catalog worker menyimpan cursor lalu melanjutkan halaman berikutnya di invocation baru', async () => {
+  const creation = await createCatalogSyncJob('brands', { source: 'integration-test' });
+  assert.equal(creation.created, true);
+  const fetched = [];
+  const dependencies = {
+    fetchSubBrandsPage: async (page, options) => {
+      fetched.push(page);
+      assert.deepEqual(options, { retries: 0 });
+      return {
+        sub_brands: [{ id: page, brand: { id: 750, name: 'Crisbar' }, product_categories: [] }],
+        paging: { next_page: page === 1 ? 2 : null, total_item: 2 },
+      };
+    },
+    syncBrands: async (rows) => ({ synced: rows.length }),
+  };
+  const first = await processCatalogSyncJobs({ kind: 'brands', maxPages: 1 }, dependencies);
+  assert.equal(first.status, 'running');
+  assert.equal(first.job.current_page, 2);
+  assert.equal(first.job.pages_processed, 1);
+
+  const second = await processCatalogSyncJobs({ kind: 'brands', maxPages: 1 }, dependencies);
+  assert.equal(second.status, 'completed');
+  assert.equal(second.job.pages_processed, 2);
+  assert.equal(second.job.processed, 2);
+  assert.deepEqual(fetched, [1, 2]);
+});
+
+test('C-1: unique partial index mencegah dua job aktif untuk stage sama', async () => {
+  const first = await createCatalogSyncJob('locations', { source: 'integration-test' });
+  const second = await createCatalogSyncJob('locations', { source: 'integration-test' });
+  assert.equal(first.created, true);
+  assert.equal(second.created, false);
+  assert.equal(second.job.id, first.job.id);
+});
+
+test('C-1: halaman gagal tidak memajukan cursor dan berhenti setelah tiga kegagalan beruntun', async () => {
+  const creation = await createCatalogSyncJob('promos', { source: 'integration-test' });
+  const dependencies = {
+    fetchPromosPage: async () => { throw new Error('synthetic upstream failure'); },
+  };
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await assert.rejects(
+      processCatalogSyncJobs({ kind: 'promos', maxPages: 1 }, dependencies),
+      /synthetic upstream failure/,
+    );
+    const [row] = await prisma.$queryRaw`
+      SELECT * FROM "CatalogSyncJob" WHERE id = ${creation.job.id}
+    `;
+    assert.equal(row.current_page, 1);
+    assert.equal(row.pages_processed, 0);
+    assert.equal(row.consecutive_failures, attempt);
+    assert.equal(row.status, attempt === 3 ? 'failed' : 'queued');
   }
 });
 

@@ -12,7 +12,7 @@ const TARGET_PARENT_BRAND_RUNCHISE_ID = 750;
 const TARGET_SUB_BRAND_RUNCHISE_ID = 1041;
 const PAGE_SIZE = 50;
 const WRITE_CHUNK_SIZE = 20;
-const MAX_PAGES = 10000;
+const MAX_PAGES = 500;
 const WRITE_FLAG = '--confirm-db-write';
 
 function positiveInt(value) {
@@ -273,4 +273,7 @@ module.exports = {
   importProducts,
   loadCrisbarContext,
   mapProduct,
+  upsertChunk,
+  PAGE_SIZE,
+  WRITE_CHUNK_SIZE,
 };
