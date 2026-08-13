@@ -19,6 +19,7 @@ const {
   computeSessionExpiry,
   getSessionPolicy,
 } = require('../lib/sessionPolicy');
+const { hashSessionToken } = require('../lib/sessionToken');
 
 // Satu pesan untuk semua kegagalan login, apa pun sebabnya.
 const INVALID_CREDENTIALS_MESSAGE =
@@ -236,7 +237,7 @@ async function login(req, res) {
     await prisma.session.create({
       data: {
         user_id: user.id,
-        token,
+        token: hashSessionToken(token),
         expires_at: expiresAt,
       },
     });
@@ -496,7 +497,9 @@ async function logout(req, res) {
   try {
     // Hanya sesi perangkat ini yang dihapus; perangkat lain milik user yang
     // sama tetap login.
-    await prisma.session.deleteMany({ where: { token: req.sessionToken } });
+    await prisma.session.deleteMany({
+      where: { token: req.persistedSessionToken || req.sessionTokenHash },
+    });
     clearSessionCookie(res);
 
     return res.json({ message: 'Berhasil keluar' });

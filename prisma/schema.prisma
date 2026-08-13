@@ -59,7 +59,7 @@ model AdminActivityLog {
 model Session {
   id         Int      @id @default(autoincrement())
   user_id    Int
-  token      String   @unique
+  token      String   @unique // SHA-256 token sesi; JWT mentah hanya berada di cookie httpOnly
   expires_at DateTime
   created_at DateTime @default(now())
 

@@ -212,7 +212,8 @@ test('login: kredensial benar pada akun aktif -> sesi dibuat, cookie di-set, pas
   assert.equal(findFirstCallCount, 1);
   assert.equal(findUniqueCallCount, 1);
   assert.equal(sessionCreateArgs.data.user_id, 7);
-  assert.equal(typeof sessionCreateArgs.data.token, 'string');
+  assert.match(sessionCreateArgs.data.token, /^[0-9a-f]{64}$/);
+  assert.notEqual(sessionCreateArgs.data.token, res.cookieCalls[0].value);
   assert.equal(res.cookieCalls.length, 1);
   assert.equal(res.cookieCalls[0].name, 'crisbar_session');
   assert.equal(res.body.user.password_hash, undefined);

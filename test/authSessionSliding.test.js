@@ -42,18 +42,18 @@ function requestWith(token) {
 
 // Mengganti dua method prisma yang dipakai middleware, lalu memulihkannya.
 function installSessionMock(t, { session }) {
-  const originalFindUnique = prisma.session.findUnique;
+  const originalFindUnique = prisma.session.findFirst;
   const originalUpdate = prisma.session.update;
   const updates = [];
 
-  prisma.session.findUnique = async () => session;
+  prisma.session.findFirst = async () => ({ token: 'persisted-hash', ...session });
   prisma.session.update = async (args) => {
     updates.push(args);
     return { id: 1 };
   };
 
   t.after(() => {
-    prisma.session.findUnique = originalFindUnique;
+    prisma.session.findFirst = originalFindUnique;
     prisma.session.update = originalUpdate;
   });
 
@@ -116,17 +116,18 @@ test('sesi yang idle-nya sudah lewat ditolak walau token JWT-nya belum kedaluwar
 
 test('kegagalan memperpanjang sesi tidak menggagalkan request yang sudah sah', async (t) => {
   const token = signToken({ role: 'admin', expiresIn: '24h' });
-  const originalFindUnique = prisma.session.findUnique;
+  const originalFindUnique = prisma.session.findFirst;
   const originalUpdate = prisma.session.update;
   const originalConsoleError = console.error;
 
   t.after(() => {
-    prisma.session.findUnique = originalFindUnique;
+    prisma.session.findFirst = originalFindUnique;
     prisma.session.update = originalUpdate;
     console.error = originalConsoleError;
   });
 
-  prisma.session.findUnique = async () => ({
+  prisma.session.findFirst = async () => ({
+    token: 'persisted-hash',
     user_id: 7,
     expires_at: new Date(Date.now() + 30 * MINUTE),
   });

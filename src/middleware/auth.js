@@ -4,6 +4,7 @@ const getJwtSecret = require('../lib/jwtSecret');
 const prisma = require('../lib/prisma');
 const { getSessionCookie, clearSessionCookie } = require('../lib/sessionCookie');
 const { computeSlidingSessionExpiry } = require('../lib/sessionPolicy');
+const { hashSessionToken } = require('../lib/sessionToken');
 
 // Middleware untuk memverifikasi token JWT pada setiap request
 module.exports = async (req, res, next) => {
@@ -15,6 +16,7 @@ module.exports = async (req, res, next) => {
   const cookieToken = getSessionCookie(req);
   // Cookie diprioritaskan untuk browser; Bearer dipertahankan bagi tooling API.
   const token = cookieToken || bearerToken;
+  const tokenHash = token ? hashSessionToken(token) : null;
 
   // Jika token tidak ditemukan, akses ditolak
   if (!token) {
@@ -27,9 +29,11 @@ module.exports = async (req, res, next) => {
     // Memverifikasi token menggunakan JWT_SECRET
     const decoded = jwt.verify(token, getJwtSecret());
 
-    const session = await prisma.session.findUnique({
-      where: { token },
-      select: { user_id: true, expires_at: true },
+    // Fallback token mentah hanya menjaga rolling deployment sebelum migrasi
+    // selesai. Setelah migrasi semua baris cocok melalui tokenHash.
+    const session = await prisma.session.findFirst({
+      where: { token: { in: [tokenHash, token] } },
+      select: { token: true, user_id: true, expires_at: true },
     });
 
     if (!session || session.user_id !== decoded.id || session.expires_at <= new Date()) {
@@ -53,7 +57,7 @@ module.exports = async (req, res, next) => {
     if (slidingExpiry) {
       try {
         await prisma.session.update({
-          where: { token },
+          where: { token: session.token },
           data: { expires_at: slidingExpiry },
         });
       } catch (renewError) {
@@ -68,7 +72,8 @@ module.exports = async (req, res, next) => {
     req.user = decoded;
     // Dipakai handler logout untuk menghapus baris sesi milik token ini saja,
     // tanpa mengeluarkan perangkat lain milik user yang sama.
-    req.sessionToken = token;
+    req.sessionTokenHash = tokenHash;
+    req.persistedSessionToken = session.token;
   } catch (error) {
     if (cookieToken) clearSessionCookie(res);
     // Menangani jika JWT_SECRET belum dikonfigurasi

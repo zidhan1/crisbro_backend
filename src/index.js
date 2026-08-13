@@ -19,6 +19,7 @@ const auth = require('./middleware/auth');
 const requireRole = require('./middleware/requireRole');
 const requireDocsAccess = require('./middleware/docsAccess');
 const docsContentSecurityPolicy = require('./middleware/docsCsp');
+const csrfProtection = require('./middleware/csrfProtection');
 
 // Routes (modular API)
 const customerRoutes = require('./routes/customerRoutes');
@@ -116,6 +117,11 @@ app.use(cors(corsPolicy.corsOptions));
 
 // Menetapkan batas ukuran request body secara eksplisit agar tetap konsisten dan tidak berubah mengikuti pembaruan Express.
 app.use(express.json({ limit: '100kb' }));
+
+// Cookie lintas-origin hanya boleh dipakai untuk mutasi oleh klien yang mampu
+// mengirim header khusus. Form lintas situs tidak dapat membuat header ini dan
+// preflight origin asing ditolak oleh kebijakan CORS di atas.
+app.use(csrfProtection);
 
 // L-5: deny-by-default. Semua respons API private/no-store kecuali route GET
 // publik yang secara eksplisit memasang shared CDN cache sesaat sebelum send.
