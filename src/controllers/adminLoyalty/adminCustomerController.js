@@ -630,6 +630,16 @@ async function adjustCustomerLoyalty(req, res) {
         let lockedAvailablePoint = 0;
 
         if (hasTotalPoint || hasAvailablePoint) {
+          // Ensure there is a physical row to lock. SELECT FOR UPDATE cannot
+          // lock an absent row, so concurrent first-time writers need this
+          // idempotent insert before taking the row lock.
+          await tx.$executeRaw`
+            INSERT INTO "CustomerPoint" (
+              "customer_id", "total_point", "available_point",
+              "next_reward_threshold", "updated_at"
+            ) VALUES (${id}, 0, 0, ${getDefaultRewardThreshold()}, CURRENT_TIMESTAMP)
+            ON CONFLICT ("customer_id") DO NOTHING
+          `;
           // M-6: Mengunci baris selama transaksi agar permintaan bersamaan selalu menggunakan data terbaru dan mencegah race condition.
           const [pointRow] = await tx.$queryRaw`
             SELECT total_point, available_point FROM "CustomerPoint"

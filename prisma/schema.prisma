@@ -500,12 +500,14 @@ model RedeemMenuItem {
 // ───────────────────────────────────────────────
 
 model CustomerPoint {
-  id                    Int      @id @default(autoincrement())
-  customer_id           Int      @unique
-  total_point           Int      @default(0)
-  available_point       Int      @default(0)
-  next_reward_threshold Int      @default(2000)
-  updated_at            DateTime @updatedAt
+  id                       Int      @id @default(autoincrement())
+  customer_id              Int      @unique
+  total_point              Int      @default(0)
+  available_point          Int      @default(0)
+  runchise_total_point     Int?
+  runchise_available_point Int?
+  next_reward_threshold    Int      @default(2000)
+  updated_at               DateTime @updatedAt
 
   customer Customer @relation(fields: [customer_id], references: [id])
 }

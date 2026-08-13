@@ -343,18 +343,32 @@ async function writeCustomer(tx, customer, lookup) {
     });
   }
 
-  await tx.customerPoint.upsert({
-    where: { customer_id: localCustomer.id },
-    update: {
-      total_point: customer.total_point,
-      available_point: customer.available_point,
-    },
-    create: {
-      customer_id: localCustomer.id,
-      total_point: customer.total_point,
-      available_point: customer.available_point,
-    },
-  });
+  // Rebase the effective balance by the POS delta. This importer is
+  // rerunnable, so an absolute upsert here would have the same lost-update
+  // bug as the daily point sync.
+  await tx.$executeRaw`
+    INSERT INTO "CustomerPoint" (
+      "customer_id", "total_point", "available_point",
+      "runchise_total_point", "runchise_available_point", "updated_at"
+    ) VALUES (
+      ${localCustomer.id}, ${customer.total_point}, ${customer.available_point},
+      ${customer.total_point}, ${customer.available_point}, CURRENT_TIMESTAMP
+    )
+    ON CONFLICT ("customer_id") DO UPDATE SET
+      "total_point" = "CustomerPoint"."total_point" +
+        (EXCLUDED."runchise_total_point" - COALESCE(
+          "CustomerPoint"."runchise_total_point",
+          EXCLUDED."runchise_total_point"
+        )),
+      "available_point" = "CustomerPoint"."available_point" +
+        (EXCLUDED."runchise_available_point" - COALESCE(
+          "CustomerPoint"."runchise_available_point",
+          EXCLUDED."runchise_available_point"
+        )),
+      "runchise_total_point" = EXCLUDED."runchise_total_point",
+      "runchise_available_point" = EXCLUDED."runchise_available_point",
+      "updated_at" = CURRENT_TIMESTAMP
+  `;
 
   return { status, relationsCreated: newRelations.length };
 }

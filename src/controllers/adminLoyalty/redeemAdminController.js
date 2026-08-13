@@ -463,6 +463,13 @@ function createRedeemAdminControllers({
         if (current.status === 'pending' && nextStatus === 'claimed') {
           // M-5: Mengunci CustomerPoint dengan FOR UPDATE setelah RewardRedemption untuk mencegah race condition dan memastikan saldo poin tetap konsisten saat redemption bersamaan.
 
+          await tx.$executeRaw`
+            INSERT INTO "CustomerPoint" (
+              "customer_id", "total_point", "available_point",
+              "next_reward_threshold", "updated_at"
+            ) VALUES (${customerId}, 0, 0, ${getDefaultRewardThreshold()}, CURRENT_TIMESTAMP)
+            ON CONFLICT ("customer_id") DO NOTHING
+          `;
           const [lockedPoint] = await tx.$queryRaw`
           SELECT available_point FROM "CustomerPoint"
           WHERE customer_id = ${customerId} FOR UPDATE
@@ -495,15 +502,20 @@ function createRedeemAdminControllers({
         }
 
         if (current.status === 'claimed' && nextStatus === 'expired') {
-          await tx.customerPoint.upsert({
+          await tx.$executeRaw`
+            INSERT INTO "CustomerPoint" (
+              "customer_id", "total_point", "available_point",
+              "next_reward_threshold", "updated_at"
+            ) VALUES (${customerId}, 0, 0, ${getDefaultRewardThreshold()}, CURRENT_TIMESTAMP)
+            ON CONFLICT ("customer_id") DO NOTHING
+          `;
+          await tx.$queryRaw`
+            SELECT available_point FROM "CustomerPoint"
+            WHERE customer_id = ${customerId} FOR UPDATE
+          `;
+          await tx.customerPoint.update({
             where: { customer_id: customerId },
-            update: { available_point: { increment: pointsSpent } },
-            create: {
-              customer_id: customerId,
-              total_point: pointsSpent,
-              available_point: pointsSpent,
-              next_reward_threshold: getDefaultRewardThreshold(),
-            },
+            data: { available_point: { increment: pointsSpent } },
           });
 
           await tx.pointHistory.create({

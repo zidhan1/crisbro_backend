@@ -48,9 +48,15 @@ function makeFakeTx({
     // M-5: jejak query mentah, dipakai untuk membuktikan baris CustomerPoint
     // benar-benar dikunci FOR UPDATE sebelum saldonya dibaca.
     rawQueries: [],
+    rawExecutes: [],
   };
 
   const tx = {
+    async $executeRaw(strings, ...values) {
+      const sql = Array.isArray(strings) ? strings.join('?') : String(strings);
+      calls.rawExecutes.push({ sql, values });
+      return 1;
+    },
     // M-5: Memperbarui mock agar dapat membedakan query RewardRedemption dan CustomerPoint pada proses penguncian transaksi.
     async $queryRaw(strings, ...values) {
       const sql = Array.isArray(strings) ? strings.join('?') : String(strings);
@@ -199,7 +205,7 @@ test('claimed -> expired (void): me-refund available_point dan mencatat PointHis
   // skenario yang disebut laporan asli M-5 (redeemed_at hilang saat status
   // berubah).
   assert.deepEqual(res.body.redeemed_at, new Date('2026-01-01T00:00:00.000Z'));
-  assert.deepEqual(calls.customerPointUpsert.update, {
+  assert.deepEqual(calls.customerPointUpdate.data, {
     available_point: { increment: 150 },
   });
   assert.equal(calls.pointHistoryCreate.data.points_change, 150);

@@ -1035,7 +1035,7 @@ async function bulkUpsertCustomerPoints(rows) {
     const tuples = Prisma.join(
       chunk.map(
         (row) =>
-          Prisma.sql`(${row.customerId}, ${row.totalPoint}, ${row.availablePoint}, ${DEFAULT_NEXT_REWARD_THRESHOLD}, CURRENT_TIMESTAMP)`,
+          Prisma.sql`(${row.customerId}, ${row.totalPoint}, ${row.availablePoint}, ${row.totalPoint}, ${row.availablePoint}, ${DEFAULT_NEXT_REWARD_THRESHOLD}, CURRENT_TIMESTAMP)`,
       ),
     );
 
@@ -1044,12 +1044,23 @@ async function bulkUpsertCustomerPoints(rows) {
     written += await prisma.$executeRaw`
       INSERT INTO "CustomerPoint" (
         "customer_id", "total_point", "available_point",
+        "runchise_total_point", "runchise_available_point",
         "next_reward_threshold", "updated_at"
       )
       VALUES ${tuples}
       ON CONFLICT ("customer_id") DO UPDATE SET
-        "total_point" = EXCLUDED."total_point",
-        "available_point" = EXCLUDED."available_point",
+        "total_point" = "CustomerPoint"."total_point" +
+          (EXCLUDED."runchise_total_point" - COALESCE(
+            "CustomerPoint"."runchise_total_point",
+            EXCLUDED."runchise_total_point"
+          )),
+        "available_point" = "CustomerPoint"."available_point" +
+          (EXCLUDED."runchise_available_point" - COALESCE(
+            "CustomerPoint"."runchise_available_point",
+            EXCLUDED."runchise_available_point"
+          )),
+        "runchise_total_point" = EXCLUDED."runchise_total_point",
+        "runchise_available_point" = EXCLUDED."runchise_available_point",
         "updated_at" = CURRENT_TIMESTAMP
     `;
   }
@@ -1107,9 +1118,8 @@ async function syncCustomerPoints({ locationId = null } = {}) {
           continue;
         }
 
-        // Runchise/POS adalah source of truth poin. Karena API riwayat poin
-        // Runchise belum tersedia, saldo lokal hanya menjadi mirror nilai
-        // terbaru.
+        // Snapshot POS disimpan sebagai baseline terpisah. Saldo efektif
+        // menerima deltanya agar mutasi lokal tidak terhapus saat sync.
         pointsByCustomerId.set(localId, {
           customerId: localId,
           totalPoint: parseInteger(c.total_point, 0),
@@ -1171,18 +1181,31 @@ async function syncCustomerPointsFromStaging() {
     )
     INSERT INTO "CustomerPoint" (
       "customer_id", "total_point", "available_point",
+      "runchise_total_point", "runchise_available_point",
       "next_reward_threshold", "updated_at"
     )
     SELECT
       "customer_id",
       "total_point",
       "available_point",
+      "total_point",
+      "available_point",
       ${DEFAULT_NEXT_REWARD_THRESHOLD}::int,
       CURRENT_TIMESTAMP
     FROM latest_points
     ON CONFLICT ("customer_id") DO UPDATE SET
-      "total_point" = EXCLUDED."total_point",
-      "available_point" = EXCLUDED."available_point",
+      "total_point" = "CustomerPoint"."total_point" +
+        (EXCLUDED."runchise_total_point" - COALESCE(
+          "CustomerPoint"."runchise_total_point",
+          EXCLUDED."runchise_total_point"
+        )),
+      "available_point" = "CustomerPoint"."available_point" +
+        (EXCLUDED."runchise_available_point" - COALESCE(
+          "CustomerPoint"."runchise_available_point",
+          EXCLUDED."runchise_available_point"
+        )),
+      "runchise_total_point" = EXCLUDED."runchise_total_point",
+      "runchise_available_point" = EXCLUDED."runchise_available_point",
       "updated_at" = CURRENT_TIMESTAMP
   `;
 
