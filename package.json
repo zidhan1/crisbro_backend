@@ -5,6 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "test": "node --test test/*.test.js",
+    "lint": "eslint src scripts test test-integration api",
     "test:integration:postgres": "node scripts/runPostgresIntegrationTests.js",
     "load-test:sales-worker": "node scripts/loadTestSalesWorker.js",
     "load-test:sales-postgres": "node --expose-gc scripts/integrationLoadTestSalesBulk.js",
@@ -57,6 +58,8 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0",
     "nodemon": "^3.1.14"
   }
 }

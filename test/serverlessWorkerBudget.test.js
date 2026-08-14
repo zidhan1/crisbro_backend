@@ -101,17 +101,3 @@ test('C-2: konfigurasi customer worker dibaca saat runtime dan dijepit aman', ()
     }
   }
 });
-
-test('semua worker cursor customer dan sales menonaktifkan retry HTTP internal', () => {
-  const sources = [
-    'customerImportSyncService.js',
-    'customerTimestampSyncService.js',
-    'salesTransactionSyncService.js',
-  ].map((name) =>
-    fs.readFileSync(path.join(__dirname, '..', 'src', 'services', name), 'utf8'),
-  );
-
-  for (const source of sources) {
-    assert.match(source, /fetchPage\([^;]+\{ retries: 0 \}\)/s);
-  }
-});

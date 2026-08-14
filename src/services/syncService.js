@@ -884,8 +884,9 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
   // ---- 6. Bulk create user+customer baru (dengan atau tanpa nomor telepon) ----
   // Membuat user dan customer baru dalam satu transaksi untuk mencegah data yatim dan menjaga konsistensi saat terjadi kegagalan proses.
   if (bulkCreatable.length > 0) {
-    try {
-      await prisma.$transaction(async (tx) => {
+    // Error sengaja diteruskan apa adanya: worker mengembalikan cursor ke
+    // queued dan mengulang halaman secara atomik; tidak ada fallback N+1.
+    await prisma.$transaction(async (tx) => {
       const userRows = await tx.$queryRaw`
         INSERT INTO "User" (phone_number, password_hash, activation_status, role, updated_at)
         VALUES ${Prisma.join(
@@ -955,12 +956,7 @@ async function upsertRunchiseCustomersBatch(customersInput, fallbackLocationId =
           ON CONFLICT (customer_id, location_id) DO NOTHING
         `;
       }
-      });
-    } catch (error) {
-      // Jangan kembali ke N+1. Worker akan mengembalikan cursor ke queued dan
-      // mengulang halaman secara atomik; P2002 tetap direkonsiliasi pada retry.
-      throw error;
-    }
+    });
   }
 
   return results;

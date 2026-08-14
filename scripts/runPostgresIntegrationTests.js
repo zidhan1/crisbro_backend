@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const externalUrl = process.env.POSTGRES_TEST_URL;
 const pgBin = process.env.POSTGRES_BIN || 'C:\\Program Files\\PostgreSQL\\17\\bin';
 const executables = {
   initdb: path.join(pgBin, process.platform === 'win32' ? 'initdb.exe' : 'initdb'),
@@ -10,8 +11,10 @@ const executables = {
   createdb: path.join(pgBin, process.platform === 'win32' ? 'createdb.exe' : 'createdb'),
   psql: path.join(pgBin, process.platform === 'win32' ? 'psql.exe' : 'psql'),
 };
-for (const [name, executable] of Object.entries(executables)) {
-  if (!fs.existsSync(executable)) throw new Error(`${name} tidak ditemukan: ${executable}`);
+if (!externalUrl) {
+  for (const [name, executable] of Object.entries(executables)) {
+    if (!fs.existsSync(executable)) throw new Error(`${name} tidak ditemukan: ${executable}`);
+  }
 }
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'crisbro-pg-integration-'));
@@ -29,22 +32,41 @@ function run(command, args, options = {}) {
 }
 
 try {
-  run(executables.initdb, ['-A', 'trust', '-U', 'postgres', '-D', data]);
-  run(executables.pgCtl, ['-D', data, '-o', `-p ${port} -h 127.0.0.1`, '-l', log, 'start']);
-  started = true;
-  run(executables.createdb, ['-h', '127.0.0.1', '-p', String(port), '-U', 'postgres', database]);
+  if (!externalUrl) {
+    run(executables.initdb, ['-A', 'trust', '-U', 'postgres', '-D', data]);
+    run(executables.pgCtl, ['-D', data, '-o', `-p ${port} -h 127.0.0.1`, '-l', log, 'start']);
+    started = true;
+    run(executables.createdb, ['-h', '127.0.0.1', '-p', String(port), '-U', 'postgres', database]);
+  }
+  const testUrl = externalUrl || url;
   // Supabase provides these roles. Create non-login stand-ins so its
   // grant/revoke migrations can also be replayed on disposable PostgreSQL.
-  run(executables.psql, [
-    '-h', '127.0.0.1', '-p', String(port), '-U', 'postgres', '-d', database,
-    '-v', 'ON_ERROR_STOP=1',
-    '-c', 'CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN;',
-  ]);
+  if (!externalUrl) {
+    run(executables.psql, [
+      '-h', '127.0.0.1', '-p', String(port), '-U', 'postgres', '-d', database,
+      '-v', 'ON_ERROR_STOP=1',
+      '-c', 'CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN;',
+    ]);
+  }
+  if (externalUrl) {
+    run(process.execPath, ['-e', `
+      const { Client } = require('pg');
+      (async () => {
+        const client = new Client({ connectionString: process.env.POSTGRES_TEST_URL });
+        await client.connect();
+        for (const role of ['anon', 'authenticated', 'service_role']) {
+          const exists = await client.query('SELECT 1 FROM pg_roles WHERE rolname = $1', [role]);
+          if (!exists.rowCount) await client.query('CREATE ROLE ' + role + ' NOLOGIN');
+        }
+        await client.end();
+      })().catch((error) => { console.error(error); process.exit(1); });
+    `], { env: process.env });
+  }
   const env = {
     ...process.env,
-    LOAD_TEST_DATABASE_URL: url,
-    DATABASE_URL: url,
-    DIRECT_URL: url,
+    LOAD_TEST_DATABASE_URL: testUrl,
+    DATABASE_URL: testUrl,
+    DIRECT_URL: testUrl,
   };
   // Run the real migration chain so integration tests exercise database-only
   // guarantees (CHECK constraints, repair SQL), not merely the Prisma model.

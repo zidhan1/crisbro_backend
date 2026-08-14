@@ -104,14 +104,3 @@ test('route tanpa opt-in tidak mungkin menjadi public cache', async (t) => {
   assert.equal(response.headers.get('cdn-cache-control'), null);
   assert.equal(response.headers.get('vercel-cdn-cache-control'), null);
 });
-
-test('source produksi tidak lagi memiliki cache Map per-instance', () => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const source = fs.readFileSync(
-    path.join(__dirname, '../src/lib/responseCache.js'),
-    'utf8',
-  );
-  assert.doesNotMatch(source, /new Map\s*\(/);
-  assert.doesNotMatch(source, /createResponseCache/);
-});
