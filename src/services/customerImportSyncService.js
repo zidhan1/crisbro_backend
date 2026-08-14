@@ -17,6 +17,7 @@ const {
   clampWorkerBudgetMs,
   hasTimeForNextRequest,
 } = require('../lib/serverlessBudget');
+const { createAdvisoryLockClient } = require('../lib/advisoryLockClient');
 
 // Lock terpisah dari worker timestamp agar keduanya boleh berjalan bersamaan.
 const CUSTOMER_IMPORT_WORKER_LOCK_ID = 750954836;
@@ -283,7 +284,7 @@ async function processImportPage(client, job, dependencies = {}) {
 }
 
 async function processCustomerImportSyncJob(options = {}, dependencies = {}) {
-  const createClient = dependencies.createClient || createDatabaseClient;
+  const createClient = dependencies.createClient || createAdvisoryLockClient;
   // Dijeda: tidak memproses halaman apa pun dan TIDAK mengubah status job,
   // sehingga cursor terakhir tetap utuh untuk dilanjutkan setelah saklar
   // dinyalakan kembali.

@@ -21,6 +21,7 @@ const {
   upsertChunk,
 } = require('../../scripts/importSelectedCrisbarProducts');
 const { clampWorkerBudgetMs, hasTimeForNextRequest } = require('../lib/serverlessBudget');
+const { createAdvisoryLockClient } = require('../lib/advisoryLockClient');
 
 const KINDS = new Set(['products', 'promos', 'brands', 'locations']);
 const PAGE_CAPS = Object.freeze({ products: 500, promos: 200, brands: 500, locations: 200 });
@@ -111,7 +112,7 @@ async function finalize(kind, seen) {
 
 async function processCatalogSyncJobs({ timeBudgetMs = DEFAULT_BUDGET_MS, maxPages = 10, kind = null } = {}, deps = {}) {
   if (kind !== null) assertKind(kind);
-  const client = (deps.createClient || createClient)(); let locked=false; let activeId=null;
+  const client = (deps.createClient || createAdvisoryLockClient)(); let locked=false; let activeId=null;
   try {
     await client.connect();
     const lock = await client.query('SELECT pg_try_advisory_lock($1) acquired', [WORKER_LOCK_ID]); locked=lock.rows[0]?.acquired===true;

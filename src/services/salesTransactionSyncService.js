@@ -14,6 +14,7 @@ const {
   clampWorkerBudgetMs,
   hasTimeForNextRequest,
 } = require('../lib/serverlessBudget');
+const { createAdvisoryLockClient } = require('../lib/advisoryLockClient');
 
 const SALES_SYNC_WORKER_LOCK_ID = 750954837;
 const configuredBudgetMs = Number(process.env.RUNCHISE_SALES_WORKER_BUDGET_MS);
@@ -208,7 +209,7 @@ async function processSalesTransactionSyncJob(
   } = {},
   dependencies = {},
 ) {
-  const createClient = dependencies.createClient || createDatabaseClient;
+  const createClient = dependencies.createClient || createAdvisoryLockClient;
   const now = dependencies.now || Date.now;
   const client = createClient();
   let lockAcquired = false;

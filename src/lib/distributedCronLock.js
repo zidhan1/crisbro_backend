@@ -1,4 +1,4 @@
-const { Client } = require('pg');
+const { createAdvisoryLockClient } = require('./advisoryLockClient');
 
 // Namespace ini membedakan lock cron Runchise dari advisory lock aplikasi lain.
 // PostgreSQL menerima pasangan signed int32 sehingga key tetap stabil lintas proses.
@@ -17,10 +17,6 @@ const RUNCHISE_CRON_LOCK_IDS = Object.freeze({
 
 const locallyRunning = new Set();
 
-function createDatabaseClient() {
-  return new Client({ connectionString: process.env.DATABASE_URL });
-}
-
 /**
  * Menjalankan job maksimal satu kali secara global.
  *
@@ -32,7 +28,7 @@ async function withDistributedCronLock({
   jobName,
   lockId,
   run,
-  createClient = createDatabaseClient,
+  createClient = createAdvisoryLockClient,
 }) {
   if (locallyRunning.has(lockId)) {
     return {

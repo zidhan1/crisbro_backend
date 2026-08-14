@@ -13,6 +13,7 @@ const {
   clampWorkerBudgetMs,
   hasTimeForNextRequest,
 } = require('../lib/serverlessBudget');
+const { createAdvisoryLockClient } = require('../lib/advisoryLockClient');
 
 const CUSTOMER_TIMESTAMP_WORKER_LOCK_ID = 750954835;
 const DEFAULT_WORKER_BUDGET_MS = 20_000;
@@ -317,7 +318,7 @@ async function processCustomerTimestampSyncJob(
   { timeBudgetMs = DEFAULT_WORKER_BUDGET_MS, maxPages = 1 } = {},
   dependencies = {},
 ) {
-  const createClient = dependencies.createClient || createDatabaseClient;
+  const createClient = dependencies.createClient || createAdvisoryLockClient;
 
   if (!isCustomerSyncEnabled()) {
     return customerSyncDisabledResult();
