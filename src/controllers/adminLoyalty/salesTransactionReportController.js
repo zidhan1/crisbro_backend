@@ -10,6 +10,44 @@ const {
 // L-7: laporan transaksi customer dipisah dari controller raksasa. Isi fungsi
 // dipindahkan apa adanya, termasuk pemisahan endpoint outlet dari M-8.
 
+function isFullPiiRole(req) {
+  return req.user?.role === 'admin';
+}
+
+function buildReportSearchFilter(search, { includePii = false } = {}) {
+  if (!search) return null;
+  return {
+    OR: [
+      ...(includePii
+        ? [
+            {
+              nama_pelanggan: {
+                contains: search,
+                mode: 'insensitive',
+              },
+            },
+            { no_telepon: { contains: search } },
+          ]
+        : []),
+      { nama_outlet: { contains: search, mode: 'insensitive' } },
+      { tipe_order: { contains: search, mode: 'insensitive' } },
+    ],
+  };
+}
+
+function redactReportForRole(report, role) {
+  const { raw: _raw, ...safeReport } = report;
+  if (role === 'admin') return { ...safeReport, raw: report.raw };
+
+  // Bentuk field dipertahankan agar klien dashboard lama tidak rusak, tetapi
+  // nilainya tidak boleh mengungkap identitas customer kepada marketing.
+  return {
+    ...safeReport,
+    nama_pelanggan: null,
+    no_telepon: null,
+  };
+}
+
 async function listCustomerSalesTransactionReports(req, res) {
   try {
     const search = parseOptionalString(req.query.search, 'search', 100);
@@ -24,6 +62,8 @@ async function listCustomerSalesTransactionReports(req, res) {
       parsePositiveInt(req.query.limit ?? 20, 'limit'),
       100,
     );
+    const includePii = isFullPiiRole(req);
+    const searchFilter = buildReportSearchFilter(search, { includePii });
     const where = {
       AND: [
         {
@@ -32,27 +72,7 @@ async function listCustomerSalesTransactionReports(req, res) {
             { penggunaan_poin: { not: 0 } },
           ],
         },
-        ...(search
-          ? [
-              {
-                OR: [
-                  {
-                    nama_pelanggan: {
-                      contains: search,
-                      mode: 'insensitive',
-                    },
-                  },
-                  { no_telepon: { contains: search } },
-                  {
-                    nama_outlet: { contains: search, mode: 'insensitive' },
-                  },
-                  {
-                    tipe_order: { contains: search, mode: 'insensitive' },
-                  },
-                ],
-              },
-            ]
-          : []),
+        ...(searchFilter ? [searchFilter] : []),
       ],
       ...(outlet
         ? { nama_outlet: { equals: outlet, mode: 'insensitive' } }
@@ -117,7 +137,7 @@ async function listCustomerSalesTransactionReports(req, res) {
     }
     res.json({
       items: reports.map((report) => ({
-        ...report,
+        ...redactReportForRole(report, req.user?.role),
         redeemed_rewards:
           rewardsByTransactionId.get(report.runchise_sales_transaction_id) ??
           [],
@@ -153,6 +173,8 @@ async function listCustomerSalesTransactionReportOutlets(req, res) {
 }
 
 module.exports = {
+  buildReportSearchFilter,
+  redactReportForRole,
   listCustomerSalesTransactionReports,
   listCustomerSalesTransactionReportOutlets,
 };

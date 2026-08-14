@@ -92,7 +92,9 @@ router.post(
   validateIdParam,
   retryCustomerRunchiseSync,
 );
-router.delete('/customers/:id', adminOrMarketing, validateIdParam, deleteAdminCustomer);
+// Penghapusan customer mencakup anonimisasi PII historis dan merupakan aksi
+// privasi/destruktif; marketing tidak memiliki kewenangan ini.
+router.delete('/customers/:id', adminOnly, validateIdParam, deleteAdminCustomer);
 
 router.get('/brands', adminOrMarketing, listAdminBrands);
 router.get('/locations', adminOrMarketing, listAdminLocations);

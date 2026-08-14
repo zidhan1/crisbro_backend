@@ -640,10 +640,9 @@ async function retryCustomerRunchiseSync(req, res) {
 async function deleteAdminCustomer(req, res) {
   try {
     const id = parsePositiveInt(req.params.id, 'id');
-    const beforeCustomer = await getCustomerAuditSnapshot(id);
     const customer = await prisma.customer.findUnique({
       where: { id },
-      select: { user_id: true },
+      select: { user_id: true, runchise_id: true },
     });
 
     if (!customer) {
@@ -651,6 +650,39 @@ async function deleteAdminCustomer(req, res) {
     }
 
     await prisma.$transaction([
+      // Kebijakan retensi: data transaksi non-PII dipertahankan untuk audit,
+      // tetapi seluruh snapshot identitas customer dan payload mentah dibuang
+      // atomik sebelum baris Customer/User dihapus.
+      prisma.customerSalesTransactionReport.updateMany({
+        where: {
+          OR: [
+            { customer_id: id },
+            ...(customer.runchise_id
+              ? [{ runchise_customer_id: customer.runchise_id }]
+              : []),
+          ],
+        },
+        data: {
+          nama_pelanggan: null,
+          no_telepon: null,
+          raw: Prisma.DbNull,
+        },
+      }),
+      prisma.runchisePosRewardRedemption.updateMany({
+        where: {
+          OR: [
+            { customer_id: id },
+            ...(customer.runchise_id
+              ? [{ runchise_customer_id: customer.runchise_id }]
+              : []),
+          ],
+        },
+        data: {
+          customer_name: null,
+          customer_phone_number: null,
+          raw: Prisma.DbNull,
+        },
+      }),
       prisma.pointHistory.deleteMany({ where: { customer_id: id } }),
       prisma.rewardRedemption.deleteMany({ where: { customer_id: id } }),
       prisma.customerPoint.deleteMany({ where: { customer_id: id } }),
@@ -668,7 +700,10 @@ async function deleteAdminCustomer(req, res) {
       action: 'delete_customer',
       entityType: 'customer',
       entityId: id,
-      before: beforeCustomer,
+      // Jangan menyalin snapshot customer ke audit log setelah data tersebut
+      // dihapus. Keberadaan aksi, actor, waktu, IP, dan entityId sudah cukup
+      // untuk audit tanpa mempertahankan PII.
+      before: { id },
     });
 
     res.json({ message: 'Customer berhasil dihapus' });
