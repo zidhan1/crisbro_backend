@@ -67,6 +67,7 @@ const {
 } = require('./services/customerTimestampSyncService');
 const {
   createCustomerImportSyncJob,
+  getCustomerImportWorkerConfig,
   getCustomerImportSyncJob,
   processCustomerImportSyncJob,
 } = require('./services/customerImportSyncService');
@@ -253,6 +254,7 @@ async function handleCustomerSyncStatus(req, res) {
     res.json({
       job: await getCustomerImportSyncJob(),
       sync_enabled: isCustomerSyncEnabled(),
+      worker_config: getCustomerImportWorkerConfig(),
     });
   } catch (error) {
     respondWithServerError(

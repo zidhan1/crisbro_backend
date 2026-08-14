@@ -13,14 +13,39 @@ const {
   customerSyncDisabledResult,
 } = require('../lib/customerSyncToggle');
 const {
+  MAX_WORKER_BUDGET_MS,
   clampWorkerBudgetMs,
   hasTimeForNextRequest,
 } = require('../lib/serverlessBudget');
 
 // Lock terpisah dari worker timestamp agar keduanya boleh berjalan bersamaan.
 const CUSTOMER_IMPORT_WORKER_LOCK_ID = 750954836;
-const DEFAULT_WORKER_BUDGET_MS = 8_000;
+// Runtime Vercel adalah 30 detik. Helper serverlessBudget menyisakan 10 detik
+// untuk checkpoint, unlock, penutupan koneksi, dan pengiriman response.
+// Default lama 8 detik membuat maxPages praktis tidak terpakai karena timeout
+// satu request Runchise sendiri dapat mencapai 6 detik.
+const DEFAULT_WORKER_BUDGET_MS = MAX_WORKER_BUDGET_MS;
 const DEFAULT_MAX_PAGES = 10;
+
+function getCustomerImportWorkerConfig(overrides = {}) {
+  const requestedBudget =
+    overrides.timeBudgetMs ??
+    process.env.RUNCHISE_CUSTOMER_WORKER_BUDGET_MS ??
+    DEFAULT_WORKER_BUDGET_MS;
+  const requestedMaxPages =
+    overrides.maxPages ??
+    process.env.RUNCHISE_CUSTOMER_WORKER_MAX_PAGES ??
+    DEFAULT_MAX_PAGES;
+
+  return {
+    timeBudgetMs: clampWorkerBudgetMs(
+      requestedBudget,
+      DEFAULT_WORKER_BUDGET_MS,
+      { min: 3_000 },
+    ),
+    maxPages: Math.min(Math.max(Number(requestedMaxPages) || 1, 1), 20),
+  };
+}
 
 function createDatabaseClient() {
   return new Client({ connectionString: process.env.DATABASE_URL });
@@ -257,13 +282,7 @@ async function processImportPage(client, job, dependencies = {}) {
   return { completed, job: serializeJob(result.rows[0]) };
 }
 
-async function processCustomerImportSyncJob(
-  {
-    timeBudgetMs = DEFAULT_WORKER_BUDGET_MS,
-    maxPages = DEFAULT_MAX_PAGES,
-  } = {},
-  dependencies = {},
-) {
+async function processCustomerImportSyncJob(options = {}, dependencies = {}) {
   const createClient = dependencies.createClient || createDatabaseClient;
   // Dijeda: tidak memproses halaman apa pun dan TIDAK mengubah status job,
   // sehingga cursor terakhir tetap utuh untuk dilanjutkan setelah saklar
@@ -310,10 +329,11 @@ async function processCustomerImportSyncJob(
       [job.id],
     );
 
-    const deadline =
-      Date.now() +
-      clampWorkerBudgetMs(timeBudgetMs, DEFAULT_WORKER_BUDGET_MS, { min: 3_000 });
-    const safeMaxPages = Math.min(Math.max(Number(maxPages) || 1, 1), 20);
+    // Dibaca saat invocation (bukan saat module load), sehingga konfigurasi
+    // deployment dan override test selalu menghasilkan nilai efektif yang sama.
+    const workerConfig = getCustomerImportWorkerConfig(options);
+    const deadline = Date.now() + workerConfig.timeBudgetMs;
+    const safeMaxPages = workerConfig.maxPages;
     let pagesProcessed = 0;
     let serialized = serializeJob(job);
 
@@ -372,7 +392,10 @@ async function processCustomerImportSyncJob(
 }
 
 module.exports = {
+  DEFAULT_WORKER_BUDGET_MS,
+  DEFAULT_MAX_PAGES,
   createCustomerImportSyncJob,
+  getCustomerImportWorkerConfig,
   getCustomerImportSyncJob,
   processCustomerImportSyncJob,
   processImportPage,
