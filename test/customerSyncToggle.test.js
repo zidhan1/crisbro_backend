@@ -15,7 +15,9 @@ const assert = require('node:assert/strict');
 //      supaya bisa dilanjutkan dari halaman terakhir nanti.
 
 const {
+  CUSTOMER_SYNC_PAUSED_IN_CODE,
   isCustomerSyncEnabled,
+  isCustomerSyncEnabledFromEnv,
   customerSyncDisabledResult,
 } = require('../src/lib/customerSyncToggle');
 
@@ -26,25 +28,54 @@ test.afterEach(() => {
   else process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED = ORIGINAL_ENV;
 });
 
-test('saklar aktif secara default ketika env belum diisi', () => {
-  delete process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED;
-  assert.equal(isCustomerSyncEnabled(), true);
+// Sinkronisasi sedang DIJEDA dari kode (CUSTOMER_SYNC_PAUSED_IN_CODE).
+// Semantik env tetap diuji terpisah supaya jaminannya utuh dan langsung
+// berlaku lagi persis seperti semula begitu jeda itu dilepas.
+test('semantik env: aktif secara default ketika env belum diisi', () => {
+  assert.equal(isCustomerSyncEnabledFromEnv({}), true);
 });
 
-test('hanya string "false" persis yang mematikan sinkronisasi', () => {
-  for (const value of ['true', 'TRUE', 'True', '1', 'yes', 'on', '', ' true ']) {
-    process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED = value;
-    assert.equal(isCustomerSyncEnabled(), true, `"${value}" seharusnya tetap menyalakan`);
-  }
+test('jeda di kode mematikan sinkronisasi apa pun isi env-nya', () => {
+  assert.equal(
+    CUSTOMER_SYNC_PAUSED_IN_CODE,
+    true,
+    'sinkronisasi customer sedang sengaja dijeda; ubah konstanta ini ke false untuk menyalakan',
+  );
 
-  for (const value of ['false']) {
-    process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED = value;
+  for (const value of ['true', 'TRUE', '1', 'yes', 'on', '', undefined]) {
+    if (value === undefined) delete process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED;
+    else process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED = value;
+
     assert.equal(
       isCustomerSyncEnabled(),
       false,
-      `"${value}" seharusnya mematikan sinkronisasi`,
+      `env "${value}" tidak boleh bisa menghidupkan kembali sinkronisasi yang dijeda di kode`,
     );
   }
+});
+
+test('pesan dijeda menunjuk mekanisme yang benar-benar mematikan', () => {
+  // Kalau pesannya menyuruh mengubah env padahal yang menghentikan adalah jeda
+  // di kode, operator akan menyetel env, melihat tetap mati, lalu bingung.
+  const { message } = customerSyncDisabledResult();
+  assert.match(message, /CUSTOMER_SYNC_PAUSED_IN_CODE/);
+  assert.match(message, /customerSyncToggle\.js/);
+});
+
+test('semantik env: hanya string "false" persis yang mematikan', () => {
+  for (const value of ['true', 'TRUE', 'True', '1', 'yes', 'on', '', ' true ']) {
+    assert.equal(
+      isCustomerSyncEnabledFromEnv({ RUNCHISE_CUSTOMER_SYNC_ENABLED: value }),
+      true,
+      `"${value}" seharusnya tetap menyalakan`,
+    );
+  }
+
+  assert.equal(
+    isCustomerSyncEnabledFromEnv({ RUNCHISE_CUSTOMER_SYNC_ENABLED: 'false' }),
+    false,
+    '"false" seharusnya mematikan sinkronisasi',
+  );
 });
 
 test('balasan dijeda membawa alasan yang bisa dibedakan dari status lain', () => {
@@ -149,6 +180,15 @@ test('worker timestamp customer juga tidak menyentuh database saat dijeda', asyn
 test('sinkronisasi kembali berjalan normal begitu saklar dinyalakan', async () => {
   process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED = 'true';
 
+  // Jeda manual di kode (CUSTOMER_SYNC_PAUSED_IN_CODE) mematikan sinkronisasi
+  // apa pun isi env-nya. Yang diuji di sini adalah perilaku worker SAAT
+  // menyala, jadi saklarnya distub -- bukan jeda-nya yang dilepas. Stub harus
+  // dipasang SEBELUM service di-require ulang, karena service mengambil
+  // fungsinya lewat destructuring saat modul dimuat.
+  const toggle = require('../src/lib/customerSyncToggle');
+  const originalIsEnabled = toggle.isCustomerSyncEnabled;
+  toggle.isCustomerSyncEnabled = () => true;
+
   // Koneksi lock di-inject lewat seam `dependencies.createClient` milik
   // service, sama seperti test worker lainnya. Menambal pg.Client global saja
   // tidak cukup: createAdvisoryLockClient() sengaja fail-closed menuntut
@@ -195,6 +235,7 @@ test('sinkronisasi kembali berjalan normal begitu saklar dinyalakan', async () =
     assert.notEqual(result.status, 'disabled');
   } finally {
     pg.Client = originalClient;
+    toggle.isCustomerSyncEnabled = originalIsEnabled;
     delete require.cache[require.resolve('../src/services/customerImportSyncService')];
   }
 });

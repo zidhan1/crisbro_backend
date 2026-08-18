@@ -190,6 +190,12 @@ async function runCatalogSyncWorkerJob() {
 
 // Impor customer penuh hanya untuk eksekusi manual/CLI, bukan cron, guna menghindari risiko timeout pada lingkungan serverless.
 async function runCustomerSyncJob() {
+  // Jalur ini menulis Customer/User baru persis seperti worker impor, jadi ia
+  // harus tunduk pada saklar yang sama. Saat ini memang belum punya pemanggil,
+  // tetapi tetap diekspor -- tanpa gerbang ini, menyambungkannya ke sebuah
+  // route atau skrip akan diam-diam menembus jeda sinkronisasi customer.
+  if (!isCustomerSyncEnabled()) return customerSyncDisabledResult();
+
   const { locationId } = getSyncConfig();
   return runLockedJob(
     'customers-full',

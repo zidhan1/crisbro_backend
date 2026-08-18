@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// Menyalakan saklar sinkronisasi khusus untuk test ini: lihat penjelasan di
+// test/enableCustomerSyncForTests.js. Harus sebelum service di-require.
+require('./enableCustomerSyncForTests');
 test('C-1: worker customer hanya memproses job yang sudah diantrikan', async () => {
   process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED = 'true';
   const { processCustomerImportSyncJob } = require('../src/services/customerImportSyncService');

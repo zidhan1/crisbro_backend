@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+// Menyalakan saklar sinkronisasi khusus untuk test ini: lihat penjelasan di
+// test/enableCustomerSyncForTests.js. Harus sebelum service di-require.
+require('./enableCustomerSyncForTests');
 
 // M-2: syncCustomers(), syncCustomerPoints(), dan
 // fetchRunchiseCustomerLookupForLocation() memanggil fetchCustomersPage()
