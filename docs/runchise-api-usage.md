@@ -48,11 +48,18 @@ Content-Type: application/json
 ## Sync entrypoints
 
 - Cron worker: `src/jobs/runchiseSyncCron.js`
-- Default master-data schedule: twice daily at 12:00 and 18:00 (`0 12,18 * * *`)
-- Default customer-points schedule: every 30 minutes (`*/30 * * * *`)
+- Default master-data stages run independently around 12:00 (`0`, `5`, `10`,
+  `20`, and `25` minutes past the hour; see `vercel.json`).
+- Customer enqueue runs at `15 12 * * *`; the customer worker runs every ten
+  minutes (`*/10 * * * *`) and resumes the persisted cursor.
+- Customer-points sync stage: `30 12 * * *` in Vercel; the persistent
+  scheduler uses the same default stage schedule.
 - Disable cron: `RUNCHISE_SYNC_CRON_ENABLED=false`
-- Change master-data schedule: `RUNCHISE_MASTER_SYNC_CRON="0 1,13 * * *"`
-- Legacy master-data override still supported: `RUNCHISE_SYNC_CRON="0 1,13 * * *"`
+- Persistent scheduler stage schedules are configured independently with
+  `RUNCHISE_LOCATIONS_SYNC_CRON`, `RUNCHISE_BRANDS_SYNC_CRON`,
+  `RUNCHISE_PRODUCTS_SYNC_CRON`, `RUNCHISE_CUSTOMERS_IMPORT_SYNC_CRON`,
+  `RUNCHISE_CUSTOMERS_IMPORT_WORKER_SYNC_CRON`,
+  `RUNCHISE_SALES_SYNC_CRON`, and `RUNCHISE_PROMOS_SYNC_CRON`.
 - Change customer-points schedule: `RUNCHISE_POINTS_SYNC_CRON="*/15 * * * *"`
 - Sales transaction sync uses Runchise params: `start_date`, `end_date`, `location_id`, `payment_method_ids`, `status`
 - Historical sales import (customer snapshot + transactions):

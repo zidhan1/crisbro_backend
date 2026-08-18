@@ -1,6 +1,15 @@
 # M-7 (MEDIUM) — deleteAdminCustomer mungkin tak menghapus semua baris terkait
 
 Status: **Fixed**
+
+> **Kebijakan saat ini (setelah H-4/M-7 privacy retention):**
+> `deleteAdminCustomer` menghapus relasi `RESTRICT` dan menganonimkan
+> snapshot PII pada `CustomerSalesTransactionReport` serta
+> `RunchisePosRewardRedemption` sebelum customer dihapus. Baris POS tetap
+> dipertahankan untuk audit, tetapi `customer_name`,
+> `customer_phone_number`, `raw`, dan `customer_id` tidak lagi menyimpan
+> identitas customer. Bagian “sebelum perbaikan” di bawah adalah sejarah,
+> bukan deskripsi perilaku kode saat ini.
 File terdampak: `src/controllers/adminLoyaltyController.js` (`deleteAdminCustomer`)
 
 ## 1. Sebelum perbaikan

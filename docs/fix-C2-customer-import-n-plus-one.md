@@ -5,8 +5,9 @@ File terdampak: `src/services/syncService.js`, `src/services/customerImportSyncS
 
 ## 1. Masalah
 
-`upsertRunchiseCustomer()` — dipanggil sekali per customer dari
-`syncCustomers()` (impor penuh) dan dari `processImportPage()` (worker
+`upsertRunchiseCustomer()` adalah helper kompatibilitas untuk jalur manual;
+worker production memakai `upsertRunchiseCustomersBatch()` dari
+`syncCustomers()` dan `processImportPage()` (worker
 cursor yang jadi jalur cron utama setelah perbaikan C-1) — melakukan sekitar
 6-10 round-trip database **per customer**:
 
@@ -85,18 +86,14 @@ yang menjadi *owner* bagi setidaknya satu customer di batch tersebut;
 `brand_id`/`runchise_id` selalu disegarkan untuk semua lokasi yang
 tersentuh, sama seperti versi per-baris.
 
-### 3.3 Fallback aman untuk kasus yang tidak bisa di-bulk
+### 3.3 Kegagalan batch dan helper kompatibilitas
 
-- **Customer tanpa nomor telepon** (langka): tidak bisa dikorelasikan balik
-  dengan aman dari hasil `INSERT ... RETURNING` massal (banyak baris
-  `phone_number` bernilai NULL, sehingga peta hasil→baris jadi ambigu).
-  Diproses satu-per-satu lewat `upsertRunchiseCustomer()` asli — jalur ini
-  tetap benar, hanya tidak dioptimalkan (dampaknya kecil karena jarang).
-- **Batch gagal total** (mis. galat jaringan/DB di tengah statement):
-  `processImportPage()` (worker cron) menangkap error tersebut dan jatuh ke
-  pemrosesan satu-per-satu untuk halaman itu saja, mempertahankan properti
-  lama "satu customer/halaman bermasalah tidak boleh menghentikan seluruh
-  job".
+Tidak ada fallback N+1 pada worker production. Customer tanpa nomor telepon
+ditangani dengan placeholder unik di dalam transaksi bulk, lalu dikembalikan
+ke `NULL` sebelum commit. Jika batch gagal, worker melempar error dan
+mengembalikan job ke `queued` agar halaman yang sama diulang pada invocation
+berikutnya. `upsertRunchiseCustomer()` tetap diekspor untuk kompatibilitas,
+tetapi tidak dipanggil oleh worker batch.
 
 ### 3.4 Atomicity: transaksi untuk mencegah baris yatim
 
@@ -115,7 +112,8 @@ nomor tersebut di run berikutnya.
   ditambah field `failed` (additive, tidak menghapus field lama).
 - `processImportPage()` (`customerImportSyncService.js`, jalur worker cron
   yang aktif di production setelah C-1) — sama, satu batch per halaman API
-  (maks 100 customer), dengan fallback satu-per-satu bila batch gagal total.
+  (maks 100 customer); jika batch gagal, job dikembalikan ke `queued` untuk
+  retry halaman yang sama pada invocation berikutnya.
 
 ## 4. Verifikasi
 
@@ -193,9 +191,8 @@ module type: function LOAD OK
 
 ## 5. Yang TIDAK berubah
 
-- `upsertRunchiseCustomer()` (versi per-baris) — dipertahankan apa adanya,
-  dipakai sebagai fallback untuk create tanpa telepon dan untuk mode darurat
-  saat batch gagal total.
+- `upsertRunchiseCustomer()` (versi per-baris) — dipertahankan untuk
+  kompatibilitas jalur manual; bukan fallback worker production.
 - Skema database — tidak ada migration baru, tidak ada perubahan tabel.
 - `bulkUpsertCustomerPoints` dan `syncCustomerPointsFromStaging` — sudah
   benar sebelumnya, tidak disentuh.
@@ -203,20 +200,10 @@ module type: function LOAD OK
   berubah, kecuali field `failed` tambahan (additive) pada return value
   `syncCustomers()`.
 
-## Addendum — penghapusan fallback N+1
+## Catatan implementasi (fallback N+1 dihapus)
 
-Perubahan lanjutan L8/C-2 menghapus fallback per-customer yang sebelumnya
-disebut pada bagian 3.3 dan 5:
-
-- customer tanpa nomor telepon tetap dibuat dalam transaksi bulk memakai
-  placeholder unik sementara, lalu dikembalikan ke `NULL` sebelum commit;
-- kegagalan batch tidak lagi diproses satu-per-satu. Worker melempar error,
-  mengembalikan job ke `queued`, dan mengulang cursor halaman yang sama pada
-  invocation berikutnya.
-
-Dengan demikian jalur worker production tidak memiliki fallback N+1. Fungsi
-`upsertRunchiseCustomer()` tetap dipertahankan untuk kompatibilitas jalur
-manual, tetapi tidak dipanggil oleh worker batch.
+Worker production tidak memiliki fallback N+1: placeholder telepon dan retry
+halaman yang sama ditangani oleh transaksi bulk serta status `queued`.
 
 ## 6. Dampak performa yang diharapkan
 

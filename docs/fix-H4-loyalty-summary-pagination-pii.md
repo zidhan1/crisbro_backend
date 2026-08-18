@@ -2,6 +2,13 @@
 
 Status: **Fixed**
 
+> **Cakupan privasi saat ini:** selain `getSummary`, endpoint
+> `/api/admin/customer-sales-transaction-reports` juga menerapkan redaksi
+> berbasis role. Admin dapat memakai PII untuk operasi yang berwenang;
+> marketing tidak dapat mencari berdasarkan nama/telepon dan tidak menerima
+> `nama_pelanggan`, `no_telepon`, atau `raw`. Penghapusan customer juga
+> menganonimkan snapshot PII pada laporan dan histori POS.
+
 File terdampak:
 
 - Backend: `src/controllers/adminLoyaltyController.js`

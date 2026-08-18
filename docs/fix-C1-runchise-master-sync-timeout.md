@@ -109,7 +109,7 @@ GET|POST /api/cron/runchise-sync/customers          (worker berbasis cursor)
 GET|POST /api/cron/runchise-sync/sales-transactions
 GET|POST /api/cron/runchise-sync/promos
 GET|POST /api/cron/runchise-sync/points              (sudah ada, tidak berubah)
-GET|POST /api/cron/runchise-sync/customer-timestamps-worker  (sudah ada, tidak berubah)
+GET|POST /api/cron/runchise-sync/customer-timestamps-worker  (manual/worker aplikasi)
 ```
 
 Semua tetap dilindungi `requireCronSecret` (header `Authorization: Bearer`
@@ -119,21 +119,21 @@ atau `x-cron-secret`), sama seperti sebelumnya.
 
 `vercel.json` — satu cron per tahap, digeser 5 menit agar tidak
 tumpang-tindih dan tidak membebani DB secara bersamaan. Customer sync
-dijalankan dua kali sehari (`15,45 12 * * *`) karena bersifat cursor/batch —
-lebih dari satu invocation per hari membuat backlog besar selesai lebih
-cepat tanpa risiko timeout, karena tiap invocation tetap dibatasi time
-budget pendek:
+diantrikan sekali sehari (`15 12 * * *`), sedangkan worker cursor berjalan
+setiap 10 menit (`*/10 * * * *`) agar backlog selesai bertahap tanpa risiko
+timeout:
 
 | Endpoint | Jadwal lama | Jadwal baru |
 |---|---|---|
 | locations | (bagian dari master, 12:00) | `0 12 * * *` |
 | brands | (bagian dari master, 12:00) | `5 12 * * *` |
 | products | (bagian dari master, 12:00) | `10 12 * * *` |
-| customers | (bagian dari master, 12:00) | `15,45 12 * * *` |
+| customers enqueue | (bagian dari master, 12:00) | `15 12 * * *` |
+| customers worker | (bagian dari master, 12:00) | `*/10 * * * *` |
 | sales-transactions | (bagian dari master, 12:00) | `20 12 * * *` |
 | promos | (bagian dari master, 12:00) | `25 12 * * *` |
 | points | `15 12 * * *` | `30 12 * * *` |
-| customer-timestamps-worker | `30 12 * * *` | `35 12 * * *` |
+| customer-timestamps-worker | `30 12 * * *` | tidak dijadwalkan Vercel |
 | maintenance | `45 12 * * *` | `45 12 * * *` (tidak berubah) |
 | ~~master~~ | `0 12 * * *` | **dihapus** |
 
@@ -202,7 +202,7 @@ $ grep -rn "runRunchiseMasterSyncJob" src/ vercel.json README.md
 
 - Perubahan `vercel.json` (daftar `crons`) baru aktif setelah **deploy ke
   production**; Vercel membaca cron config dari deployment yang sedang live.
-- Pastikan `CRON_SECRET` (atau `RUNCHISE_SYNC_CRON_SECRET`) tetap terisi di
+- Pastikan `CRON_SECRET` tetap terisi di
   environment production — tanpa itu semua endpoint `/api/cron/*` akan
   menolak request cron Vercel (lihat `requireCronSecret` di `src/index.js`).
 - Jika ada monitoring/alerting eksternal yang memanggil
