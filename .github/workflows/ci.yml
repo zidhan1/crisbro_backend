@@ -7,6 +7,18 @@ on:
   pull_request:
 
 jobs:
+  # Job ini sengaja TIDAK punya blok `env:` dan tidak memakai secret apa pun:
+  # seluruh test unit wajib hermetik (mock Prisma / client yang di-inject).
+  #
+  # Kalau job ini merah karena sebuah variabel environment "hilang", perbaikan
+  # yang benar adalah menyuntikkan dependensi dari test-nya, BUKAN menambahkan
+  # nilai placeholder di sini. Menambahkan mis. DIRECT_URL palsu akan menutupi
+  # jaminan fail-closed advisory lock (M-3) tanpa ada yang menyadarinya.
+  #
+  # Catatan jebakan: di laptop, `@prisma/client` memuat .env saat di-import,
+  # sehingga test bisa hijau lokal tapi merah di CI (checkout CI tidak punya
+  # .env). Untuk mereproduksi CI secara lokal, jalankan `npm test` dengan .env
+  # dipindahkan sementara ke luar folder.
   test:
     runs-on: ubuntu-latest
     steps:

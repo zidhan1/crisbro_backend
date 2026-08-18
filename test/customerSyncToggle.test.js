@@ -149,27 +149,49 @@ test('worker timestamp customer juga tidak menyentuh database saat dijeda', asyn
 test('sinkronisasi kembali berjalan normal begitu saklar dinyalakan', async () => {
   process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED = 'true';
 
+  // Koneksi lock di-inject lewat seam `dependencies.createClient` milik
+  // service, sama seperti test worker lainnya. Menambal pg.Client global saja
+  // tidak cukup: createAdvisoryLockClient() sengaja fail-closed menuntut
+  // DIRECT_URL (M-3), dan argumen connectionString itu dievaluasi SEBELUM
+  // constructor palsu dipanggil. Di laptop test tetap hijau karena
+  // @prisma/client memuat .env saat import, sedangkan checkout CI tidak punya
+  // .env sama sekali -- persis beda perilaku yang membuat CI merah (M-12).
   delete require.cache[require.resolve('../src/services/customerImportSyncService')];
+
+  let connected = false;
+  let lockClientsCreated = 0;
+  const createClient = () => {
+    lockClientsCreated += 1;
+    return {
+      async connect() {
+        connected = true;
+      },
+      async query() {
+        // Advisory lock gagal diambil -> worker keluar lebih awal tanpa
+        // menyentuh data. Cukup untuk membuktikan jalur normal dijalankan lagi.
+        return { rows: [{ acquired: false }] };
+      },
+      async end() {},
+    };
+  };
+
+  // Jaring pengaman: jalur ini tidak boleh membuka koneksi pg sendiri di luar
+  // client yang di-inject. Kalau suatu saat ada yang menambahkannya, test
+  // gagal dengan pesan jelas, bukan diam-diam mencoba konek ke database asli.
   const pg = require('pg');
   const originalClient = pg.Client;
-  let connected = false;
   pg.Client = class {
-    async connect() {
-      connected = true;
+    constructor() {
+      throw new Error('Worker harus memakai client yang di-inject, bukan membuka koneksi pg sendiri');
     }
-    async query() {
-      // Advisory lock gagal diambil -> worker keluar lebih awal tanpa
-      // menyentuh data. Cukup untuk membuktikan jalur normal dijalankan lagi.
-      return { rows: [{ acquired: false }] };
-    }
-    async end() {}
   };
 
   try {
     const { processCustomerImportSyncJob } = require('../src/services/customerImportSyncService');
-    const result = await processCustomerImportSyncJob();
+    const result = await processCustomerImportSyncJob({}, { createClient });
 
     assert.equal(connected, true, 'saat menyala, worker harus benar-benar jalan lagi');
+    assert.equal(lockClientsCreated, 1, 'worker cukup memakai satu koneksi advisory lock');
     assert.notEqual(result.status, 'disabled');
   } finally {
     pg.Client = originalClient;
