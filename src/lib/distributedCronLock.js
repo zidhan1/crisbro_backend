@@ -10,7 +10,8 @@ const RUNCHISE_CRON_LOCK_IDS = Object.freeze({
   products: 3,
   customersFull: 4,
   customersImport: 5,
-  sales: 6,
+  salesEnqueue: 6,
+  salesWorker: 9,
   promos: 7,
   points: 8,
 });

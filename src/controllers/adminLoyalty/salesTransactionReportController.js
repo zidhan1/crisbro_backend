@@ -1,4 +1,5 @@
 const prisma = require('../../lib/prisma');
+const { setSharedResponseCacheHeaders } = require('../../lib/responseCache');
 const {
   badRequest,
   handleError,
@@ -180,8 +181,10 @@ async function listCustomerSalesTransactionReportOutlets(req, res) {
       distinct: ['nama_outlet'],
       select: { nama_outlet: true },
       orderBy: { nama_outlet: 'asc' },
+      take: 1000,
     });
 
+    setSharedResponseCacheHeaders(res, 5 * 60 * 1000);
     res.json(outletRows.map((row) => row.nama_outlet).filter(Boolean));
   } catch (error) {
     handleError(res, error);

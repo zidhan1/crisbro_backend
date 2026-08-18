@@ -716,7 +716,8 @@ async function listAdminBrands(req, res) {
   try {
     const brands = await prisma.brand.findMany({
       select: { id: true, name: true },
-      orderBy: { name: 'asc' },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      take: 1000,
     });
 
     res.json(brands);
@@ -730,7 +731,8 @@ async function listAdminLocations(req, res) {
     const locations = await prisma.location.findMany({
       where: { is_active: true, is_outlet: true },
       select: { id: true, name: true, city: true },
-      orderBy: [{ city: 'asc' }, { name: 'asc' }],
+      orderBy: [{ city: 'asc' }, { name: 'asc' }, { id: 'asc' }],
+      take: 1000,
     });
 
     res.json(locations);

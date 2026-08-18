@@ -3,6 +3,7 @@ const auth = require('../middleware/auth');
 const requireRole = require('../middleware/requireRole');
 const {
   resendActivationTargetLimiter,
+  reportOutletsLimiter,
   runchiseSyncTargetLimiter,
 } = require('../lib/rateLimit');
 // L-7: validasi skema dipasang seragam di seluruh rute admin loyalty, bukan
@@ -71,6 +72,7 @@ router.get(
 router.get(
   '/customer-sales-transaction-reports/outlets',
   adminOrMarketing,
+  reportOutletsLimiter,
   listCustomerSalesTransactionReportOutlets,
 );
 router.post('/customers', adminOrMarketing, validateCustomerCreate, createAdminCustomer);

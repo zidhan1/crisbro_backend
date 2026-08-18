@@ -108,6 +108,9 @@ async function register(req, res) {
       where: {
         phone_number: { in: phoneVariants(phone_number) },
       },
+      // Multiple legacy phone formats may coexist during migration. Pick the
+      // oldest account consistently instead of relying on database row order.
+      orderBy: { id: 'asc' },
       select: {
         id: true,
         email: true,
@@ -183,6 +186,7 @@ async function login(req, res) {
     // M-13: Mengubah pencarian login menjadi findFirst agar mendukung berbagai format nomor telepon tanpa mengubah konsistensi waktu respons autentikasi.
     const credentials = await prisma.user.findFirst({
       where: { phone_number: { in: phoneVariants(phone_number) } },
+      orderBy: { id: 'asc' },
       select: {
         id: true,
         role: true,

@@ -40,6 +40,28 @@ function mapPromo(promo) {
   };
 }
 
+function buildPromoWhere(status, now = new Date()) {
+  return {
+    is_visible: true,
+    ...(status ? { status } : {}),
+    // Sync materializes status/is_visible periodically; the validity window
+    // must still be enforced against the request clock.
+    AND: [
+      {
+        OR: [
+          { status: { not: 'active' } },
+          {
+            AND: [
+              { OR: [{ start_at: null }, { start_at: { lte: now } }] },
+              { OR: [{ end_at: null }, { end_at: { gte: now } }] },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 // GET /api/promos
 router.get('/', async (req, res) => {
   try {
@@ -55,10 +77,7 @@ router.get('/', async (req, res) => {
       });
     }
 
-    const where = {
-      is_visible: true,
-      ...(status ? { status } : {}),
-    };
+    const where = buildPromoWhere(status, new Date());
     if (usePaginatedResponse) {
       const total = await prisma.promo.count({ where });
       const totalPages = Math.max(Math.ceil(total / limit), 1);
@@ -94,3 +113,4 @@ router.get('/', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.buildPromoWhere = buildPromoWhere;

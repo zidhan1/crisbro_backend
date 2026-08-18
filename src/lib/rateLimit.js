@@ -143,6 +143,15 @@ const runchiseSyncTargetLimiter = createDedicatedLimiter({
   keyGenerator: customerTargetKey,
 });
 
+// Outlet options are used by the report filter and perform a distinct scan;
+// keep repeated polling from turning that endpoint into an unbounded read.
+const reportOutletsLimiter = createDedicatedLimiter({
+  prefix: 'admin-report-outlets',
+  windowMs: 60_000,
+  max: 30,
+  message: 'Terlalu banyak permintaan daftar outlet. Coba lagi sebentar lagi.',
+});
+
 // Batas umum seluruh API. Sengaja longgar: tujuannya menahan penyalahgunaan
 // besar-besaran, bukan mengganggu pemakaian dashboard yang wajar.
 const globalLimiter = rateLimit({
@@ -170,5 +179,6 @@ module.exports = {
   pruneRateLimitCounters,
   resendActivationTargetLimiter,
   runchiseSyncTargetLimiter,
+  reportOutletsLimiter,
   shouldSkipGlobalLimiter,
 };

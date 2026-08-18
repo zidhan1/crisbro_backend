@@ -419,7 +419,7 @@ async function handleProcessSalesSync(req, res) {
   try {
     const result = await runAdminSyncWithLock(
       'sales-worker',
-      RUNCHISE_CRON_LOCK_IDS.sales,
+      RUNCHISE_CRON_LOCK_IDS.salesWorker,
       () => processSalesTransactionSyncJob(),
     );
     if (result?.skipped) return respondSyncSkipped(res, 'sales transactions', result);

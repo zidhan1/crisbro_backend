@@ -148,7 +148,7 @@ async function runSyncProductsJob() {
 }
 
 async function runSyncSalesTransactionReportsJob() {
-  return runLockedJob('sales', RUNCHISE_CRON_LOCK_IDS.sales, async () => {
+  return runLockedJob('sales-enqueue', RUNCHISE_CRON_LOCK_IDS.salesEnqueue, async () => {
     // Cron hanya membuat/mengambil job persisten lalu mengerjakan beberapa
     // halaman sampai time budget. Invocation berikutnya melanjutkan cursor.
     // Job cron memakai jendela tujuh hari WIB agar koreksi transaksi terlambat
@@ -170,7 +170,7 @@ async function runSyncSalesTransactionReportsJob() {
 // Dipanggil lebih sering daripada enqueue harian. Worker tidak membuat job
 // baru saat idle sehingga tidak mengulang jendela yang sama terus-menerus.
 async function runSalesTransactionWorkerJob() {
-  return runLockedJob('sales', RUNCHISE_CRON_LOCK_IDS.sales, () =>
+  return runLockedJob('sales-worker', RUNCHISE_CRON_LOCK_IDS.salesWorker, () =>
     processSalesTransactionSyncJob(),
   );
 }
@@ -280,7 +280,7 @@ function startRunchiseSyncCron() {
     ['products', runSyncProductsJob],
     ['customers-import-enqueue', runCustomerImportEnqueueJob],
     ['customers-import-worker', runCustomerImportWorkerJob],
-    ['sales', runSyncSalesTransactionReportsJob],
+    ['sales-enqueue', runSyncSalesTransactionReportsJob],
     ['promos', runSyncPromosJob],
     ['points', runCustomerPointsSyncJob],
   ];
