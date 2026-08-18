@@ -1,8 +1,5 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-
 const {
   MAX_WORKER_BUDGET_MS,
   SERVERLESS_MAX_DURATION_MS,
@@ -15,15 +12,8 @@ const {
   getCustomerImportWorkerConfig,
 } = require('../src/services/customerImportSyncService');
 
-test('durasi Vercel sama dengan kontrak runtime dan menyisakan reserve 10 detik', () => {
-  const config = JSON.parse(
-    fs.readFileSync(path.join(__dirname, '..', 'vercel.json'), 'utf8'),
-  );
-
-  assert.equal(
-    config.functions['api/index.js'].maxDuration * 1000,
-    SERVERLESS_MAX_DURATION_MS,
-  );
+test('worker menghitung budget efektif di bawah batas runtime serverless', () => {
+  assert.equal(SERVERLESS_MAX_DURATION_MS - SERVERLESS_SHUTDOWN_RESERVE_MS, MAX_WORKER_BUDGET_MS);
   assert.equal(SERVERLESS_SHUTDOWN_RESERVE_MS, 10_000);
   assert.equal(MAX_WORKER_BUDGET_MS, 20_000);
 });

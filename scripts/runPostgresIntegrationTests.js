@@ -4,12 +4,16 @@ const os = require('node:os');
 const path = require('node:path');
 
 const externalUrl = process.env.POSTGRES_TEST_URL;
-const pgBin = process.env.POSTGRES_BIN || 'C:\\Program Files\\PostgreSQL\\17\\bin';
+// Prefer executables on PATH (GitHub's Postgres service and package-manager
+// installs use this), while retaining the conventional Windows installer
+// location for local runs that do not provide POSTGRES_TEST_URL.
+const pgBin = process.env.POSTGRES_BIN ||
+  (process.platform === 'win32' ? 'C:\\Program Files\\PostgreSQL\\17\\bin' : '');
 const executables = {
-  initdb: path.join(pgBin, process.platform === 'win32' ? 'initdb.exe' : 'initdb'),
-  pgCtl: path.join(pgBin, process.platform === 'win32' ? 'pg_ctl.exe' : 'pg_ctl'),
-  createdb: path.join(pgBin, process.platform === 'win32' ? 'createdb.exe' : 'createdb'),
-  psql: path.join(pgBin, process.platform === 'win32' ? 'psql.exe' : 'psql'),
+  initdb: pgBin ? path.join(pgBin, process.platform === 'win32' ? 'initdb.exe' : 'initdb') : 'initdb',
+  pgCtl: pgBin ? path.join(pgBin, process.platform === 'win32' ? 'pg_ctl.exe' : 'pg_ctl') : 'pg_ctl',
+  createdb: pgBin ? path.join(pgBin, process.platform === 'win32' ? 'createdb.exe' : 'createdb') : 'createdb',
+  psql: pgBin ? path.join(pgBin, process.platform === 'win32' ? 'psql.exe' : 'psql') : 'psql',
 };
 if (!externalUrl) {
   for (const [name, executable] of Object.entries(executables)) {
