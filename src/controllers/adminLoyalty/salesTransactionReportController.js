@@ -14,6 +14,21 @@ function isFullPiiRole(req) {
   return req.user?.role === 'admin';
 }
 
+function buildReportDataAccess(role) {
+  if (role === 'admin') return {};
+
+  // Redaksi dilakukan sejak query database, bukan hanya sesaat sebelum JSON
+  // dikirim. Dengan demikian PII dan payload mentah tidak pernah masuk ke
+  // memory proses untuk role yang tidak berhak.
+  return {
+    omit: {
+      nama_pelanggan: true,
+      no_telepon: true,
+      raw: true,
+    },
+  };
+}
+
 function buildReportSearchFilter(search, { includePii = false } = {}) {
   if (!search) return null;
   return {
@@ -92,6 +107,7 @@ async function listCustomerSalesTransactionReports(req, res) {
     const clampedPage = Math.min(page, totalPages);
     const reports = await prisma.customerSalesTransactionReport.findMany({
       where,
+      ...buildReportDataAccess(req.user?.role),
       orderBy: [{ tanggal_transaksi: 'desc' }, { id: 'desc' }],
       skip: (clampedPage - 1) * limit,
       take: limit,
@@ -173,6 +189,7 @@ async function listCustomerSalesTransactionReportOutlets(req, res) {
 }
 
 module.exports = {
+  buildReportDataAccess,
   buildReportSearchFilter,
   redactReportForRole,
   listCustomerSalesTransactionReports,

@@ -4,9 +4,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const {
+  buildReportDataAccess,
   buildReportSearchFilter,
   redactReportForRole,
 } = require('../src/controllers/adminLoyalty/salesTransactionReportController');
+
+test('H-4: query marketing tidak membaca kolom PII atau raw dari database', () => {
+  assert.deepEqual(buildReportDataAccess('marketing'), {
+    omit: {
+      nama_pelanggan: true,
+      no_telepon: true,
+      raw: true,
+    },
+  });
+  assert.deepEqual(buildReportDataAccess('admin'), {});
+  // Default-deny juga melindungi request dengan role hilang/tidak dikenal.
+  assert.deepEqual(buildReportDataAccess(undefined), buildReportDataAccess('marketing'));
+});
 
 test('H-4: marketing tidak menerima nama, telepon, atau raw report', () => {
   const output = redactReportForRole({
@@ -89,6 +103,32 @@ test('M-7: migration membersihkan seluruh PII snapshot yang sudah yatim', () => 
   assert.match(migration, /WHERE "customer_id" IS NULL/g);
   assert.match(migration, /UPDATE "AdminActivityLog"/);
   assert.match(migration, /WHERE "action" = 'delete_customer'/);
+});
+
+test('M-7: trigger database membersihkan snapshot sebelum FK menjadi NULL', () => {
+  const migration = fs.readFileSync(
+    path.join(
+      __dirname,
+      '..',
+      'prisma',
+      'migrations',
+      '20260818120000_enforce_customer_pii_delete_retention',
+      'migration.sql',
+    ),
+    'utf8',
+  );
+  assert.match(migration, /BEFORE DELETE ON "Customer"/);
+  assert.match(migration, /UPDATE "CustomerSalesTransactionReport"/);
+  assert.match(migration, /UPDATE "RunchisePosRewardRedemption"/);
+  for (const field of [
+    'nama_pelanggan',
+    'no_telepon',
+    'customer_name',
+    'customer_phone_number',
+    'raw',
+  ]) {
+    assert.match(migration, new RegExp(`"${field}" = NULL`));
+  }
 });
 
 test('M-7: delete tidak menyalin snapshot customer lengkap ke audit log', () => {

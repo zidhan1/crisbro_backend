@@ -92,6 +92,62 @@ async function baseCustomer() {
   return { marker, brand, user, customer };
 }
 
+test('database menganonimkan seluruh snapshot PII sebelum customer dihapus', async () => {
+  const base = await baseCustomer();
+  const runchiseCustomerId = 800000000 + sequence;
+  await prisma.customer.update({
+    where: { id: base.customer.id },
+    data: { runchise_id: runchiseCustomerId },
+  });
+  const report = await prisma.customerSalesTransactionReport.create({
+    data: {
+      source_location_id: 880001,
+      runchise_sales_transaction_id: 880000000 + sequence,
+      runchise_customer_id: runchiseCustomerId,
+      customer_id: base.customer.id,
+      nama_pelanggan: 'PII harus dihapus',
+      no_telepon: '081234567890',
+      raw: { customer_phone: '081234567890' },
+    },
+  });
+  const redemption = await prisma.runchisePosRewardRedemption.create({
+    data: {
+      sale_transaction_id: 890000000 + sequence,
+      sale_detail_transaction_id: 1,
+      runchise_product_id: 1,
+      runchise_customer_id: runchiseCustomerId,
+      customer_id: base.customer.id,
+      customer_name: 'PII harus dihapus',
+      customer_phone_number: '081234567890',
+      product_name: 'Integration reward',
+      location_id: 880001,
+      redeemed_at: new Date(),
+      quantity: 1,
+      point_per_item: 100,
+      points_spent: 100,
+      selling_price: 0,
+      raw: { customer_phone: '081234567890' },
+    },
+  });
+
+  // Sengaja delete langsung di database, melewati deleteAdminCustomer, untuk
+  // membuktikan kebijakan retensi tetap ditegakkan oleh trigger.
+  await prisma.customer.delete({ where: { id: base.customer.id } });
+
+  const [retainedReport, retainedRedemption] = await Promise.all([
+    prisma.customerSalesTransactionReport.findUnique({ where: { id: report.id } }),
+    prisma.runchisePosRewardRedemption.findUnique({ where: { id: redemption.id } }),
+  ]);
+  assert.equal(retainedReport.customer_id, null);
+  assert.equal(retainedReport.nama_pelanggan, null);
+  assert.equal(retainedReport.no_telepon, null);
+  assert.equal(retainedReport.raw, null);
+  assert.equal(retainedRedemption.customer_id, null);
+  assert.equal(retainedRedemption.customer_name, null);
+  assert.equal(retainedRedemption.customer_phone_number, null);
+  assert.equal(retainedRedemption.raw, null);
+});
+
 async function redemptionFixture({ available = 500, points = 150, status = 'pending' } = {}) {
   const base = await baseCustomer();
   await prisma.customerPoint.create({
