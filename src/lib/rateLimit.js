@@ -82,9 +82,13 @@ function shouldSkipGlobalLimiter(req) {
   // Endpoint autentikasi memiliki limiter IP/akun yang lebih ketat di route
   // masing-masing. Jangan ikut menghabiskan kuota API umum: trafik dashboard
   // atau NAT/proxy bersama tidak boleh mengunci pintu login semua pengguna.
+  // Express menerima dua bentuk tergantung adapter/deployment: local mount
+  // masih memuat prefix `/api`, sedangkan Vercel function sering sudah
+  // menghapusnya sebelum meneruskan request ke app.
+  const path = String(req.path || '').replace(/^\/api(?=\/|$)/, '') || '/';
   return (
-    req.path.startsWith('/api/cron/') ||
-    ['/api/login', '/api/register', '/api/activate'].includes(req.path)
+    path.startsWith('/cron/') ||
+    ['/login', '/register', '/activate'].includes(path)
   );
 }
 
