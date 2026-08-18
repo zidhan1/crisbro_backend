@@ -1,13 +1,13 @@
 // Saklar untuk menghentikan sementara sinkronisasi customer dari Runchise.
 //
 // Alasan: impor customer menulis puluhan ribu baris Customer/User baru dan
-// menjadi penyumbang pertumbuhan database terbesar. Selama kapasitas
-// database masih terbatas, impor ini dijeda dan aplikasi memakai data
-// customer yang sudah tersimpan.
+// menjadi penyumbang pertumbuhan database terbesar. Pause tetap tersedia
+// sebagai pengaman kapasitas database, tetapi deployment baru tidak boleh
+// diam-diam melewatkan sinkronisasi.
 //
-// Sengaja OPT-IN (default mati): sinkronisasi hanya berjalan bila
-// RUNCHISE_CUSTOMER_SYNC_ENABLED di-set persis "true". Jadi tidak ada jalur
-// yang diam-diam menghidupkannya kembali karena env belum dikonfigurasi.
+// Sinkronisasi aktif secara default agar deployment baru tidak diam-diam
+// melewatkan pemrosesan customer. Operator dapat menghentikannya sementara
+// dengan menyetel RUNCHISE_CUSTOMER_SYNC_ENABLED="false" secara eksplisit.
 //
 // PENTING: menjeda BUKAN membatalkan. Baris CustomerImportSyncJob yang
 // berstatus queued/running sengaja dibiarkan apa adanya beserta cursor-nya
@@ -15,7 +15,7 @@
 // dinyalakan lagi worker melanjutkan dari halaman terakhir, bukan mengulang
 // dari nol.
 function isCustomerSyncEnabled() {
-  return process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED === 'true';
+  return process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED !== 'false';
 }
 
 // Bentuk balasan seragam untuk semua jalur (cron, worker, route admin) agar
@@ -28,7 +28,7 @@ function customerSyncDisabledResult(job = null) {
     reason: 'customer_sync_disabled',
     message:
       'Sinkronisasi customer Runchise sedang dinonaktifkan sementara. ' +
-      'Set RUNCHISE_CUSTOMER_SYNC_ENABLED=true untuk mengaktifkannya kembali.',
+      'Hapus RUNCHISE_CUSTOMER_SYNC_ENABLED atau setel ke true untuk mengaktifkannya kembali.',
     job,
   };
 }

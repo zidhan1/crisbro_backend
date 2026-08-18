@@ -45,7 +45,7 @@ test('C-2: worker impor customer memakai default efektif 20 detik', () => {
     assert.equal(CUSTOMER_IMPORT_DEFAULT_BUDGET_MS, 20_000);
     assert.deepEqual(getCustomerImportWorkerConfig(), {
       timeBudgetMs: 20_000,
-      maxPages: 10,
+      maxPages: 20,
     });
   } finally {
     if (originalBudget === undefined) {

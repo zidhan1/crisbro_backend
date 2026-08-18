@@ -26,7 +26,9 @@ const CUSTOMER_IMPORT_WORKER_LOCK_ID = 750954836;
 // Default lama 8 detik membuat maxPages praktis tidak terpakai karena timeout
 // satu request Runchise sendiri dapat mencapai 6 detik.
 const DEFAULT_WORKER_BUDGET_MS = MAX_WORKER_BUDGET_MS;
-const DEFAULT_MAX_PAGES = 10;
+// Batas keselamatan tinggi; time budget tetap menjadi pembatas utama sehingga
+// worker tidak akan memulai request baru ketika reserve serverless terpakai.
+const DEFAULT_MAX_PAGES = 20;
 
 function getCustomerImportWorkerConfig(overrides = {}) {
   const requestedBudget =

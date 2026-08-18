@@ -4,8 +4,8 @@ Perbaikan kode menetapkan budget efektif worker impor customer ke **20 detik**.
 Runtime function tetap 30 detik dan 10 detik terakhir dicadangkan untuk
 checkpoint cursor, advisory unlock, penutupan koneksi, serta response.
 
-Flag tetap opt-in sebagai pengaman kapasitas database. Jangan mengaktifkan
-production sebelum satu job staging selesai dan hasil pengukurannya diterima.
+Sinkronisasi aktif secara default. Untuk pause darurat, setel flag ke `false`;
+jangan mengandalkan env yang hilang sebagai mekanisme operasi.
 
 ## Konfigurasi staging
 
@@ -14,7 +14,7 @@ Set environment berikut pada scope **staging/preview** lalu redeploy:
 ```env
 RUNCHISE_CUSTOMER_SYNC_ENABLED=true
 RUNCHISE_CUSTOMER_WORKER_BUDGET_MS=20000
-RUNCHISE_CUSTOMER_WORKER_MAX_PAGES=10
+RUNCHISE_CUSTOMER_WORKER_MAX_PAGES=20
 ```
 
 `RUNCHISE_CUSTOMER_WORKER_BUDGET_MS` dijepit ke rentang 3.000-20.000 ms dan
@@ -24,7 +24,7 @@ membuat worker melewati reserve serverless.
 ## Langkah pengukuran
 
 1. Pastikan endpoint status mengembalikan `sync_enabled: true` dan
-   `worker_config: { timeBudgetMs: 20000, maxPages: 10 }`.
+   `worker_config: { timeBudgetMs: 20000, maxPages: 20 }`.
 2. Buat satu job customer, lalu biarkan cron worker `*/10 * * * *` memprosesnya.
 3. Pantau `SyncJobTelemetry` untuk job `customers-import-worker`. Catat setiap
    invocation: `duration_ms`, `fetched`, `synced`, `failed`,
@@ -43,7 +43,7 @@ membuat worker melewati reserve serverless.
 - pertumbuhan jumlah Customer/User dan ukuran database masih dalam kapasitas;
 - estimasi penyelesaian production dihitung dari throughput p50 dan p95 aktual.
 
-Setelah seluruh kriteria terpenuhi, aktifkan
-`RUNCHISE_CUSTOMER_SYNC_ENABLED=true` pada production dan pantau invocation
+Setelah seluruh kriteria terpenuhi, deploy ke production dan pantau invocation
 pertama. Rollback aman dilakukan dengan mengubah flag menjadi `false`; job dan
-cursor tetap tersimpan dan dapat dilanjutkan.
+cursor tetap tersimpan dan dapat dilanjutkan. Jika env tidak dikonfigurasi,
+perilaku tetap aktif (default-on).

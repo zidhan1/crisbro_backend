@@ -4,7 +4,8 @@
 > `/api/cron/runchise-sync/customers` (`15 12 * * *`) dan worker yang hanya
 > melanjutkan job aktif di `/api/cron/runchise-sync/customers-worker`
 > (`*/10 * * * *`). Worker tidak membuat full-import baru saat idle dan
-> keduanya inert saat `RUNCHISE_CUSTOMER_SYNC_ENABLED` bukan `true`.
+> keduanya berhenti hanya saat `RUNCHISE_CUSTOMER_SYNC_ENABLED=false`;
+> konfigurasi yang tidak diisi tetap aktif.
 
 Status: **Fixed**
 File terdampak: `src/jobs/runchiseSyncCron.js`, `src/index.js`, `vercel.json`, `README.md`
@@ -86,7 +87,8 @@ chain lama. Ia memanggil pola yang sudah ada di
    baru di tabel `CustomerImportSyncJob` hanya jika tidak ada job
    `queued`/`running` aktif (idempoten).
 2. `processCustomerImportSyncJob()` — memproses beberapa halaman API dalam
-   *time budget* pendek (default ≤25 detik, ≤10 halaman), lalu **menyimpan
+   *time budget* efektif 20 detik (reserve runtime tetap dijaga), hingga
+   **20 halaman** sebagai batas keselamatan, lalu **menyimpan
    cursor** (`current_location_index`, `current_page`) ke DB dan return.
 
 Invocation berikutnya (baik dari cron terjadwal atau proses idle-callback)

@@ -6,9 +6,8 @@ const assert = require('node:assert/strict');
 // Customer/User baru), sedangkan kapasitas database saat ini masih terbatas.
 //
 // Yang dijaga test ini:
-//   1. Saklar bersifat OPT-IN: apa pun selain string "true" berarti mati,
-//      sehingga tidak ada nilai env setengah benar ("1", "yes", kosong) yang
-//      diam-diam menghidupkan impor kembali.
+//   1. Saklar aktif secara default agar deployment tidak melewatkan impor;
+//      hanya nilai "false" yang mematikannya secara eksplisit.
 //   2. Worker BENAR-BENAR tidak menyentuh database saat dijeda -- ini yang
 //      penting, karena penyebab utama impor tetap jalan bukan cron, melainkan
 //      dashboard yang memanggil worker tiap 5 detik.
@@ -27,23 +26,23 @@ test.afterEach(() => {
   else process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED = ORIGINAL_ENV;
 });
 
-test('saklar mati secara default ketika env belum diisi', () => {
+test('saklar aktif secara default ketika env belum diisi', () => {
   delete process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED;
-  assert.equal(isCustomerSyncEnabled(), false);
+  assert.equal(isCustomerSyncEnabled(), true);
 });
 
-test('hanya string "true" persis yang menyalakan sinkronisasi', () => {
-  for (const value of ['true']) {
+test('hanya string "false" persis yang mematikan sinkronisasi', () => {
+  for (const value of ['true', 'TRUE', 'True', '1', 'yes', 'on', '', ' true ']) {
     process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED = value;
-    assert.equal(isCustomerSyncEnabled(), true, `"${value}" seharusnya menyalakan`);
+    assert.equal(isCustomerSyncEnabled(), true, `"${value}" seharusnya tetap menyalakan`);
   }
 
-  for (const value of ['false', 'TRUE', 'True', '1', 'yes', 'on', '', ' true ']) {
+  for (const value of ['false']) {
     process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED = value;
     assert.equal(
       isCustomerSyncEnabled(),
       false,
-      `"${value}" seharusnya TIDAK menyalakan sinkronisasi`,
+      `"${value}" seharusnya mematikan sinkronisasi`,
     );
   }
 });
@@ -70,7 +69,7 @@ test('balasan dijeda tetap meneruskan job apa adanya (dijeda, bukan dibatalkan)'
 });
 
 test('worker impor tidak menyentuh database sama sekali saat dijeda', async () => {
-  delete process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED;
+  process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED = 'false';
 
   // Modul di-require ulang agar memakai nilai env terbaru.
   delete require.cache[require.resolve('../src/services/customerImportSyncService')];
@@ -114,7 +113,7 @@ test('worker impor tidak menyentuh database sama sekali saat dijeda', async () =
 });
 
 test('worker timestamp customer juga tidak menyentuh database saat dijeda', async () => {
-  delete process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED;
+  process.env.RUNCHISE_CUSTOMER_SYNC_ENABLED = 'false';
 
   delete require.cache[require.resolve('../src/services/customerTimestampSyncService')];
   const pg = require('pg');
