@@ -1,7 +1,7 @@
 # Verifikasi M-3 advisory lock di staging
 
-Semua session-level advisory lock memakai `DIRECT_URL`. Pada runtime Vercel
-atau `NODE_ENV=production`, aplikasi gagal dengan kode
+Semua session-level advisory lock memakai `DIRECT_URL`. Pada seluruh runtime
+(termasuk development dan test), proses lock gagal dengan kode
 `DIRECT_URL_REQUIRED_FOR_ADVISORY_LOCK` bila variabel tersebut tidak tersedia;
 tidak ada fallback diam-diam ke transaction pooler.
 

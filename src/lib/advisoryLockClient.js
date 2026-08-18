@@ -5,17 +5,14 @@ function getAdvisoryLockConnectionString(env = process.env) {
   const directUrl = String(env.DIRECT_URL || '').trim();
   if (directUrl) return directUrl;
 
-  if (env.VERCEL === '1' || env.NODE_ENV === 'production') {
-    const error = new Error(
-      'DIRECT_URL wajib diisi untuk session-level PostgreSQL advisory lock pada deployment',
-    );
-    error.code = 'DIRECT_URL_REQUIRED_FOR_ADVISORY_LOCK';
-    throw error;
-  }
-
-  // Fallback hanya untuk local development/test yang biasanya terhubung
-  // langsung ke PostgreSQL. Deployment tidak pernah melewati jalur ini.
-  return env.DATABASE_URL;
+  // Jangan pernah menebak bahwa DATABASE_URL aman. Konfigurasi development,
+  // preview, dan test juga dapat menunjuk transaction pooler; fallback akan
+  // membuat bug eksklusivitas muncul kembali tanpa tanda apa pun.
+  const error = new Error(
+    'DIRECT_URL wajib diisi dengan koneksi PostgreSQL direct/session-mode untuk advisory lock',
+  );
+  error.code = 'DIRECT_URL_REQUIRED_FOR_ADVISORY_LOCK';
+  throw error;
 }
 
 function createAdvisoryLockClient() {

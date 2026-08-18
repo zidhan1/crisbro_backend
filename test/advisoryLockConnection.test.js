@@ -18,7 +18,7 @@ test('M-3: advisory lock selalu memilih DIRECT_URL ketika tersedia', () => {
   );
 });
 
-test('M-3: deployment gagal jelas bila DIRECT_URL hilang', () => {
+test('M-3: semua environment gagal jelas bila DIRECT_URL hilang', () => {
   assert.throws(
     () => getAdvisoryLockConnectionString({
       DATABASE_URL: 'postgresql://pooler/db',
@@ -32,10 +32,13 @@ test('M-3: deployment gagal jelas bila DIRECT_URL hilang', () => {
   );
 });
 
-test('M-3: local development tetap boleh memakai DATABASE_URL langsung', () => {
-  assert.equal(
-    getAdvisoryLockConnectionString({ DATABASE_URL: 'postgresql://localhost/db' }),
-    'postgresql://localhost/db',
+test('M-3: DATABASE_URL tidak pernah menjadi fallback advisory lock', () => {
+  assert.throws(
+    () => getAdvisoryLockConnectionString({
+      DATABASE_URL: 'postgresql://localhost/db',
+      NODE_ENV: 'test',
+    }),
+    (error) => error.code === 'DIRECT_URL_REQUIRED_FOR_ADVISORY_LOCK',
   );
 });
 
@@ -54,6 +57,11 @@ test('M-3: semua pemilik session advisory lock memakai factory session-safe', ()
       source,
       /createAdvisoryLockClient/,
       `${relativePath} harus memakai koneksi advisory lock session-safe`,
+    );
+    assert.doesNotMatch(
+      source,
+      /pg_try_advisory_lock[\s\S]{0,800}process\.env\.DATABASE_URL/,
+      `${relativePath} tidak boleh mengarahkan advisory lock ke DATABASE_URL`,
     );
   }
 });
