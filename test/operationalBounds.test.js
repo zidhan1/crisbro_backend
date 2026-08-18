@@ -61,5 +61,16 @@ test('dropdown admin dan daftar outlet memiliki batas query eksplisit', async (t
   assert.equal(calls.find(([kind]) => kind === 'brand')[1].take, 1000);
   assert.equal(calls.find(([kind]) => kind === 'location')[1].take, 1000);
   assert.equal(calls.find(([kind]) => kind === 'outlets')[1].take, 1000);
-  assert.match(outletResponse.headers['Cache-Control'], /s-maxage=/);
+  // Endpoint outlet berada di belakang auth + role. Boleh disimpan cache
+  // privat milik browser pemanggil, tetapi TIDAK boleh masuk shared cache:
+  // cookie sesi bukan bagian cache key di edge, sehingga respons untuk sesi
+  // yang sudah login bisa terlayani ke permintaan anonim pada path yang sama.
+  assert.equal(outletResponse.headers['Cache-Control'], 'private, max-age=300');
+  assert.doesNotMatch(outletResponse.headers['Cache-Control'], /s-maxage=/);
+  assert.doesNotMatch(outletResponse.headers['Cache-Control'], /(^|[ ,])public/);
+  assert.equal(outletResponse.headers['CDN-Cache-Control'], 'private, no-store');
+  assert.equal(
+    outletResponse.headers['Vercel-CDN-Cache-Control'],
+    'private, no-store',
+  );
 });

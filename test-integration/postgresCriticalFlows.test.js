@@ -38,6 +38,7 @@ const {
   createCatalogSyncJob,
   processCatalogSyncJobs,
 } = require('../src/services/catalogSyncJobService');
+const { loginAccountKey } = require('../src/lib/rateLimit');
 
 let sequence = 0;
 const unique = (prefix) => `${prefix}-${process.pid}-${Date.now()}-${++sequence}`;
@@ -542,4 +543,47 @@ test('kegagalan setelah statement pertama rollback, cursor tetap, lalu retry ber
     where: { source_location_id: locationId, runchise_sales_transaction_id: transactionId },
   });
   assert.equal(report.penambahan_poin, 30);
+});
+
+// "RateLimitCounter"."key" adalah PRIMARY KEY, jadi kunci kuota login ikut
+// masuk index btree PostgreSQL. Batasnya nyata (bukan teori): index row yang
+// melebihi ~8kb ditolak, dan karena express.json menerima body sampai 100kb
+// sementara limiter berjalan SEBELUM validasi, kunci tak terbatas membuat
+// /login membalas 500 hanya dengan satu request anonim.
+test('kunci rate limit login muat di PRIMARY KEY btree walau body bermusuhan', async () => {
+  // Digit deterministik tapi tidak berpola (LCG). Penting: deretan berpola
+  // seperti "0123456789..." dikompres TOAST sampai muat di index, sehingga
+  // test yang memakainya lulus karena keberuntungan kompresi, bukan karena
+  // panjang kuncinya benar-benar dibatasi.
+  let lcg = 1;
+  const hostileDigits = Array.from({ length: 60_000 }, () => {
+    lcg = (lcg * 1_103_515_245 + 12_345) % 2_147_483_648;
+    return String(lcg % 10);
+  }).join('');
+  const hostileBody = { phone_number: hostileDigits };
+
+  const key = loginAccountKey({ body: hostileBody });
+  const storeKey = `login-account:${key}:${unique('hostile')}`;
+  const expiresAt = new Date(Date.now() + 60_000);
+
+  await prisma.$executeRaw`
+    INSERT INTO "RateLimitCounter" ("key", "hits", "expires_at")
+    VALUES (${storeKey}, 1, ${expiresAt})
+  `;
+  const stored = await prisma.rateLimitCounter.findUnique({ where: { key: storeKey } });
+  assert.equal(stored.hits, 1);
+
+  // Nilai mentah yang sama -- bentuk kunci sebelum diperbaiki -- justru ditolak
+  // PostgreSQL. Ini yang membuat pembatasan panjang wajib ada, bukan sekadar
+  // kerapian.
+  await assert.rejects(
+    prisma.$executeRaw`
+      INSERT INTO "RateLimitCounter" ("key", "hits", "expires_at")
+      VALUES (${`login-account:${hostileDigits}`}, 1, ${expiresAt})
+    `,
+    (error) => /index row/i.test(String(error.message)),
+    'kunci tanpa batas panjang seharusnya ditolak index btree',
+  );
+
+  await prisma.$executeRaw`DELETE FROM "RateLimitCounter" WHERE "key" = ${storeKey}`;
 });

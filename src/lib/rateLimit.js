@@ -1,5 +1,6 @@
 const rateLimit = require('express-rate-limit');
 const prisma = require('./prisma');
+const { normalizePhone } = require('./phoneNumber');
 
 // Penyimpan hitungan rate limit di Postgres.
 //
@@ -101,6 +102,29 @@ const authIpLimiter = createDedicatedLimiter({
     'Terlalu banyak percobaan. Silakan coba lagi dalam beberapa menit.',
 });
 
+// Kunci kuota per-akun WAJIB memakai identitas yang sama dengan yang dipakai
+// login untuk mencari user. login() menormalisasi nomor lebih dulu
+// (normalizePhone: buang non-digit, buang awalan 62/0) lalu mencocokkan
+// seluruh variannya. Memakai nilai mentah dari body membuat "0812-3456-7890",
+// "0812 3456 7890", dan "+62 812 3456 7890" menjadi tiga kunci berbeda untuk
+// SATU akun yang sama, sehingga kuota per-akun praktis tak terbatas dan yang
+// tersisa hanya batas per-IP -- justru serangan terdistribusi yang limiter ini
+// dibuat untuk mencegah.
+//
+// Panjangnya dibatasi karena kunci ini menjadi PRIMARY KEY btree di tabel
+// "RateLimitCounter": body login boleh sampai 100kb dan kunci sebesar itu
+// ditolak PostgreSQL ("index row requires N bytes, maximum size is 8191"),
+// yang membuat /login membalas 500 tanpa perlu autentikasi. Nomor sah yang
+// sudah ternormalisasi hanya ~9-12 digit, jadi batas ini tidak pernah
+// memotong input yang benar; input sampah cukup dikumpulkan ke satu ember.
+const MAX_ACCOUNT_KEY_LENGTH = 24;
+
+function loginAccountKey(req) {
+  const normalized = normalizePhone(req.body?.phone_number);
+  if (!normalized) return 'tanpa-nomor';
+  return String(normalized).slice(0, MAX_ACCOUNT_KEY_LENGTH);
+}
+
 // Per nomor telepon. Tanpa ini, penyerang yang memakai banyak IP tetap bisa
 // menggempur satu akun. Ambangnya lebih longgar daripada batas IP supaya tidak
 // gampang dipakai mengunci akun orang lain.
@@ -110,7 +134,7 @@ const loginAccountLimiter = createDedicatedLimiter({
   max: 20,
   message:
     'Terlalu banyak percobaan login untuk nomor ini. Silakan coba lagi nanti.',
-  keyGenerator: (req) => String(req.body?.phone_number ?? 'tanpa-nomor'),
+  keyGenerator: loginAccountKey,
 });
 
 function customerTargetKey(req) {
@@ -175,6 +199,7 @@ async function pruneRateLimitCounters() {
 module.exports = {
   authIpLimiter,
   globalLimiter,
+  loginAccountKey,
   loginAccountLimiter,
   pruneRateLimitCounters,
   resendActivationTargetLimiter,

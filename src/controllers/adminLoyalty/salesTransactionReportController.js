@@ -1,5 +1,5 @@
 const prisma = require('../../lib/prisma');
-const { setSharedResponseCacheHeaders } = require('../../lib/responseCache');
+const { setPrivateResponseCacheHeaders } = require('../../lib/responseCache');
 const {
   badRequest,
   handleError,
@@ -184,7 +184,10 @@ async function listCustomerSalesTransactionReportOutlets(req, res) {
       take: 1000,
     });
 
-    setSharedResponseCacheHeaders(res, 5 * 60 * 1000);
+    // Endpoint ini ada di belakang `auth` + role (adminOrMarketing), jadi
+    // hasilnya hanya boleh disimpan cache privat milik browser pemanggil,
+    // bukan shared cache CDN yang mengabaikan cookie sesi.
+    setPrivateResponseCacheHeaders(res, 5 * 60 * 1000);
     res.json(outletRows.map((row) => row.nama_outlet).filter(Boolean));
   } catch (error) {
     handleError(res, error);
