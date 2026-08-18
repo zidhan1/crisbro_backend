@@ -78,6 +78,16 @@ function createDedicatedLimiter({ prefix, windowMs, max, message, keyGenerator }
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 
+function shouldSkipGlobalLimiter(req) {
+  // Endpoint autentikasi memiliki limiter IP/akun yang lebih ketat di route
+  // masing-masing. Jangan ikut menghabiskan kuota API umum: trafik dashboard
+  // atau NAT/proxy bersama tidak boleh mengunci pintu login semua pengguna.
+  return (
+    req.path.startsWith('/api/cron/') ||
+    ['/api/login', '/api/register', '/api/activate'].includes(req.path)
+  );
+}
+
 // Per alamat IP. Menahan satu sumber yang membombardir endpoint autentikasi.
 const authIpLimiter = createDedicatedLimiter({
   prefix: 'auth-ip',
@@ -139,7 +149,7 @@ const globalLimiter = rateLimit({
   store: new PrismaRateLimitStore('global'),
   handler: tooManyRequests('Terlalu banyak permintaan. Coba lagi sebentar lagi.'),
   // Endpoint cron dipanggil penjadwal Vercel dan sudah dijaga CRON_SECRET.
-  skip: (req) => req.path.startsWith('/api/cron/'),
+  skip: shouldSkipGlobalLimiter,
 });
 
 // Menghapus baris yang jendelanya sudah lewat agar tabel tidak menumpuk.
@@ -156,4 +166,5 @@ module.exports = {
   pruneRateLimitCounters,
   resendActivationTargetLimiter,
   runchiseSyncTargetLimiter,
+  shouldSkipGlobalLimiter,
 };
