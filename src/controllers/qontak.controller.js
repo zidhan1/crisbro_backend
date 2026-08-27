@@ -33,20 +33,20 @@ async function receiveQontakMessageInteraction(req, res) {
       error: "Failed receive message payload",
     });
 
+  const room_id = payload.room_id ?? undefined;
+  const sender_id = payload.sender_id ?? undefined;
+  const text = payload.text ?? undefined;
+  const phone = payload.room.account_uniq_id ?? undefined;
+
+  if (!room_id && !sender_id && !text && !phone) {
+    return badRequest({
+      code: 400,
+      res,
+      error: "room_id, sender_id, text, account_uniq_id must be required",
+    });
+  }
+
   try {
-    const room_id = payload.room_id ?? undefined;
-    const sender_id = payload.sender_id ?? undefined;
-    const text = payload.text ?? undefined;
-    const phone = payload.room.account_uniq_id ?? undefined;
-
-    if (!room_id && !sender_id && !text && !phone) {
-      return badRequest({
-        code: 400,
-        res,
-        error: "room_id, sender_id, text, account_uniq_id must be required",
-      });
-    }
-
     // Validate is crisbro validation message.
     const identifier = text.split("\n") ?? undefined;
 
