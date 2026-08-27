@@ -138,7 +138,7 @@ async function sendMessageViaBot({ room_id, type = "text", text }) {
 
   try {
     const response = await axios.post(
-      `${base_url}/api/open/v1/messages/whatsapp/bot`,
+      `${base_url}/api/open/v1/messages/whatsapp`,
       {
         room_id,
         type,
