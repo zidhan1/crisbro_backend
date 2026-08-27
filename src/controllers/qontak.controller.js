@@ -46,6 +46,11 @@ async function receiveQontakMessageInteraction(req, res) {
     });
   }
 
+  console.log("room_id: ", room_id);
+  console.log("sender_id: ", sender_id);
+  console.log("text: ", text);
+  console.log("phone: ", phone);
+
   try {
     // Validate is crisbro validation message.
     const identifier = text.split("\n") ?? undefined;

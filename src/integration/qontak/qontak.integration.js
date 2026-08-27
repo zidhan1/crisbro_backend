@@ -154,8 +154,8 @@ async function sendMessageViaBot({ room_id, type = "text", text }) {
 
     return response.data;
   } catch (error) {
-    console.log(error.response.data);
-    throw new Error(error?.response?.data || error.message);
+    console.log(error.response.data?.error);
+    throw new Error(error?.response?.data.error || error.message);
   }
 }
 
