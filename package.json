@@ -4,6 +4,7 @@
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
+    "postinstall": "prisma generate",
     "lint": "eslint src api",
     "dev": "nodemon src/index.js"
   },
