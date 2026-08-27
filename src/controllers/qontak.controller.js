@@ -19,7 +19,7 @@ function flattenAxiosError(error) {
   return JSON.stringify(data);
 }
 
-const failed_message = `Waduh, konfirmasi akun kamu belum berhasil nih. 😅\nBiasanya ini terjadi karena tautan sudah kedaluwarsa (lewat dari 3 menit) atau sudah pernah digunakan.\nTenang, kamu bisa minta tautan baru lewat halaman login aplikasi/website ya!`;
+const failed_message = `Waduh, konfirmasi akun kamu belum berhasil nih. 😅\nBiasanya ini terjadi karena tautan sudah kedaluwarsa (lewat dari 3 menit) atau merubah no.Ref.\nTenang, kamu bisa minta tautan baru lewat halaman login aplikasi/website ya!`;
 
 const success_message = `Yey, akun Crisbro kamu sudah aktif! 🎉\nSekarang kamu sudah resmi jadi bagian dari Crisbro. Yuk, langsung jelajahi dan nikmati semua fiturnya sekarang!`;
 
@@ -80,6 +80,8 @@ async function receiveQontakMessageInteraction(req, res) {
     console.log(verify);
     return successRequest({ res, code: 200, data: null });
   } catch (error) {
+    await sendMessageViaBot({ room_id, text: failed_message });
+
     respondWithServerError(res, flattenAxiosError(error));
   }
 }
