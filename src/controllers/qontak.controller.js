@@ -5,9 +5,7 @@ const { verifyUserPhone } = require("../services/auth.service");
 const {
   badRequest,
   successRequest,
-  respondWithServerError,
 } = require("../utils/responseReuest");
-const axios = require("axios");
 
 function flattenAxiosError(error) {
   const data = error.response?.data;
@@ -23,6 +21,16 @@ const failed_message = `Waduh, konfirmasi akun kamu belum berhasil nih. 😅\nBi
 
 const success_message = `Yey, akun Crisbro kamu sudah aktif! 🎉\nSekarang kamu sudah resmi jadi bagian dari Crisbro. Yuk, langsung jelajahi dan nikmati semua fiturnya sekarang!`;
 
+async function sendBotMessageSafely({ room_id, text }) {
+  try {
+    await sendMessageViaBot({ room_id, text });
+  } catch (error) {
+    // Delivery of the reply must not turn an already received webhook into a
+    // failed request, otherwise Qontak will retry the same interaction.
+    console.error("Failed to send Qontak bot reply:", flattenAxiosError(error));
+  }
+}
+
 async function receiveQontakMessageInteraction(req, res) {
   const payload = req.body;
 
@@ -36,7 +44,7 @@ async function receiveQontakMessageInteraction(req, res) {
   const room_id = payload.room_id ?? undefined;
   const sender_id = payload.sender_id ?? undefined;
   const text = payload.text ?? undefined;
-  const phone = payload.room.account_uniq_id ?? undefined;
+  const phone = payload.room?.account_uniq_id ?? undefined;
 
   if (!room_id && !sender_id && !text && !phone) {
     return badRequest({
@@ -63,31 +71,40 @@ async function receiveQontakMessageInteraction(req, res) {
     if (identifier[0] !== "AKTIVASI CRISBRO")
       return successRequest({ res, data: null, code: 200 });
 
-    const [_, noRef] = identifier[2].split(":");
+    const [_, noRef] = identifier[2].split(":") ?? undefined;
 
     // Verify phone
     const verify = await verifyUserPhone({ raw_phone: phone, noRef: noRef });
 
     if (!verify) {
-      await sendMessageViaBot({ room_id, text: failed_message });
+      await sendBotMessageSafely({ room_id, text: failed_message });
 
       console.log(verify);
-      return badRequest({
+      return successRequest({
         res,
-        code: 400,
-        error: "Failed to verify your phone",
+        code: 200,
+        data: null,
+        message: "Webhook received; phone verification failed",
       });
     }
 
     // Success and send message to customer
-    await sendMessageViaBot({ room_id, text: success_message });
+    await sendBotMessageSafely({ room_id, text: success_message });
 
     console.log(verify);
     return successRequest({ res, code: 200, data: null });
   } catch (error) {
-    await sendMessageViaBot({ room_id, text: failed_message });
+    console.error("Qontak phone verification failed:", flattenAxiosError(error));
+    await sendBotMessageSafely({ room_id, text: failed_message });
 
-    respondWithServerError(res, flattenAxiosError(error));
+    // A verification error is a processed webhook, not a transport failure.
+    // Returning 200 prevents Qontak from retrying the same message.
+    return successRequest({
+      res,
+      code: 200,
+      data: null,
+      message: "Webhook received; phone verification failed",
+    });
   }
 }
 
