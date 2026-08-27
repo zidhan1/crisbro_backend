@@ -48,6 +48,7 @@ const adminLoyaltyRoutes = require("./routes/adminLoyaltyRoutes");
 const pointRoutes = require("./routes/pointRoutes");
 const legacyRoutes = require("./routes/legacyRoutes");
 const subBrandRoutes = require("./routes/subBrand.routes");
+const webhookQontak = require("./routes/qontak.routes");
 
 const app = express();
 
@@ -119,6 +120,7 @@ app.use("/api/points", pointRoutes);
 app.use("/api/admin", adminLoyaltyRoutes);
 app.use(legacyRoutes);
 app.use("/api/sub_brands", subBrandRoutes);
+app.use("/api/webhook-qontak", webhookQontak);
 
 // Health Check
 app.get("/", (req, res) => {
