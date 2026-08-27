@@ -31,6 +31,9 @@ async function receiveQontakMessageInteraction(req, res) {
     const text = payload.text ?? undefined;
     const phone = payload.room.account_uniq_id ?? undefined;
 
+    console.log(text);
+    console.log("============================");
+
     if (!room_id && !sender_id && !text && !phone) {
       return badRequest({
         code: 400,
