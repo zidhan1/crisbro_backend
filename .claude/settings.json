@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(PORT=5001 npm run dev)",
+      "Bash(curl -s http://localhost:5001)",
+      "Bash(npx prisma *)",
+      "Bash(curl -s http://localhost:5001/api/docs)",
+      "Bash(cd \"/Users/user/My Drive/Dev Projects/PT Reka Cipta Selera/crisbro/backend/src/services\" && mkdir -p domain integration sync shared)"
+    ],
+    "additionalDirectories": [
+      "/Users/user/My Drive/Dev Projects/PT Reka Cipta Selera/crisbro/backend/src/services"
+    ]
+  }
+}

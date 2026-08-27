@@ -19,9 +19,6 @@ const {
   assertPageWithinLimit,
 } = require('./runchiseService');
 const {
-  importProducts: importCrisbarProducts,
-} = require('../../scripts/importSelectedCrisbarProducts');
-const {
   normalizePhone,
   phoneVariants,
 } = require('../lib/phoneNumber');
@@ -1906,15 +1903,6 @@ function isCustomerPromoChannel(channel) {
   return CUSTOMER_PROMO_CHANNELS.has(normalizeChannel(channel));
 }
 
-// ===================== SYNC PRODUCTS =====================
-
-// Sinkronisasi katalog hanya untuk produk yang kategorinya terhubung ke
-// sub-brand Crisbar 1041. Implementasi yang sama dipakai CLI, endpoint admin,
-// dan cron agar tidak ada perilaku import yang berbeda.
-async function syncProducts() {
-  return importCrisbarProducts({ db: prisma, writeEnabled: true });
-}
-
 // ===================== SYNC BRANDS =====================
 
 // Sync brand & sub-brand dari Runchise
@@ -2393,7 +2381,6 @@ module.exports = {
   syncCustomers,
   upsertRunchiseCustomer,
   upsertRunchiseCustomersBatch,
-  syncProducts,
   syncCustomerPoints,
   syncCustomerPointsFromStaging,
   bulkUpsertCustomerPoints,

@@ -6,7 +6,7 @@ module.exports = [
     ignores: ['node_modules/**', 'generated/**', '.vercel/**', 'coverage/**'],
   },
   {
-    files: ['src/**/*.js', 'scripts/**/*.js', 'test/**/*.js', 'test-integration/**/*.js', 'api/**/*.js'],
+    files: ['src/**/*.js', 'api/**/*.js'],
     ...js.configs.recommended,
     languageOptions: {
       ecmaVersion: 2022,

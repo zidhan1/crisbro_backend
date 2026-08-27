@@ -1,6 +1,6 @@
-const rateLimit = require('express-rate-limit');
-const prisma = require('./prisma');
-const { normalizePhone } = require('./phoneNumber');
+const rateLimit = require("express-rate-limit");
+const prisma = require("./prisma");
+const { normalizePhone } = require("./phoneNumber");
 
 // Penyimpan hitungan rate limit di Postgres.
 //
@@ -65,7 +65,13 @@ function tooManyRequests(message) {
 // Batas ketat untuk endpoint autentikasi. Endpoint inilah yang dipakai untuk
 // menebak password maupun memetakan nomor telepon yang terdaftar, sehingga
 // jatahnya jauh lebih kecil daripada endpoint biasa.
-function createDedicatedLimiter({ prefix, windowMs, max, message, keyGenerator }) {
+function createDedicatedLimiter({
+  prefix,
+  windowMs,
+  max,
+  message,
+  keyGenerator,
+}) {
   return rateLimit({
     windowMs,
     limit: max,
@@ -77,7 +83,7 @@ function createDedicatedLimiter({ prefix, windowMs, max, message, keyGenerator }
   });
 }
 
-const FIFTEEN_MINUTES = 15 * 60 * 1000;
+const TWO_MINUTES = 2 * 60 * 1000;
 
 function shouldSkipGlobalLimiter(req) {
   // Endpoint autentikasi memiliki limiter IP/akun yang lebih ketat di route
@@ -86,20 +92,19 @@ function shouldSkipGlobalLimiter(req) {
   // Express menerima dua bentuk tergantung adapter/deployment: local mount
   // masih memuat prefix `/api`, sedangkan Vercel function sering sudah
   // menghapusnya sebelum meneruskan request ke app.
-  const path = String(req.path || '').replace(/^\/api(?=\/|$)/, '') || '/';
+  const path = String(req.path || "").replace(/^\/api(?=\/|$)/, "") || "/";
   return (
-    path.startsWith('/cron/') ||
-    ['/login', '/register', '/activate'].includes(path)
+    path.startsWith("/cron/") ||
+    ["/login", "/register", "/activate"].includes(path)
   );
 }
 
 // Per alamat IP. Menahan satu sumber yang membombardir endpoint autentikasi.
 const authIpLimiter = createDedicatedLimiter({
-  prefix: 'auth-ip',
-  windowMs: FIFTEEN_MINUTES,
+  prefix: "auth-ip",
+  windowMs: TWO_MINUTES,
   max: 10,
-  message:
-    'Terlalu banyak percobaan. Silakan coba lagi dalam beberapa menit.',
+  message: "Terlalu banyak percobaan. Silakan coba lagi dalam beberapa menit.",
 });
 
 // Kunci kuota per-akun WAJIB memakai identitas yang sama dengan yang dipakai
@@ -121,7 +126,7 @@ const MAX_ACCOUNT_KEY_LENGTH = 24;
 
 function loginAccountKey(req) {
   const normalized = normalizePhone(req.body?.phone_number);
-  if (!normalized) return 'tanpa-nomor';
+  if (!normalized) return "tanpa-nomor";
   return String(normalized).slice(0, MAX_ACCOUNT_KEY_LENGTH);
 }
 
@@ -129,11 +134,11 @@ function loginAccountKey(req) {
 // menggempur satu akun. Ambangnya lebih longgar daripada batas IP supaya tidak
 // gampang dipakai mengunci akun orang lain.
 const loginAccountLimiter = createDedicatedLimiter({
-  prefix: 'login-account',
-  windowMs: FIFTEEN_MINUTES,
+  prefix: "login-account",
+  windowMs: TWO_MINUTES,
   max: 20,
   message:
-    'Terlalu banyak percobaan login untuk nomor ini. Silakan coba lagi nanti.',
+    "Terlalu banyak percobaan login untuk nomor ini. Silakan coba lagi nanti.",
   keyGenerator: loginAccountKey,
 });
 
@@ -141,39 +146,39 @@ function customerTargetKey(req) {
   const customerId = Number(req.params?.id);
   return Number.isInteger(customerId) && customerId > 0
     ? `customer:${customerId}`
-    : 'customer:invalid';
+    : "customer:invalid";
 }
 
 // Endpoint ini menghasilkan email. Kuota berbasis customer (bukan admin/IP)
 // mencegah beberapa akun staf atau beberapa instance aplikasi bersama-sama
 // membanjiri alamat email customer yang sama.
 const resendActivationTargetLimiter = createDedicatedLimiter({
-  prefix: 'admin-resend-activation',
-  windowMs: FIFTEEN_MINUTES,
+  prefix: "admin-resend-activation",
+  windowMs: TWO_MINUTES,
   max: 3,
   message:
-    'Terlalu banyak pengiriman aktivasi untuk customer ini. Silakan coba lagi nanti.',
+    "Terlalu banyak pengiriman aktivasi untuk customer ini. Silakan coba lagi nanti.",
   keyGenerator: customerTargetKey,
 });
 
 // Retry sinkronisasi memanggil API eksternal. Prefix terpisah memastikan
 // pengiriman email dan retry sync tidak saling menghabiskan kuota.
 const runchiseSyncTargetLimiter = createDedicatedLimiter({
-  prefix: 'admin-runchise-sync',
-  windowMs: FIFTEEN_MINUTES,
+  prefix: "admin-runchise-sync",
+  windowMs: TWO_MINUTES,
   max: 5,
   message:
-    'Terlalu banyak percobaan sinkronisasi untuk customer ini. Silakan coba lagi nanti.',
+    "Terlalu banyak percobaan sinkronisasi untuk customer ini. Silakan coba lagi nanti.",
   keyGenerator: customerTargetKey,
 });
 
 // Outlet options are used by the report filter and perform a distinct scan;
 // keep repeated polling from turning that endpoint into an unbounded read.
 const reportOutletsLimiter = createDedicatedLimiter({
-  prefix: 'admin-report-outlets',
+  prefix: "admin-report-outlets",
   windowMs: 60_000,
   max: 30,
-  message: 'Terlalu banyak permintaan daftar outlet. Coba lagi sebentar lagi.',
+  message: "Terlalu banyak permintaan daftar outlet. Coba lagi sebentar lagi.",
 });
 
 // Batas umum seluruh API. Sengaja longgar: tujuannya menahan penyalahgunaan
@@ -183,8 +188,10 @@ const globalLimiter = rateLimit({
   limit: 300,
   standardHeaders: true,
   legacyHeaders: false,
-  store: new PrismaRateLimitStore('global'),
-  handler: tooManyRequests('Terlalu banyak permintaan. Coba lagi sebentar lagi.'),
+  store: new PrismaRateLimitStore("global"),
+  handler: tooManyRequests(
+    "Terlalu banyak permintaan. Coba lagi sebentar lagi.",
+  ),
   // Endpoint cron dipanggil penjadwal Vercel dan sudah dijaga CRON_SECRET.
   skip: shouldSkipGlobalLimiter,
 });

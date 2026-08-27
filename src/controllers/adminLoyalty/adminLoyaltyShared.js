@@ -1,17 +1,17 @@
-const prisma = require('../../lib/prisma');
+const prisma = require("../../lib/prisma");
 const {
   createAccountActivationToken,
   invalidatePendingActivationTokens,
-} = require('../../services/accountActivationService');
-const { sendActivationEmail } = require('../../services/emailService');
-const { respondWithServerError } = require('../../lib/serverError');
-const { ValidationError } = require('../../lib/validationError');
+} = require("../../services/accountActivationService");
+const { sendActivationEmail } = require("../../services/email.service");
+const { respondWithServerError } = require("../../lib/serverError");
+const { ValidationError } = require("../../lib/validationError");
 const {
   endOfWibDay,
   isWibDateOnlyInput,
   parseWibInstant,
   startOfWibDay,
-} = require('../../lib/wibDate');
+} = require("../../lib/wibDate");
 
 // L-7: konfigurasi, parser, order-by builder, dan helper audit yang dipakai
 // lebih dari satu controller domain dikumpulkan di satu modul supaya
@@ -23,12 +23,12 @@ const DEFAULT_PB1_RATE = 0.1;
 const DEFAULT_REWARD_THRESHOLD = 2000;
 const DEFAULT_RUNCHISE_PARENT_BRAND_ID = 750;
 const DEFAULT_RUNCHISE_REDEEM_SUB_BRAND_ID = 1041;
-const ADMIN_USER_ROLES = new Set(['admin', 'marketing']);
+const ADMIN_USER_ROLES = new Set(["admin", "marketing"]);
 const ADMIN_USER_UPDATE_FIELDS = new Set([
-  'email',
-  'phone_number',
-  'password',
-  'role',
+  "email",
+  "phone_number",
+  "password",
+  "role",
 ]);
 
 function getPositiveEnvInt(name, fallback) {
@@ -38,7 +38,7 @@ function getPositiveEnvInt(name, fallback) {
 
 function getPb1Rate() {
   const rawRate = process.env.PB1_RATE;
-  if (rawRate === undefined || rawRate === '') return DEFAULT_PB1_RATE;
+  if (rawRate === undefined || rawRate === "") return DEFAULT_PB1_RATE;
 
   const rate = Number(rawRate);
   if (!Number.isFinite(rate) || rate < 0) return DEFAULT_PB1_RATE;
@@ -75,15 +75,15 @@ async function sendCustomerActivationLink(customer) {
     return {
       sent: false,
       skipped: true,
-      reason: 'Customer tidak memiliki email',
+      reason: "Customer tidak memiliki email",
     };
   }
 
-  await invalidatePendingActivationTokens(customer.user.id, 'activation');
+  await invalidatePendingActivationTokens(customer.user.id, "activation");
 
   const { activationUrl, expiresAt } = await createAccountActivationToken(
     customer.user.id,
-    'activation',
+    "activation",
   );
 
   return sendActivationEmail({
@@ -98,11 +98,11 @@ async function sendCustomerActivationLink(customer) {
 function getRedeemCatalogConfig() {
   return {
     parentBrandRunchiseId: getPositiveEnvInt(
-      'RUNCHISE_PARENT_BRAND_ID',
+      "RUNCHISE_PARENT_BRAND_ID",
       DEFAULT_RUNCHISE_PARENT_BRAND_ID,
     ),
     redeemSubBrandRunchiseId: getPositiveEnvInt(
-      'RUNCHISE_REDEEM_SUB_BRAND_ID',
+      "RUNCHISE_REDEEM_SUB_BRAND_ID",
       DEFAULT_RUNCHISE_REDEEM_SUB_BRAND_ID,
     ),
   };
@@ -145,8 +145,8 @@ function comparableAuditValue(value) {
   if (value instanceof Date) return value.toISOString();
   if (
     value &&
-    typeof value === 'object' &&
-    value.constructor?.name === 'Decimal'
+    typeof value === "object" &&
+    value.constructor?.name === "Decimal"
   ) {
     return value.toString();
   }
@@ -178,7 +178,7 @@ function getActualCustomerChangedFields({
   const changedFields = [];
 
   for (const field of customerFields) {
-    if (field === 'last_updated_by_id') continue;
+    if (field === "last_updated_by_id") continue;
     if (!auditValuesEqual(before?.[field], after?.[field])) {
       changedFields.push(field);
     }
@@ -205,7 +205,7 @@ function getActualCustomerChangedFields({
     locationIdsTouched &&
     !auditValuesEqual(sortedLocationIds(before), sortedLocationIds(after))
   ) {
-    changedFields.push('location_ids');
+    changedFields.push("location_ids");
   }
 
   return changedFields;
@@ -216,7 +216,7 @@ function badRequest(res, message) {
 }
 
 function parsePositiveInt(value, fieldName, { required = true } = {}) {
-  if (value === undefined || value === null || value === '') {
+  if (value === undefined || value === null || value === "") {
     if (!required) return undefined;
     throw new ValidationError(`${fieldName} wajib diisi`);
   }
@@ -230,7 +230,7 @@ function parsePositiveInt(value, fieldName, { required = true } = {}) {
 }
 
 function parseNonNegativeInt(value, fieldName, { required = true } = {}) {
-  if (value === undefined || value === null || value === '') {
+  if (value === undefined || value === null || value === "") {
     if (!required) return undefined;
     throw new ValidationError(`${fieldName} wajib diisi`);
   }
@@ -244,22 +244,22 @@ function parseNonNegativeInt(value, fieldName, { required = true } = {}) {
 }
 
 function parseBoolean(value, fieldName, { required = true } = {}) {
-  if (value === undefined || value === null || value === '') {
+  if (value === undefined || value === null || value === "") {
     if (!required) return undefined;
     throw new ValidationError(`${fieldName} wajib diisi`);
   }
 
   if (value === true || value === false) return value;
-  if (value === 'true') return true;
-  if (value === 'false') return false;
+  if (value === "true") return true;
+  if (value === "false") return false;
 
   throw new ValidationError(`${fieldName} harus berupa boolean`);
 }
 
 function parseOptionalString(value, fieldName, maxLength = 255) {
   if (value === undefined) return undefined;
-  if (value === null || value === '') return null;
-  if (typeof value !== 'string')
+  if (value === null || value === "") return null;
+  if (typeof value !== "string")
     throw new ValidationError(`${fieldName} harus berupa string`);
 
   const trimmed = value.trim();
@@ -270,7 +270,7 @@ function parseOptionalString(value, fieldName, maxLength = 255) {
   return trimmed || null;
 }
 
-function parseOptionalEmail(value, fieldName = 'email', maxLength = 255) {
+function parseOptionalEmail(value, fieldName = "email", maxLength = 255) {
   const email = parseOptionalString(value, fieldName, maxLength);
   if (!email) return email;
 
@@ -288,45 +288,45 @@ function parseRequiredString(value, fieldName, maxLength = 255) {
   return parsed;
 }
 
-function parseSortOrder(value, fallback = 'asc') {
-  return value === 'asc' || value === 'desc' ? value : fallback;
+function parseSortOrder(value, fallback = "asc") {
+  return value === "asc" || value === "desc" ? value : fallback;
 }
 
 function buildAdminUserOrderBy(sortBy, sortOrder) {
   const order = parseSortOrder(
     sortOrder,
-    sortBy === 'created_at' ? 'desc' : 'asc',
+    sortBy === "created_at" ? "desc" : "asc",
   );
   const map = {
-    email: [{ email: order }, { id: 'asc' }],
-    phone_number: [{ phone_number: order }, { id: 'asc' }],
-    role: [{ role: order }, { created_at: 'desc' }, { id: 'desc' }],
+    email: [{ email: order }, { id: "asc" }],
+    phone_number: [{ phone_number: order }, { id: "asc" }],
+    role: [{ role: order }, { created_at: "desc" }, { id: "desc" }],
     created_at: [{ created_at: order }, { id: order }],
   };
 
   return (
-    map[sortBy] ?? [{ role: 'asc' }, { created_at: 'desc' }, { id: 'desc' }]
+    map[sortBy] ?? [{ role: "asc" }, { created_at: "desc" }, { id: "desc" }]
   );
 }
 
 function buildAdminCustomerOrderBy(sortBy, sortOrder) {
   const order = parseSortOrder(
     sortOrder,
-    sortBy === 'created_at' || sortBy === 'updated_at' ? 'desc' : 'asc',
+    sortBy === "created_at" || sortBy === "updated_at" ? "desc" : "asc",
   );
   const map = {
-    name: [{ name: order }, { id: 'desc' }],
-    email: [{ user: { email: order } }, { id: 'desc' }],
-    phone_number: [{ phone_number: order }, { id: 'desc' }],
+    name: [{ name: order }, { id: "desc" }],
+    email: [{ user: { email: order } }, { id: "desc" }],
+    phone_number: [{ phone_number: order }, { id: "desc" }],
     outlet: [
       { owner_location: { name: order } },
-      { name: 'asc' },
-      { id: 'desc' },
+      { name: "asc" },
+      { id: "desc" },
     ],
-    points: [{ customer_point: { available_point: order } }, { id: 'desc' }],
-    status: [{ status: order }, { id: 'desc' }],
-    activation_status: [{ user: { activation_status: order } }, { id: 'desc' }],
-    runchise_sync_status: [{ runchise_sync_status: order }, { id: 'desc' }],
+    points: [{ customer_point: { available_point: order } }, { id: "desc" }],
+    status: [{ status: order }, { id: "desc" }],
+    activation_status: [{ user: { activation_status: order } }, { id: "desc" }],
+    runchise_sync_status: [{ runchise_sync_status: order }, { id: "desc" }],
     created_at: [
       { runchise_created_at: order },
       { runchise_id: order },
@@ -339,52 +339,52 @@ function buildAdminCustomerOrderBy(sortBy, sortOrder) {
     ],
   };
 
-  return map[sortBy] ?? [{ runchise_created_at: 'desc' }, { id: 'desc' }];
+  return map[sortBy] ?? [{ runchise_created_at: "desc" }, { id: "desc" }];
 }
 
 function buildRedeemItemOrderBy(sortBy, sortOrder) {
   const order = parseSortOrder(
     sortOrder,
-    sortBy === 'created_at' ? 'desc' : 'asc',
+    sortBy === "created_at" ? "desc" : "asc",
   );
   const map = {
-    menu: [{ menu_item: { name: order } }, { id: 'asc' }],
-    price: [{ menu_item: { price: order } }, { id: 'asc' }],
-    points: [{ points_required: order }, { id: 'asc' }],
-    status: [{ is_active: order }, { sort_order: 'asc' }, { id: 'asc' }],
+    menu: [{ menu_item: { name: order } }, { id: "asc" }],
+    price: [{ menu_item: { price: order } }, { id: "asc" }],
+    points: [{ points_required: order }, { id: "asc" }],
+    status: [{ is_active: order }, { sort_order: "asc" }, { id: "asc" }],
     sort_order: [
       { category: { sort_order: order } },
       { sort_order: order },
-      { id: 'asc' },
+      { id: "asc" },
     ],
     created_at: [{ created_at: order }, { id: order }],
   };
 
   return (
     map[sortBy] ?? [
-      { category: { sort_order: 'asc' } },
-      { sort_order: 'asc' },
-      { id: 'asc' },
+      { category: { sort_order: "asc" } },
+      { sort_order: "asc" },
+      { id: "asc" },
     ]
   );
 }
 
 function normalizePhone(raw) {
-  const phone = parseOptionalString(raw, 'phone_number', 30);
+  const phone = parseOptionalString(raw, "phone_number", 30);
   if (!phone) return null;
 
-  const digits = phone.replace(/\D/g, '');
+  const digits = phone.replace(/\D/g, "");
   if (!digits) return null;
-  if (digits.startsWith('62')) return digits.slice(2);
-  if (digits.startsWith('0')) return digits.slice(1);
+  if (digits.startsWith("62")) return digits.slice(2);
+  if (digits.startsWith("0")) return digits.slice(1);
   return digits;
 }
 
 function parseAdminUserRole(value) {
-  const role = parseRequiredString(value ?? 'marketing', 'role', 30);
+  const role = parseRequiredString(value ?? "marketing", "role", 30);
 
   if (!ADMIN_USER_ROLES.has(role)) {
-    throw new ValidationError('role harus admin atau marketing');
+    throw new ValidationError("role harus admin atau marketing");
   }
 
   return role;
@@ -392,7 +392,7 @@ function parseAdminUserRole(value) {
 
 function parseOptionalDate(value, fieldName) {
   if (value === undefined) return undefined;
-  if (value === null || value === '') return null;
+  if (value === null || value === "") return null;
 
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -422,7 +422,7 @@ function parseOptionalDate(value, fieldName) {
 // untuk `dob` (kolom @db.Date) yang harus tetap ditambatkan ke UTC agar tanggal
 // lahir tidak bergeser satu hari saat disimpan.
 function parseDateBoundary(value, fieldName, endOfDay = false) {
-  if (value === undefined || value === null || value === '') return null;
+  if (value === undefined || value === null || value === "") return null;
 
   const instant = parseWibInstant(value);
   if (!instant) {
@@ -451,7 +451,7 @@ function parseScheduleBoundary(value, fieldName, endOfDay = false) {
   // `undefined` berarti field tidak dikirim; dipertahankan agar Prisma
   // memperlakukannya sebagai "tidak diubah", sama seperti parseOptionalDate.
   if (value === undefined) return undefined;
-  if (value === null || value === '') return null;
+  if (value === null || value === "") return null;
 
   const instant = parseWibInstant(value);
   if (!instant) {
@@ -465,7 +465,7 @@ function parseScheduleBoundary(value, fieldName, endOfDay = false) {
 
 function parseOptionalNumber(value, fieldName, { min = 0 } = {}) {
   if (value === undefined) return undefined;
-  if (value === null || value === '') return null;
+  if (value === null || value === "") return null;
 
   const number = Number(value);
   if (Number.isNaN(number) || number < min) {
@@ -487,16 +487,16 @@ function parseLocationIds(value, ownerLocationId = null) {
 }
 
 function normalizeReportName(value) {
-  return String(value ?? '')
+  return String(value ?? "")
     .trim()
     .toLowerCase()
-    .replace(/\s+/g, ' ');
+    .replace(/\s+/g, " ");
 }
 
 async function getDefaultRedeemCategoryId(tx = prisma) {
   const category = await tx.redeemMenuCategory.findFirst({
     where: { is_active: true },
-    orderBy: [{ sort_order: 'asc' }, { name: 'asc' }],
+    orderBy: [{ sort_order: "asc" }, { name: "asc" }],
     select: { id: true },
   });
 
@@ -504,7 +504,7 @@ async function getDefaultRedeemCategoryId(tx = prisma) {
 
   const created = await tx.redeemMenuCategory.create({
     data: {
-      name: 'Redeem Menu',
+      name: "Redeem Menu",
       sort_order: 0,
       is_active: true,
     },
@@ -516,11 +516,11 @@ async function getDefaultRedeemCategoryId(tx = prisma) {
 
 function parseCustomerStatus(value) {
   const status =
-    parseOptionalString(value ?? 'active', 'status', 30) ?? 'active';
-  const allowed = new Set(['active', 'inactive']);
+    parseOptionalString(value ?? "active", "status", 30) ?? "active";
+  const allowed = new Set(["active", "inactive"]);
 
   if (!allowed.has(status)) {
-    throw new ValidationError('status harus active atau inactive');
+    throw new ValidationError("status harus active atau inactive");
   }
 
   return status;
@@ -528,11 +528,11 @@ function parseCustomerStatus(value) {
 
 function parseCustomerGender(value) {
   const gender =
-    parseOptionalString(value ?? 'unknown', 'gender', 30) ?? 'unknown';
-  const allowed = new Set(['male', 'female', 'unknown']);
+    parseOptionalString(value ?? "unknown", "gender", 30) ?? "unknown";
+  const allowed = new Set(["male", "female", "unknown"]);
 
   if (!allowed.has(gender)) {
-    throw new ValidationError('gender harus male, female, atau unknown');
+    throw new ValidationError("gender harus male, female, atau unknown");
   }
 
   return gender;
@@ -543,19 +543,19 @@ function handleError(res, error) {
     return badRequest(res, error.message);
   }
 
-  if (error.code === 'P2002') {
-    return res.status(409).json({ message: 'Data duplikat' });
+  if (error.code === "P2002") {
+    return res.status(409).json({ message: "Data duplikat" });
   }
 
-  if (error.code === 'P2003') {
-    return badRequest(res, 'Referensi data tidak valid');
+  if (error.code === "P2003") {
+    return badRequest(res, "Referensi data tidak valid");
   }
 
-  if (error.code === 'P2025') {
-    return res.status(404).json({ message: 'Data tidak ditemukan' });
+  if (error.code === "P2025") {
+    return res.status(404).json({ message: "Data tidak ditemukan" });
   }
 
-  return respondWithServerError(res, error, 'adminLoyaltyController');
+  return respondWithServerError(res, error, "adminLoyaltyController");
 }
 
 module.exports = {
