@@ -46,9 +46,7 @@ model User {
   email_verification_expires DateTime?
   email_verified             Boolean    @default(false)
   referral_code              String?    @unique
-  otp                        String?
-  otp_expires                DateTime?
-  otp_id                     String?
+  no_referensi               String?    @unique
   phone_verified             Boolean    @default(false)
   status                     StatusUser @default(inactive)
   created_at                 DateTime   @default(now())

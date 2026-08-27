@@ -288,24 +288,24 @@ async function notifyMarketingAboutReferral(userId) {
   );
 }
 
-async function verifyUserOtp(userId, otpCode) {
-  if (!userId) throw new AuthServiceError(400, "user_id is required");
-  if (!otpCode) throw new AuthServiceError(400, "otp_code is required");
+async function verifyUserPhone({ raw_phone, noRef }) {
+  if (!raw_phone) throw new AuthServiceError(400, "phone is required");
+  if (!noRef) throw new AuthServiceError(400, "noRef is required");
 
-  const user = await prisma.user.findUnique({ where: { user_id: userId } });
+  const phone = normalizePhone(raw_phone);
+
+  const user = await prisma.user.findUnique({
+    where: { phone: phone, no_referensi: noRef },
+  });
+
   if (!user) throw new AuthServiceError(404, "User not found");
 
-  const verified = await verifyOtpCode({ otp: otpCode, otp_id: user.otp_id });
-  if (!verified) {
-    throw new AuthServiceError(400, "Gagal verifikasi nomor anda");
-  }
-
   const verifiedUser = await prisma.user.update({
-    where: { user_id: userId },
+    where: { user_id: user.user_id },
     data: { phone_verified: true, status: "active" },
   });
 
-  await notifyMarketingAboutReferral(userId);
+  await notifyMarketingAboutReferral(user.user_id);
   return verifiedUser;
 }
 
@@ -429,7 +429,7 @@ module.exports = {
   AuthServiceError,
   registerUser,
   sendUserOtp,
-  verifyUserOtp,
+  verifyUserPhone,
   authenticateUser,
   getUserProfile,
   changeUserPassword,

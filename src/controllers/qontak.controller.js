@@ -1,4 +1,8 @@
 const {
+  sendMessageViaBot,
+} = require("../integration/qontak/qontak.integration");
+const { verifyUserPhone } = require("../services/auth.service");
+const {
   badRequest,
   successRequest,
   respondWithServerError,
@@ -15,6 +19,10 @@ function flattenAxiosError(error) {
   return JSON.stringify(data);
 }
 
+const failed_message = `Waduh, konfirmasi akun kamu belum berhasil nih. 😅\nBiasanya ini terjadi karena tautan sudah kedaluwarsa (lewat dari 3 menit) atau sudah pernah digunakan.\nTenang, kamu bisa minta tautan baru lewat halaman login aplikasi/website ya!`;
+
+const success_message = `Yey, akun Crisbro kamu sudah aktif! 🎉\nSekarang kamu sudah resmi jadi bagian dari Crisbro. Yuk, langsung jelajahi dan nikmati semua fiturnya sekarang!`;
+
 async function receiveQontakMessageInteraction(req, res) {
   const payload = req.body;
 
@@ -30,9 +38,6 @@ async function receiveQontakMessageInteraction(req, res) {
     const sender_id = payload.sender_id ?? undefined;
     const text = payload.text ?? undefined;
     const phone = payload.room.account_uniq_id ?? undefined;
-
-    console.log(text);
-    console.log("============================");
 
     if (!room_id && !sender_id && !text && !phone) {
       return badRequest({
@@ -53,10 +58,27 @@ async function receiveQontakMessageInteraction(req, res) {
     if (identifier[0] !== "AKTIVASI CRISBRO")
       return successRequest({ res, data: null, code: 200 });
 
-    console.log("Identifier: ", identifier[2]);
-    console.log("room_id: ", room_id);
-    console.log("sender_id: ", sender_id);
-    console.log("Text: ", text);
+    const [_, noRef] = identifier[2].split(":");
+
+    // Verify phone
+    const verify = await verifyUserPhone({ raw_phone: phone, noRef: noRef });
+
+    if (!verify) {
+      await sendMessageViaBot({ room_id, text: failed_message });
+
+      console.log(verify);
+      return badRequest({
+        res,
+        code: 400,
+        error: "Failed to verify your phone",
+      });
+    }
+
+    // Success and send message to customer
+    await sendMessageViaBot({ room_id, text: success_message });
+
+    console.log(verify);
+    return successRequest({ res, code: 200, data: null });
   } catch (error) {
     respondWithServerError(res, flattenAxiosError(error));
   }

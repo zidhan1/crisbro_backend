@@ -133,10 +133,30 @@ async function sendVerificationWhatsapp({ toNumber, toName, token }) {
   }
 }
 
-// module.exports = { getTokenFromDB };
+async function sendMessageViaBot({ room_id, type = "text", text }) {
+  const { access_token, refresh_token } = await getTokenFromDB();
 
-sendVerificationWhatsapp({
-  toNumber: "+6281259783014",
-  toName: "zidanalfa",
-  token: "09t789bjsbjf75678",
-});
+  try {
+    const response = await axios.post(
+      `${base_url}/api/open/v1/messages/whatsapp/bot`,
+      {
+        room_id,
+        type,
+        text,
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${access_token}`,
+        },
+      },
+    );
+
+    return response.data;
+  } catch (error) {
+    console.log(error.response.data);
+    throw new Error(error?.response?.data || error.message);
+  }
+}
+
+module.exports = { getTokenFromDB, sendMessageViaBot };
