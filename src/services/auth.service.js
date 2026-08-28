@@ -234,9 +234,7 @@ async function registerUser(data) {
     },
   });
 
-  const defaultText = `AKTIVASI CRISBRO\n
-                       Harap kirim pesan ini tanpa merubah apapun.\n 
-                       No.ref:${userWithReference.no_referensi}`;
+  const defaultText = `AKTIVASI CRISBRO\nHarap kirim pesan ini tanpa merubah apapun.\nNo.ref:${userWithReference.no_referensi}`;
 
   return { user: userWithReference, referral, text: defaultText };
 }
@@ -263,9 +261,7 @@ async function sendUserReferenceCode(userId) {
     },
   });
 
-  const defaultText = `AKTIVASI CRISBRO\n
-                       Harap kirim pesan ini tanpa merubah apapun.\n 
-                       No.ref:${userReference.no_referensi}`;
+  const defaultText = `AKTIVASI CRISBRO\nHarap kirim pesan ini tanpa merubah apapun.\nNo.ref:${userReference.no_referensi}`;
 
   return { user: userReference, text: defaultText };
 }
