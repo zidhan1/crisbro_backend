@@ -152,7 +152,7 @@ async function registerUser(data) {
       ),
     });
 
-    let createdReferralRecord = null;
+    let createdReferralRecord = [];
     if (referralData) {
       // For referred
       const referred = await tx.referral.create({
@@ -181,21 +181,22 @@ async function registerUser(data) {
       createdReferralRecord.push(referred, referrer);
     }
 
-    const createdReferral = createdReferralRecord
-      ? {
-          ...createdReferralRecord,
-          rewards: {
-            referrer: {
-              user_id: referralData.referrerId,
-              point_reward: referralData.pointReward,
+    const createdReferral =
+      createdReferralRecord.length !== 0
+        ? {
+            ...createdReferralRecord,
+            rewards: {
+              referrer: {
+                user_id: referralData.referrerId,
+                point_reward: referralData.pointReward,
+              },
+              referred: {
+                user_id: createdUser.user_id,
+                point_given: referralData.pointGiven,
+              },
             },
-            referred: {
-              user_id: createdUser.user_id,
-              point_given: referralData.pointGiven,
-            },
-          },
-        }
-      : null;
+          }
+        : null;
 
     return { user: createdUser, referral: createdReferral };
   });
