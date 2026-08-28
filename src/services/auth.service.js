@@ -7,11 +7,6 @@ const { getSessionPolicy } = require("../lib/sessionPolicy");
 const { getNextReward } = require("./nextRewardService");
 const { sendReferralValidationEmail } = require("./email.service");
 const { findCustomerByPhone, createCustomer } = require("./runchise.service");
-const {
-  generateOtpCode,
-  sendOtpCode,
-  verifyOtpCode,
-} = require("./fazpass.service");
 const { generateRandomUniqueCode } = require("../utils/generateReferralCode");
 
 const INVALID_CREDENTIALS_MESSAGE =
@@ -231,9 +226,7 @@ async function registerUser(data) {
       email_verification_expires: true,
       email_verified: true,
       referral_code: true,
-      otp: true,
-      otp_expires: true,
-      otp_id: true,
+      no_referensi: true,
       phone_verified: true,
       status: true,
       created_at: true,
