@@ -1,17 +1,17 @@
 const DEFAULT_PRODUCTION_ORIGINS = Object.freeze([
-  'https://crisbro-frontend.vercel.app',
+  "https://crisbro-frontend.vercel.app",
 ]);
 
 function normalizeConfiguredOrigin(value) {
-  if (typeof value !== 'string' || !value.trim()) return null;
+  if (typeof value !== "string" || !value.trim()) return null;
 
   try {
     const parsed = new URL(value.trim());
     if (
-      !['http:', 'https:'].includes(parsed.protocol) ||
+      !["http:", "https:"].includes(parsed.protocol) ||
       parsed.username ||
       parsed.password ||
-      parsed.pathname !== '/' ||
+      parsed.pathname !== "/" ||
       parsed.search ||
       parsed.hash
     ) {
@@ -24,10 +24,10 @@ function normalizeConfiguredOrigin(value) {
 }
 
 function normalizeRequestOrigin(value) {
-  if (typeof value !== 'string' || !value.trim()) return null;
+  if (typeof value !== "string" || !value.trim()) return null;
   try {
     const parsed = new URL(value.trim());
-    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+    if (!["http:", "https:"].includes(parsed.protocol)) return null;
     return parsed.origin;
   } catch {
     return null;
@@ -42,12 +42,13 @@ function createCorsPolicy({
   const configuredOrigins = [
     ...DEFAULT_PRODUCTION_ORIGINS,
     frontendUrl,
-    ...String(corsOrigins || '').split(','),
+    "http://localhost:5173",
+    ...String(corsOrigins || "").split(","),
   ];
   const allowedOrigins = new Set(
     configuredOrigins.map(normalizeConfiguredOrigin).filter(Boolean),
   );
-  const isProduction = nodeEnv === 'production';
+  const isProduction = nodeEnv === "production";
 
   function isAllowedOrigin(origin) {
     const normalized = normalizeRequestOrigin(origin);
@@ -56,15 +57,15 @@ function createCorsPolicy({
 
     if (isProduction) return false;
     const hostname = new URL(normalized).hostname;
-    return ['localhost', '127.0.0.1', '[::1]'].includes(hostname);
+    return ["localhost", "127.0.0.1", "[::1]"].includes(hostname);
   }
 
   function guard(req, res, next) {
-    const origin = req.get('origin');
+    const origin = req.get("origin");
     if (origin && !isAllowedOrigin(origin)) {
       return res
         .status(403)
-        .json({ message: 'Origin tidak diizinkan oleh kebijakan CORS' });
+        .json({ message: "Origin tidak diizinkan oleh kebijakan CORS" });
     }
     return next();
   }

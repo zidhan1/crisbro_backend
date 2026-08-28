@@ -319,7 +319,11 @@ async function verifyUserPhone({ raw_phone, noRef }) {
     data: { phone_verified: true, status: "active" },
   });
 
+  // NOTIFY TO ADMIN
   await notifyMarketingAboutReferral(user.user_id);
+
+  // GENERATE OLD USER SALE TRANSACTION
+
   return verifiedUser;
 }
 
