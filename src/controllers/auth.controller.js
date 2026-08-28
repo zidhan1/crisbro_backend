@@ -3,14 +3,17 @@ const {
   badRequest,
   successRequest,
 } = require("../utils/responseReuest");
-const { setSessionCookie, clearSessionCookie } = require("../lib/sessionCookie");
+const {
+  setSessionCookie,
+  clearSessionCookie,
+} = require("../lib/sessionCookie");
 const {
   registerSchemaValidation,
 } = require("../validation/auth/auth-validation");
 const {
   AuthServiceError,
   registerUser,
-  sendUserOtp,
+  sendUserReferenceCode,
   verifyUserOtp,
   authenticateUser,
   getUserProfile,
@@ -68,6 +71,7 @@ async function register(req, res) {
       data: {
         user: serializeAuthUser(result.user),
         referral: result.referral,
+        text: result.text,
       },
       message: "Berhasil membuat user dan mengirim otp",
     });
@@ -78,8 +82,13 @@ async function register(req, res) {
 
 async function sendOnlyOtpCode(req, res) {
   try {
-    await sendUserOtp(req.user?.user_id);
-    return successRequest({ res, code: 200, message: "Berhasil mengirim otp" });
+    const data = await sendUserReferenceCode(req.user?.user_id);
+    return successRequest({
+      res,
+      code: 200,
+      message: "Berhasil generate no.ref",
+      data: data,
+    });
   } catch (error) {
     return handleAuthError(res, error, "Pengiriman OTP gagal");
   }
@@ -153,11 +162,7 @@ async function changePassword(req, res) {
   }
 
   try {
-    await changeUserPassword(
-      req.user?.user_id,
-      currentPassword,
-      newPassword,
-    );
+    await changeUserPassword(req.user?.user_id, currentPassword, newPassword);
     clearSessionCookie(res);
     return res.json({
       message: "Password berhasil diganti. Silakan login ulang.",
@@ -190,4 +195,5 @@ module.exports = {
   logoutAllSessions,
   profile,
   changePassword,
+  serializeAuthUser,
 };

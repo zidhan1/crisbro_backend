@@ -1,5 +1,5 @@
 const prisma = require("../lib/prisma");
-const { generateReferralCode } = require("../utils/generateReferralCode");
+const { generateRandomUniqueCode } = require("../utils/generateReferralCode");
 const { findCustomerByPhone } = require("./runchise.service");
 const { normalizePhone } = require("../lib/phoneNumber");
 
@@ -68,7 +68,7 @@ async function generateReferralCodeService({ user_id, payload }) {
     let code;
     let exist = true;
     while (exist) {
-      code = generateReferralCode();
+      code = generateRandomUniqueCode();
       exist = await prisma.user.findUnique({ where: { referral_code: code } });
     }
 
@@ -122,7 +122,7 @@ async function renewReferralCodeService({ user_id, payload }) {
     let code;
     let exist = true;
     while (exist) {
-      code = generateReferralCode();
+      code = generateRandomUniqueCode();
       exist = await prisma.user.findUnique({ where: { referral_code: code } });
     }
 
@@ -300,12 +300,12 @@ async function validateReferralCodeService({ user_id }) {
       await Promise.all(
         participants.map((user, index) =>
           tx.customer.update({
-          where: { customer_id: user.customer.customer_id },
-          data: buildCustomerUpdateFromRunchise(
-            remoteCustomers[index],
-            user.customer,
-            awardedPoints[index],
-          ),
+            where: { customer_id: user.customer.customer_id },
+            data: buildCustomerUpdateFromRunchise(
+              remoteCustomers[index],
+              user.customer,
+              awardedPoints[index],
+            ),
           }),
         ),
       );

@@ -2,10 +2,8 @@ const {
   sendMessageViaBot,
 } = require("../integration/qontak/qontak.integration");
 const { verifyUserPhone } = require("../services/auth.service");
-const {
-  badRequest,
-  successRequest,
-} = require("../utils/responseReuest");
+const { badRequest, successRequest } = require("../utils/responseReuest");
+const { serializeAuthUser } = require("./auth.controller");
 
 function flattenAxiosError(error) {
   const data = error.response?.data;
@@ -17,9 +15,9 @@ function flattenAxiosError(error) {
   return JSON.stringify(data);
 }
 
-const failed_message = `Waduh, konfirmasi akun kamu belum berhasil nih. 😅\nBiasanya ini terjadi karena tautan sudah kedaluwarsa (lewat dari 3 menit) atau merubah no.Ref.\nTenang, kamu bisa minta tautan baru lewat halaman login aplikasi/website ya!`;
+const failed_message = `Verifikasi akun *Crisbro* kamu belum berhasil. ❌\nDimohon untuk tidak merubah format pesan sebelum dikirim.\nSilahkan mengirim permintaan ulang melalui *Crisbro* app.`;
 
-const success_message = `Yey, akun Crisbro kamu sudah aktif! 🎉\nSekarang kamu sudah resmi jadi bagian dari Crisbro. Yuk, langsung jelajahi dan nikmati semua fiturnya sekarang!`;
+const success_message = `Yey, akun *Crisbro* kamu sudah aktif! 🎉\nSekarang kamu sudah resmi jadi bagian dari *Crisbro*. Yuk, langsung jelajahi dan nikmati semua fiturnya sekarang!\n\nhttps://app.crisbro.id`;
 
 async function sendBotMessageSafely({ room_id, text }) {
   try {
@@ -55,9 +53,6 @@ async function receiveQontakMessageInteraction(req, res) {
   }
 
   console.log("room_id: ", room_id);
-  console.log("sender_id: ", sender_id);
-  console.log("text: ", text);
-  console.log("phone: ", phone);
 
   try {
     // Validate is crisbro validation message.
@@ -79,7 +74,7 @@ async function receiveQontakMessageInteraction(req, res) {
     if (!verify) {
       await sendBotMessageSafely({ room_id, text: failed_message });
 
-      console.log(verify);
+      console.log(serializeAuthUser(verify));
       return successRequest({
         res,
         code: 200,
@@ -94,7 +89,10 @@ async function receiveQontakMessageInteraction(req, res) {
     console.log(verify);
     return successRequest({ res, code: 200, data: null });
   } catch (error) {
-    console.error("Qontak phone verification failed:", flattenAxiosError(error));
+    console.error(
+      "Qontak phone verification failed:",
+      flattenAxiosError(error),
+    );
     await sendBotMessageSafely({ room_id, text: failed_message });
 
     // A verification error is a processed webhook, not a transport failure.

@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 
-function generateReferralCode(length = 6) {
+function generateRandomUniqueCode(length = 6) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const bytes = crypto.randomBytes(length);
   let code = "";
@@ -10,4 +10,4 @@ function generateReferralCode(length = 6) {
   return code;
 }
 
-module.exports = { generateReferralCode };
+module.exports = { generateRandomUniqueCode };

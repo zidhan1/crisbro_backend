@@ -12,6 +12,7 @@ const {
   sendOtpCode,
   verifyOtpCode,
 } = require("./fazpass.service");
+const { generateRandomUniqueCode } = require("../utils/generateReferralCode");
 
 const INVALID_CREDENTIALS_MESSAGE =
   "Email/nomor telepon atau password salah. Bila akun Anda belum pernah diaktivasi, hubungi Admin untuk menerima tautan aktivasi.";
@@ -154,7 +155,7 @@ async function registerUser(data) {
     let createdReferralRecord = null;
     if (referralData) {
       // For referred
-      await tx.referral.create({
+      const referred = await tx.referral.create({
         data: {
           referral_program_id: referralData.programId,
           referrer_id: referralData.referrerId,
@@ -167,7 +168,7 @@ async function registerUser(data) {
       });
 
       // For referrer
-      await tx.referral.create({
+      const referrer = await tx.referral.create({
         data: {
           referral_program_id: referralData.programId,
           referrer_id: createdUser.user_id,
@@ -176,6 +177,8 @@ async function registerUser(data) {
           status: "pending",
         },
       });
+
+      createdReferralRecord.push(referred, referrer);
     }
 
     const createdReferral = createdReferralRecord
@@ -197,19 +200,26 @@ async function registerUser(data) {
     return { user: createdUser, referral: createdReferral };
   });
 
-  const { otp } = await generateOtpCode({
-    phone: `0${data.phone}`,
-    gateway_key: getFazpassGatewayKey(),
-  });
-  const sentOtp = await sendOtpCode({
-    otp,
-    gateway_key: getFazpassGatewayKey(),
-    phone: `0${user.phone}`,
+  // Generate no reference for activation user
+  noRef = generateRandomUniqueCode(10);
+
+  let code;
+  let exist = true;
+  while (exist) {
+    code = generateRandomUniqueCode(10);
+    exist = await prisma.user.findUnique({ where: { no_referensi: code } });
+  }
+
+  await prisma.user.update({
+    where: { user_id: user.user_id },
+    data: {
+      no_referensi: code,
+    },
   });
 
-  const userWithOtp = await prisma.user.update({
+  const userWithReference = await prisma.user.update({
     where: { user_id: user.user_id },
-    data: { otp, otp_id: sentOtp.data.id },
+    data: { no_referensi: code },
     select: {
       user_id: true,
       email: true,
@@ -230,29 +240,40 @@ async function registerUser(data) {
     },
   });
 
-  return { user: userWithOtp, referral };
+  const defaultText = `AKTIVASI CRISBRO\n
+                       Harap kirim pesan ini tanpa merubah apapun.\n 
+                       No.ref:${userWithReference.no_referensi}`;
+
+  return { user: userWithReference, referral, text: defaultText };
 }
 
-async function sendUserOtp(userId) {
+async function sendUserReferenceCode(userId) {
   if (!userId) throw new AuthServiceError(400, "user_id is required");
 
   const user = await prisma.user.findUnique({ where: { user_id: userId } });
   if (!user) throw new AuthServiceError(404, "User not found");
 
-  const { otp } = await generateOtpCode({
-    phone: user.phone,
-    gateway_key: getFazpassGatewayKey(),
-  });
-  const sentOtp = await sendOtpCode({
-    phone: `0${user.phone}`,
-    otp,
-    gateway_key: getFazpassGatewayKey(),
+  noRef = generateRandomUniqueCode(10);
+
+  let code;
+  let exist = true;
+  while (exist) {
+    code = generateRandomUniqueCode(10);
+    exist = await prisma.user.findUnique({ where: { no_referensi: code } });
+  }
+
+  const userReference = await prisma.user.update({
+    where: { user_id: userId },
+    data: {
+      no_referensi: code,
+    },
   });
 
-  await prisma.user.update({
-    where: { user_id: user.user_id },
-    data: { otp, otp_id: sentOtp.data.id },
-  });
+  const defaultText = `AKTIVASI CRISBRO\n
+                       Harap kirim pesan ini tanpa merubah apapun.\n 
+                       No.ref:${userReference.no_referensi}`;
+
+  return { user: userReference, text: defaultText };
 }
 
 async function notifyMarketingAboutReferral(userId) {
@@ -299,6 +320,9 @@ async function verifyUserPhone({ raw_phone, noRef }) {
   });
 
   if (!user) throw new AuthServiceError(404, "User not found");
+
+  if (user.status === "active")
+    throw new AuthServiceError(400, "User has been activate");
 
   const verifiedUser = await prisma.user.update({
     where: { user_id: user.user_id },
@@ -428,7 +452,7 @@ async function changeUserPassword(userId, currentPassword, newPassword) {
 module.exports = {
   AuthServiceError,
   registerUser,
-  sendUserOtp,
+  sendUserReferenceCode,
   verifyUserPhone,
   authenticateUser,
   getUserProfile,
