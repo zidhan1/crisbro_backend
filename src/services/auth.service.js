@@ -32,6 +32,25 @@ function hasUsablePassword(user) {
   return typeof user?.password_hash === "string" && user.password_hash !== "";
 }
 
+// Runchise API mengirim angka sebagai string (mis. "34400.0") dan
+// terkadang mengirim string kosong untuk nilai yang kosong.
+function toNullableInt(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isInteger(number) ? number : null;
+}
+
+function toNullableFloat(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isNaN(number) ? null : number;
+}
+
+function toNullableString(value) {
+  if (value === null || value === undefined || value === "") return null;
+  return String(value);
+}
+
 function getFazpassGatewayKey() {
   return process.env.FAZPASS_GATEWEY_KEY;
 }
@@ -339,6 +358,13 @@ async function verifyUserPhone({ raw_phone, noRef }) {
     );
 
     for (const transaction of transactions) {
+      if (!transaction.id) {
+        console.warn(
+          `Transaction without runchise id (sales_no: ${transaction.sales_no}), skip`,
+        );
+        continue;
+      }
+
       const location = await prisma.location.findFirst({
         where: { runchise_id: transaction.location_id },
       });
@@ -351,49 +377,51 @@ async function verifyUserPhone({ raw_phone, noRef }) {
       }
 
       await prisma.saleTransaction.upsert({
-        where: { runchise_id: transaction.id },
+        where: { runchise_id: Number(transaction.id) },
         create: {
           customer_id: customer.customer_id,
           location_id: location.location_id,
-          runchise_id: transaction.id ?? null,
-          runchise_brand_id: transaction.brand_id ?? null,
-          runchise_sales_no: transaction.sales_no ?? null,
-          runchise_customer_id: transaction.customer_id ?? null,
-          runchise_location_id: transaction.location_id ?? null,
-          gross_sales: transaction.gross_sales ?? null,
-          net_sales: transaction.net_sales ?? null,
+          runchise_id: Number(transaction.id),
+          runchise_brand_id: toNullableInt(transaction.brand_id),
+          runchise_sales_no: toNullableString(transaction.sales_no),
+          runchise_customer_id: toNullableInt(transaction.customer_id),
+          runchise_location_id: toNullableInt(transaction.location_id),
+          gross_sales: toNullableFloat(transaction.gross_sales),
+          net_sales: toNullableFloat(transaction.net_sales),
           location_name: transaction.location_name ?? null,
           order_type_name: transaction.order_type_name ?? null,
-          subtotal: transaction.subtotal ?? null,
-          net_sales_after_tax: transaction.net_sales_after_tax ?? null,
+          subtotal: toNullableFloat(transaction.subtotal),
+          net_sales_after_tax: toNullableFloat(transaction.net_sales_after_tax),
           sales_time: transaction.sales_time
             ? new Date(transaction.sales_time)
             : null,
           note: transaction.note ?? null,
-          applied_promos_redeemed_point:
-            transaction.applied_promos_redeemed_point ?? null,
-          loyalty_discount_fee: transaction.loyalty_discount_fee ?? null,
+          applied_promos_redeemed_point: toNullableInt(
+            transaction.applied_promos_redeemed_point,
+          ),
+          loyalty_discount_fee: toNullableFloat(transaction.loyalty_discount_fee),
         },
         update: {
           customer_id: customer.customer_id,
           location_id: location.location_id,
-          runchise_brand_id: transaction.brand_id ?? null,
-          runchise_sales_no: transaction.sales_no ?? null,
-          runchise_customer_id: transaction.customer_id ?? null,
-          runchise_location_id: transaction.location_id ?? null,
-          gross_sales: transaction.gross_sales ?? null,
-          net_sales: transaction.net_sales ?? null,
+          runchise_brand_id: toNullableInt(transaction.brand_id),
+          runchise_sales_no: toNullableString(transaction.sales_no),
+          runchise_customer_id: toNullableInt(transaction.customer_id),
+          runchise_location_id: toNullableInt(transaction.location_id),
+          gross_sales: toNullableFloat(transaction.gross_sales),
+          net_sales: toNullableFloat(transaction.net_sales),
           location_name: transaction.location_name ?? null,
           order_type_name: transaction.order_type_name ?? null,
-          subtotal: transaction.subtotal ?? null,
-          net_sales_after_tax: transaction.net_sales_after_tax ?? null,
+          subtotal: toNullableFloat(transaction.subtotal),
+          net_sales_after_tax: toNullableFloat(transaction.net_sales_after_tax),
           sales_time: transaction.sales_time
             ? new Date(transaction.sales_time)
             : null,
           note: transaction.note ?? null,
-          applied_promos_redeemed_point:
-            transaction.applied_promos_redeemed_point ?? null,
-          loyalty_discount_fee: transaction.loyalty_discount_fee ?? null,
+          applied_promos_redeemed_point: toNullableInt(
+            transaction.applied_promos_redeemed_point,
+          ),
+          loyalty_discount_fee: toNullableFloat(transaction.loyalty_discount_fee),
         },
       });
     }

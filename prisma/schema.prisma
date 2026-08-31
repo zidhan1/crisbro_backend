@@ -256,9 +256,9 @@ model SaleTransaction {
   transaction_id                String    @id @default(uuid())
   customer_id                   String
   location_id                   String
-  runchise_id                   Int?
+  runchise_id                   Int?      @unique
   runchise_brand_id             Int?
-  runchise_sales_no             Int?
+  runchise_sales_no             String?
   runchise_customer_id          Int?
   runchise_location_id          Int?
   gross_sales                   Float?
