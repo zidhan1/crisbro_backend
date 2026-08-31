@@ -301,8 +301,6 @@ async function notifyMarketingAboutReferral(userId) {
     select: { email: true },
   });
 
-  console.log("MASUK NOTIFY MARKETING SERVICE");
-
   await Promise.allSettled(
     recipients.map(({ email }) =>
       sendReferralValidationEmail({

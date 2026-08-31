@@ -1,6 +1,7 @@
 const nodemailer = require("nodemailer");
+const dotenv = require("dotenv").config();
 
-const DEFAULT_FROM_EMAIL = "it@crispybakar.biz";
+const DEFAULT_FROM_EMAIL = "marketing@crispybakar.biz";
 
 function getMailerConfig() {
   const host = process.env.SMTP_HOST;
@@ -33,13 +34,6 @@ async function sendMail({ to, subject, text, html }) {
 
   const transporter = nodemailer.createTransport(config);
   const from = process.env.MAIL_FROM || DEFAULT_FROM_EMAIL;
-
-  console.log("MASUK SEND EMAIL");
-  console.log("From: ", from);
-  console.log("To: ", to);
-  console.log("Subject: ", subject);
-  console.log("Text: ", text);
-  console.log("Html: ", html);
 
   await transporter.sendMail({
     from,
@@ -151,8 +145,6 @@ function sendReferralValidationEmail({
   const escapedReferredId = escapeHtml(referredId);
   const escapedReferralCode = escapeHtml(referralCode || "-");
   const escapedValidationUrl = escapeHtml(validationUrl);
-
-  console.log("MASUK SEND REFERRAL VALIDATION EMAIL");
 
   return sendMail({
     to,
