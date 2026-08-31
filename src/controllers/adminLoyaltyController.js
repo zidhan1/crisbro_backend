@@ -50,7 +50,7 @@ const {
   deleteAdminCustomer,
   listAdminBrands,
   listAdminLocations,
-} = require('./adminLoyalty/adminCustomerController');
+} = require('./customerController');
 const {
   listCustomerSalesTransactionReports,
   listCustomerSalesTransactionReportOutlets,

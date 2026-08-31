@@ -35,7 +35,7 @@ const docsContentSecurityPolicy = require("./middleware/docsCsp");
 const csrfProtection = require("./middleware/csrfProtection");
 
 // Routes (modular API)
-const customerRoutes = require("./routes/customerRoutes");
+const customerRoutes = require("./routes/customer.routes");
 const authRoutes = require("./routes/auth.routes");
 const referralRoutes = require("./routes/referral.routes");
 const rewardsCatalogRoutes = require("./routes/rewardsCatalogRoutes");

@@ -4,6 +4,9 @@ const axios = require("axios");
 const {
   createCustomerSchema,
 } = require("../validation/runchise/runchise-validation");
+const {
+  updateCustomerSchema,
+} = require("../validation/customer/customer-validation");
 
 dotenv.config();
 
@@ -63,6 +66,36 @@ async function createCustomer(payload) {
   } catch (error) {
     if (axios.isAxiosError(error)) {
       const message = JSON.stringify(error.response.data.errors);
+      throw new Error(message);
+    }
+    throw error;
+  }
+}
+
+async function updateCustomer(
+  runchise_customer_id,
+  runchise_location_id,
+  payload,
+) {
+  try {
+    const validate = updateCustomerSchema.safeParse(payload);
+
+    if (!validate.success) {
+      throw new Error(JSON.stringify(validate.error.flatten().fieldErrors));
+    }
+
+    const data = validate.data;
+    const result = await runchiseClient.patch(
+      `/locations/${runchise_location_id}/customers/${runchise_customer_id}`,
+      data,
+    );
+
+    return result.data?.customer ?? null;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data?.errors
+        ? JSON.stringify(error.response.data.errors)
+        : error.message;
       throw new Error(message);
     }
     throw error;
@@ -167,6 +200,7 @@ async function listSaleTransactionByCustomerId(runchise_customer_id) {
 module.exports = {
   findCustomerByPhone,
   createCustomer,
+  updateCustomer,
   listAllLocations,
   listAllSubBrands,
   listSaleTransactionByCustomerId,
