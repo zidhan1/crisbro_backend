@@ -34,6 +34,8 @@ async function sendMail({ to, subject, text, html }) {
   const transporter = nodemailer.createTransport(config);
   const from = process.env.MAIL_FROM || DEFAULT_FROM_EMAIL;
 
+  console.log("MASUK SEND EMAIL");
+
   await transporter.sendMail({
     from,
     to,
@@ -144,6 +146,8 @@ function sendReferralValidationEmail({
   const escapedReferredId = escapeHtml(referredId);
   const escapedReferralCode = escapeHtml(referralCode || "-");
   const escapedValidationUrl = escapeHtml(validationUrl);
+
+  console.log("MASUK SEND REFERRAL VALIDATION EMAIL");
 
   return sendMail({
     to,
