@@ -158,7 +158,6 @@ async function listSaleTransactionByCustomerId(runchise_customer_id) {
       ];
     }
 
-    console.log(sale_transactions);
     return sale_transactions;
   } catch (error) {
     throw error instanceof Error ? error : new Error(String(error));

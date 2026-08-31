@@ -87,7 +87,7 @@ async function receiveQontakMessageInteraction(req, res) {
     // Success and send message to customer
     await sendBotMessageSafely({ room_id, text: success_message });
 
-    console.log(verify);
+    console.log(serializeAuthUser(verify));
     return successRequest({ res, code: 200, data: null });
   } catch (error) {
     console.error(

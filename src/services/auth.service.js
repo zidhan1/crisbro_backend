@@ -282,6 +282,8 @@ async function notifyMarketingAboutReferral(userId) {
     select: { email: true },
   });
 
+  console.log(recipients);
+
   await Promise.allSettled(
     recipients.map(({ email }) =>
       sendReferralValidationEmail({
@@ -332,7 +334,69 @@ async function verifyUserPhone({ raw_phone, noRef }) {
   });
 
   try {
-    await listSaleTransactionByCustomerId(customer.runchise_id);
+    const transactions = await listSaleTransactionByCustomerId(
+      customer.runchise_id,
+    );
+
+    for (const transaction of transactions) {
+      const location = await prisma.location.findFirst({
+        where: { runchise_id: transaction.location_id },
+      });
+
+      if (!location) {
+        console.warn(
+          `Location not found for runchise_id: ${transaction.location_id}, skip transaction ${transaction.id}`,
+        );
+        continue; // atau throw error spesifik
+      }
+
+      await prisma.saleTransaction.upsert({
+        where: { runchise_id: transaction.id },
+        create: {
+          customer_id: customer.customer_id,
+          location_id: location.location_id,
+          runchise_id: transaction.id ?? null,
+          runchise_brand_id: transaction.brand_id ?? null,
+          runchise_sales_no: transaction.sales_no ?? null,
+          runchise_customer_id: transaction.customer_id ?? null,
+          runchise_location_id: transaction.location_id ?? null,
+          gross_sales: transaction.gross_sales ?? null,
+          net_sales: transaction.net_sales ?? null,
+          location_name: transaction.location_name ?? null,
+          order_type_name: transaction.order_type_name ?? null,
+          subtotal: transaction.subtotal ?? null,
+          net_sales_after_tax: transaction.net_sales_after_tax ?? null,
+          sales_time: transaction.sales_time
+            ? new Date(transaction.sales_time)
+            : null,
+          note: transaction.note ?? null,
+          applied_promos_redeemed_point:
+            transaction.applied_promos_redeemed_point ?? null,
+          loyalty_discount_fee: transaction.loyalty_discount_fee ?? null,
+        },
+        update: {
+          customer_id: customer.customer_id,
+          location_id: location.location_id,
+          runchise_brand_id: transaction.brand_id ?? null,
+          runchise_sales_no: transaction.sales_no ?? null,
+          runchise_customer_id: transaction.customer_id ?? null,
+          runchise_location_id: transaction.location_id ?? null,
+          gross_sales: transaction.gross_sales ?? null,
+          net_sales: transaction.net_sales ?? null,
+          location_name: transaction.location_name ?? null,
+          order_type_name: transaction.order_type_name ?? null,
+          subtotal: transaction.subtotal ?? null,
+          net_sales_after_tax: transaction.net_sales_after_tax ?? null,
+          sales_time: transaction.sales_time
+            ? new Date(transaction.sales_time)
+            : null,
+          note: transaction.note ?? null,
+          applied_promos_redeemed_point:
+            transaction.applied_promos_redeemed_point ?? null,
+          loyalty_discount_fee: transaction.loyalty_discount_fee ?? null,
+        },
+      });
+    }
   } catch (error) {
     throw new AuthServiceError(400, error.message);
   }
