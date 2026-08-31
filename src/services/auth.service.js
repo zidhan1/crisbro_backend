@@ -301,8 +301,6 @@ async function notifyMarketingAboutReferral(userId) {
     select: { email: true },
   });
 
-  console.log(recipients);
-
   await Promise.allSettled(
     recipients.map(({ email }) =>
       sendReferralValidationEmail({
@@ -399,7 +397,9 @@ async function verifyUserPhone({ raw_phone, noRef }) {
           applied_promos_redeemed_point: toNullableInt(
             transaction.applied_promos_redeemed_point,
           ),
-          loyalty_discount_fee: toNullableFloat(transaction.loyalty_discount_fee),
+          loyalty_discount_fee: toNullableFloat(
+            transaction.loyalty_discount_fee,
+          ),
         },
         update: {
           customer_id: customer.customer_id,
@@ -421,7 +421,9 @@ async function verifyUserPhone({ raw_phone, noRef }) {
           applied_promos_redeemed_point: toNullableInt(
             transaction.applied_promos_redeemed_point,
           ),
-          loyalty_discount_fee: toNullableFloat(transaction.loyalty_discount_fee),
+          loyalty_discount_fee: toNullableFloat(
+            transaction.loyalty_discount_fee,
+          ),
         },
       });
     }
