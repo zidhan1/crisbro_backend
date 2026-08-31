@@ -44,68 +44,67 @@ async function receiveQontakMessageInteraction(req, res) {
   const text = payload.text ?? undefined;
   const phone = payload.room?.account_uniq_id ?? undefined;
 
-  if (!room_id && !sender_id && !text && !phone) {
-    return badRequest({
-      code: 400,
+  if (!room_id || !sender_id || !text || !phone) {
+    return successRequest({
+      code: 200,
       res,
-      error: "room_id, sender_id, text, account_uniq_id must be required",
+      message: "room_id, sender_id, text, account_uniq_id must be required",
     });
   }
 
   console.log("room_id: ", room_id);
   console.log("Phone: ", phone);
-  console.log("text: ", text);
 
-  // try {
-  //   // Validate is crisbro validation message.
-  //   const identifier = text.split("\n") ?? undefined;
+  try {
+    // Validate is crisbro validation message.
+    const identifier = text.split("\n") ?? undefined;
 
-  //   // Loloskan kalau tidak bisa di split
-  //   // Karena pasti bukan aktivasi crisbro
-  //   if (!identifier) return successRequest({ res, data: null, code: 200 });
+    // Loloskan kalau tidak bisa di split
+    // Karena pasti bukan aktivasi crisbro
+    if (!identifier) return successRequest({ res, data: null, code: 200 });
 
-  //   // Loloskan apabila bukan aktivasi crisbro
-  //   if (identifier[0] !== "AKTIVASI CRISBRO")
-  //     return successRequest({ res, data: null, code: 200 });
+    // Loloskan apabila bukan aktivasi crisbro
+    if (identifier[0] !== "AKTIVASI CRISBRO")
+      return successRequest({ res, data: null, code: 200 });
 
-  //   const [_, noRef] = identifier[2].split(":") ?? undefined;
+    const [_, noRef] = identifier[2].split(":") ?? undefined;
 
-  //   // Verify phone
-  //   const verify = await verifyUserPhone({ raw_phone: phone, noRef: noRef });
+    // Verify phone
+    const verify = await verifyUserPhone({ raw_phone: phone, noRef: noRef });
 
-  //   if (!verify) {
-  //     await sendBotMessageSafely({ room_id, text: failed_message });
+    if (!verify) {
+      await sendBotMessageSafely({ room_id, text: failed_message });
 
-  //     console.log(serializeAuthUser(verify));
-  //     return successRequest({
-  //       res,
-  //       code: 200,
-  //       data: null,
-  //       message: "Webhook received; phone verification failed",
-  //     });
-  //   }
+      console.log(serializeAuthUser(verify));
+      return successRequest({
+        res,
+        code: 200,
+        data: null,
+        message: "Webhook received; phone verification failed",
+      });
+    }
 
-  //   // Success and send message to customer
-  //   await sendBotMessageSafely({ room_id, text: success_message });
+    // Success and send message to customer
+    await sendBotMessageSafely({ room_id, text: success_message });
 
-  //   console.log(verify);
-  //   return successRequest({ res, code: 200, data: null });
-  // } catch (error) {
-  //   console.error(
-  //     "Qontak phone verification failed:",
-  //     flattenAxiosError(error),
-  //   );
-  //   await sendBotMessageSafely({ room_id, text: failed_message });
+    console.log(verify);
+    return successRequest({ res, code: 200, data: null });
+  } catch (error) {
+    console.error(
+      "Qontak phone verification failed:",
+      flattenAxiosError(error),
+    );
+    await sendBotMessageSafely({ room_id, text: failed_message });
 
-  //   // A verification error is a processed webhook, not a transport failure.
-  //   // Returning 200 prevents Qontak from retrying the same message.
-  //   return successRequest({
-  //     res,
-  //     code: 200,
-  //     data: null,
-  //     message: "Webhook received; phone verification failed",
-  //   });
-  // }
+    // A verification error is a processed webhook, not a transport failure.
+    // Returning 200 prevents Qontak from retrying the same message.
+    return successRequest({
+      res,
+      code: 200,
+      data: null,
+      message: "Webhook received; phone verification failed",
+    });
+  }
 }
 
 module.exports = { receiveQontakMessageInteraction };
