@@ -6,7 +6,11 @@ const { normalizePhone, phoneVariants } = require("../lib/phoneNumber");
 const { getSessionPolicy } = require("../lib/sessionPolicy");
 const { getNextReward } = require("./nextRewardService");
 const { sendReferralValidationEmail } = require("./email.service");
-const { findCustomerByPhone, createCustomer } = require("./runchise.service");
+const {
+  findCustomerByPhone,
+  createCustomer,
+  listSaleTransactionByCustomerId,
+} = require("./runchise.service");
 const { generateRandomUniqueCode } = require("../utils/generateReferralCode");
 
 const INVALID_CREDENTIALS_MESSAGE =
@@ -323,6 +327,15 @@ async function verifyUserPhone({ raw_phone, noRef }) {
   await notifyMarketingAboutReferral(user.user_id);
 
   // GENERATE OLD USER SALE TRANSACTION
+  const customer = await prisma.customer.findUnique({
+    where: { user_id: user.user_id },
+  });
+
+  try {
+    await listSaleTransactionByCustomerId(customer.runchise_id);
+  } catch (error) {
+    throw new AuthServiceError(400, error.message);
+  }
 
   return verifiedUser;
 }

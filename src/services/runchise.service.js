@@ -137,9 +137,38 @@ async function listAllSubBrands() {
   }
 }
 
+async function listSaleTransactionByCustomerId(runchise_customer_id) {
+  try {
+    if (!runchise_customer_id)
+      throw new Error("Runchise Customer Id is required");
+
+    let response = await runchiseClient.get(
+      `/sale_transactions?customer_id=${runchise_customer_id}`,
+    );
+
+    let paging = response.data.paging;
+    let sale_transactions = response.data.sale_transactions;
+
+    while (paging.next_page) {
+      response = await runchiseClient.get(paging.next_page);
+      paging = response.data.paging;
+      sale_transactions = [
+        ...sale_transactions,
+        ...response.data.sale_transactions,
+      ];
+    }
+
+    console.log(sale_transactions);
+    return sale_transactions;
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error));
+  }
+}
+
 module.exports = {
   findCustomerByPhone,
   createCustomer,
   listAllLocations,
   listAllSubBrands,
+  listSaleTransactionByCustomerId,
 };
