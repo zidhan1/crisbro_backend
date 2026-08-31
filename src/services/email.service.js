@@ -35,6 +35,11 @@ async function sendMail({ to, subject, text, html }) {
   const from = process.env.MAIL_FROM || DEFAULT_FROM_EMAIL;
 
   console.log("MASUK SEND EMAIL");
+  console.log("From: ", from);
+  console.log("To: ", to);
+  console.log("Subject: ", subject);
+  console.log("Text: ", text);
+  console.log("Html: ", html);
 
   await transporter.sendMail({
     from,
