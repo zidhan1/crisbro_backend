@@ -53,6 +53,7 @@ async function receiveQontakMessageInteraction(req, res) {
   }
 
   console.log("room_id: ", room_id);
+  console.log("Phone: ", phone);
   console.log("text: ", text);
 
   // try {
