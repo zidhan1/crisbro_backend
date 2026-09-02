@@ -35,20 +35,7 @@ const docsContentSecurityPolicy = require("./middleware/docsCsp");
 const csrfProtection = require("./middleware/csrfProtection");
 
 // Routes (modular API)
-const customerRoutes = require("./routes/customer.routes");
-const authRoutes = require("./routes/auth.routes");
-const referralRoutes = require("./routes/referral.routes");
-const rewardsCatalogRoutes = require("./routes/rewardsCatalogRoutes");
-const redemptionRoutes = require("./routes/redemptionRoutes");
-const locationRoutes = require("./routes/location.routes");
-const productCatalogRoutes = require("./routes/productCatalogRoutes");
-const redeemMenuRoutes = require("./routes/redeemMenuRoutes");
-const promoRoutes = require("./routes/promoRoutes");
-const adminLoyaltyRoutes = require("./routes/adminLoyaltyRoutes");
-const pointRoutes = require("./routes/pointRoutes");
-const legacyRoutes = require("./routes/legacyRoutes");
-const subBrandRoutes = require("./routes/subBrand.routes");
-const webhookQontak = require("./routes/qontak.routes");
+const allRouter = require("./routes/routes");
 
 const app = express();
 
@@ -107,20 +94,9 @@ app.get(
       .send(renderSwaggerHtml(res.locals.cspNonce));
   },
 );
-app.use("/api", customerRoutes);
-app.use("/api", authRoutes);
-app.use("/api/referral", referralRoutes);
-app.use("/api/rewards-catalog", rewardsCatalogRoutes);
-app.use("/api/redeem", redemptionRoutes);
-app.use("/api/locations", locationRoutes);
-app.use("/api/catalog/redeem-menu", redeemMenuRoutes);
-app.use("/api/catalog/products", productCatalogRoutes);
-app.use("/api/promos", promoRoutes);
-app.use("/api/points", pointRoutes);
-app.use("/api/admin", adminLoyaltyRoutes);
-app.use(legacyRoutes);
-app.use("/api/sub_brands", subBrandRoutes);
-app.use("/api/webhook-qontak", webhookQontak);
+
+// Manage All Routues
+app.use("/api", allRouter);
 
 // Health Check
 app.get("/", (req, res) => {

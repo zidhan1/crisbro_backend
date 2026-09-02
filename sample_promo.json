@@ -1,0 +1,82 @@
+{
+  "channel": "pos",
+  "name": "Promo Dummy 1",
+  "goal": "increase_average_sale",
+  "customer_allowed_dine_in": false,
+  "customer_allowed_online_ordering": true,
+  "applicable_for_loyalty": false,
+  "start_date": "02/09/2026",
+  "end_date": null,
+  "subdize_promo_subject_mdr": false,
+  "is_select_all_location": true,
+  "location_type": "outlet",
+  "location_ids": [],
+  "exclude_location_ids": [],
+  "is_select_all_location_group": false,
+  "location_group_ids": [],
+  "exclude_location_group_ids": [],
+  "owner_location_id": 4439,
+  "promo_schedules": null,
+  "promo_rule_attributes": {
+    "order_type_ids": [],
+    "member_only": true,
+    "customer_categories": [],
+    "payment_type_ids": [],
+    "bin_promo_codes": [],
+    "product_ids": [397495],
+    "product_min_quantity": ["1"],
+    "product_condition": "and",
+    "product_category_ids": [],
+    "product_category_min_quantity": [],
+    "product_category_condition": null,
+    "required_purchase_products": [
+      {
+        "id": 397495,
+        "name": "Bawang Bombay",
+        "minimum_purchase": 1
+      }
+    ],
+    "required_purchase_product_categories": [],
+    "total_min": null,
+    "total_min_exclude_categories_ids": [],
+    "maximum_redemption": null,
+    "maximum_redemption_user": null,
+    "user_target": null,
+    "maximum_qty_applied_to_products": [
+      {
+        "id": 397501,
+        "name": "Crisbar Bacon Burger",
+        "maximum_purchase": 1
+      }
+    ],
+    "maximum_qty_applied_to_product_categories": [],
+    "exclude_product_ids": [],
+    "exclude_product_category_ids": [],
+    "use_promotion_code": true,
+    "promotion_code_usage_type": "single",
+    "promotion_code_source": "random",
+    "promotion_code_number_of_generated_code": "10",
+    "promotion_code_maximum_usage": 1,
+    "promotion_code_uploaded_file": null
+  },
+  "promo_reward_attributes": {
+    "template": "discount_percentage",
+    "get_product_allow_multiple": false,
+    "discount_is_percentage": true,
+    "discount_amount": "100",
+    "discount_maximum": "",
+    "discount_external_cost": "0",
+    "discount_in_house_cost": "100",
+    "get_product_ids": [397501],
+    "get_product_category_ids": [],
+    "reward_products": [
+      {
+        "product_id": 397501,
+        "category_id": null,
+        "quantity": "1"
+      }
+    ],
+    "free_of_charge": true,
+    "apply_to_option_set": false
+  }
+}

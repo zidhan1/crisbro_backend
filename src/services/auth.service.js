@@ -4,13 +4,11 @@ const prisma = require("../lib/prisma");
 const getJwtSecret = require("../lib/jwtSecret");
 const { normalizePhone, phoneVariants } = require("../lib/phoneNumber");
 const { getSessionPolicy } = require("../lib/sessionPolicy");
-const { getNextReward } = require("./nextRewardService");
 const { sendReferralValidationEmail } = require("./email.service");
+const { findCustomerByPhone, createCustomer } = require("./runchise.service");
 const {
-  findCustomerByPhone,
-  createCustomer,
-  listSaleTransactionByCustomerId,
-} = require("./runchise.service");
+  generateSaleTransactionsFromRunchise,
+} = require("./saleTransaction.service");
 const { generateRandomUniqueCode } = require("../utils/generateReferralCode");
 
 const INVALID_CREDENTIALS_MESSAGE =
@@ -30,25 +28,6 @@ class AuthServiceError extends Error {
 
 function hasUsablePassword(user) {
   return typeof user?.password_hash === "string" && user.password_hash !== "";
-}
-
-// Runchise API mengirim angka sebagai string (mis. "34400.0") dan
-// terkadang mengirim string kosong untuk nilai yang kosong.
-function toNullableInt(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const number = Number(value);
-  return Number.isInteger(number) ? number : null;
-}
-
-function toNullableFloat(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const number = Number(value);
-  return Number.isNaN(number) ? null : number;
-}
-
-function toNullableString(value) {
-  if (value === null || value === undefined || value === "") return null;
-  return String(value);
 }
 
 function getFazpassGatewayKey() {
@@ -348,85 +327,11 @@ async function verifyUserPhone({ raw_phone, noRef }) {
   // GENERATE OLD USER SALE TRANSACTION
   const customer = await prisma.customer.findUnique({
     where: { user_id: user.user_id },
+    select: { customer_id: true },
   });
 
   try {
-    const transactions = await listSaleTransactionByCustomerId(
-      customer.runchise_id,
-    );
-
-    for (const transaction of transactions) {
-      if (!transaction.id) {
-        console.warn(
-          `Transaction without runchise id (sales_no: ${transaction.sales_no}), skip`,
-        );
-        continue;
-      }
-
-      const location = await prisma.location.findFirst({
-        where: { runchise_id: transaction.location_id },
-      });
-
-      if (!location) {
-        console.warn(
-          `Location not found for runchise_id: ${transaction.location_id}, skip transaction ${transaction.id}`,
-        );
-        continue; // atau throw error spesifik
-      }
-
-      await prisma.saleTransaction.upsert({
-        where: { runchise_id: Number(transaction.id) },
-        create: {
-          customer_id: customer.customer_id,
-          location_id: location.location_id,
-          runchise_id: Number(transaction.id),
-          runchise_brand_id: toNullableInt(transaction.brand_id),
-          runchise_sales_no: toNullableString(transaction.sales_no),
-          runchise_customer_id: toNullableInt(transaction.customer_id),
-          runchise_location_id: toNullableInt(transaction.location_id),
-          gross_sales: toNullableFloat(transaction.gross_sales),
-          net_sales: toNullableFloat(transaction.net_sales),
-          location_name: transaction.location_name ?? null,
-          order_type_name: transaction.order_type_name ?? null,
-          subtotal: toNullableFloat(transaction.subtotal),
-          net_sales_after_tax: toNullableFloat(transaction.net_sales_after_tax),
-          sales_time: transaction.sales_time
-            ? new Date(transaction.sales_time)
-            : null,
-          note: transaction.note ?? null,
-          applied_promos_redeemed_point: toNullableInt(
-            transaction.applied_promos_redeemed_point,
-          ),
-          loyalty_discount_fee: toNullableFloat(
-            transaction.loyalty_discount_fee,
-          ),
-        },
-        update: {
-          customer_id: customer.customer_id,
-          location_id: location.location_id,
-          runchise_brand_id: toNullableInt(transaction.brand_id),
-          runchise_sales_no: toNullableString(transaction.sales_no),
-          runchise_customer_id: toNullableInt(transaction.customer_id),
-          runchise_location_id: toNullableInt(transaction.location_id),
-          gross_sales: toNullableFloat(transaction.gross_sales),
-          net_sales: toNullableFloat(transaction.net_sales),
-          location_name: transaction.location_name ?? null,
-          order_type_name: transaction.order_type_name ?? null,
-          subtotal: toNullableFloat(transaction.subtotal),
-          net_sales_after_tax: toNullableFloat(transaction.net_sales_after_tax),
-          sales_time: transaction.sales_time
-            ? new Date(transaction.sales_time)
-            : null,
-          note: transaction.note ?? null,
-          applied_promos_redeemed_point: toNullableInt(
-            transaction.applied_promos_redeemed_point,
-          ),
-          loyalty_discount_fee: toNullableFloat(
-            transaction.loyalty_discount_fee,
-          ),
-        },
-      });
-    }
+    await generateSaleTransactionsFromRunchise(customer?.customer_id);
   } catch (error) {
     throw new AuthServiceError(400, error.message);
   }
@@ -523,8 +428,7 @@ async function getUserProfile(userId) {
   if (!user) throw new AuthServiceError(404, "User tidak ditemukan");
 
   if (!user.customer) return { user, nextReward: null };
-  const nextReward = await getNextReward(user.customer.available_point ?? 0);
-  return { user, nextReward };
+  return { user };
 }
 
 async function changeUserPassword(userId, currentPassword, newPassword) {

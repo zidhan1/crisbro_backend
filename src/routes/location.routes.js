@@ -1,16 +1,14 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const { sharedCache } = require('../services/shared/cacheService');
-const { auth, requireRole } = require('../middleware/authMiddleware');
+const { auth, requireRole } = require("../middleware/authMiddleware");
 const {
   generateLocations,
   listLocations,
-} = require('../controllers/location.controller');
+} = require("../controllers/location.controller");
 
 // POST /api/locations/generate — synchronize locations from Runchise.
-router.post('/generate', auth, requireRole('admin'), generateLocations);
+router.post("/generate", auth, requireRole("admin"), generateLocations);
 
 // GET /api/locations
-router.get('/', sharedCache('LOCATIONS'), listLocations);
 
 module.exports = router;

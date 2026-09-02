@@ -24,6 +24,7 @@ tags:
   - name: Admin Redeem
   - name: Admin Reports
   - name: Admin Sync
+  - name: Admin Sale Transactions
 
 paths:
   /:
@@ -828,6 +829,43 @@ paths:
         "200":
           $ref: "#/components/responses/SyncResult"
 
+  /api/sale-transactions/generate:
+    post:
+      tags: [Admin Sale Transactions]
+      summary: Generate sale transactions of one customer from Runchise
+      description: >-
+        Menarik seluruh sale transaction milik satu customer dari API Runchise
+        (semua halaman) lalu menyimpannya ke tabel SaleTransaction lokal.
+        Idempoten: penyimpanan dilakukan dengan upsert by runchise_id sehingga
+        pemanggilan berulang tidak menduplikasi transaksi. Transaksi tanpa id
+        Runchise atau yang outletnya belum tersinkron dilewati dan dilaporkan
+        pada ringkasan balasan.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerateSaleTransactionsRequest"
+      responses:
+        "200":
+          description: Ringkasan hasil generate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SaleTransactionGenerateSummary"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          description: >-
+            Terlalu banyak permintaan generate untuk customer yang sama
+            (maksimal 5 per 2 menit).
+
 components:
   securitySchemes:
     bearerAuth:
@@ -902,6 +940,42 @@ components:
           type: integer
         total:
           type: integer
+
+    GenerateSaleTransactionsRequest:
+      type: object
+      required: [customer_id]
+      properties:
+        customer_id:
+          type: string
+          format: uuid
+          description: Primary key (customer_id) customer pada database lokal
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+
+    SaleTransactionGenerateSummary:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        data:
+          type: object
+          properties:
+            customer_id:
+              type: string
+              format: uuid
+            runchise_customer_id:
+              type: integer
+            total_fetched:
+              type: integer
+              description: Jumlah transaksi yang diterima dari Runchise
+            upserted:
+              type: integer
+              description: Jumlah transaksi yang dibuat/diperbarui di database lokal
+            skipped_missing_runchise_id:
+              type: integer
+            skipped_location_not_found:
+              type: integer
 
     RegisterRequest:
       type: object

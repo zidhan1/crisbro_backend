@@ -172,6 +172,25 @@ const runchiseSyncTargetLimiter = createDedicatedLimiter({
   keyGenerator: customerTargetKey,
 });
 
+// Generate sale transaction menarik seluruh halaman transaksi dari API
+// Runchise untuk satu customer. Kuota per customer mencegah pemanggilan
+// berulang yang membebani API eksternal.
+function saleTransactionTargetKey(req) {
+  const customerId = req.body?.customer_id;
+  return typeof customerId === "string" && customerId !== ""
+    ? `customer:${customerId}`
+    : "customer:invalid";
+}
+
+const saleTransactionGenerateLimiter = createDedicatedLimiter({
+  prefix: "sale-transaction-generate",
+  windowMs: TWO_MINUTES,
+  max: 5,
+  message:
+    "Terlalu banyak permintaan generate sale transaction untuk customer ini. Silakan coba lagi nanti.",
+  keyGenerator: saleTransactionTargetKey,
+});
+
 // Outlet options are used by the report filter and perform a distinct scan;
 // keep repeated polling from turning that endpoint into an unbounded read.
 const reportOutletsLimiter = createDedicatedLimiter({
@@ -211,6 +230,7 @@ module.exports = {
   pruneRateLimitCounters,
   resendActivationTargetLimiter,
   runchiseSyncTargetLimiter,
+  saleTransactionGenerateLimiter,
   reportOutletsLimiter,
   shouldSkipGlobalLimiter,
 };

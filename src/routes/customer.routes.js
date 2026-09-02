@@ -15,24 +15,12 @@ const customerOnly = requireRole("customer");
 
 router.use(auth);
 
-router.get("/customers/me", customerOnly, getMyCustomer);
-router.patch("/customers/me", customerOnly, updateMyCustomer);
+router.get("/me", customerOnly, getMyCustomer);
+router.patch("/me", customerOnly, updateMyCustomer);
 
-router.get("/customers", adminOrMarketing, listCustomers);
-router.get(
-  "/customers/user/:user_id",
-  adminOrMarketing,
-  getCustomerByUser,
-);
-router.get(
-  "/customers/:customer_id",
-  adminOrMarketing,
-  getCustomer,
-);
-router.patch(
-  "/customers/:customer_id",
-  adminOrMarketing,
-  updateCustomer,
-);
+router.get("/", adminOrMarketing, listCustomers);
+router.get("/user/:user_id", adminOrMarketing, getCustomerByUser);
+router.get("/:customer_id", adminOrMarketing, getCustomer);
+router.patch("/:customer_id", adminOrMarketing, updateCustomer);
 
 module.exports = router;
