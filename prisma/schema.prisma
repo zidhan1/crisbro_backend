@@ -173,7 +173,7 @@ model SubBrand {
 
 model Location {
   location_id      String   @id @default(uuid())
-  runchise_id      Int?
+  runchise_id      Int?     @unique
   name             String
   shipping_address String?
   city             String?
@@ -286,4 +286,26 @@ model Token {
   expires_at    DateTime
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
+}
+
+model LoyaltyProduct {
+  loyalty_product_id            String    @id   @default(uuid())
+  runchise_loyalty_product_id   Int       @unique
+  runchise_product_id           Int
+  point_needed                  Int
+  product_name                  String
+  product_sku                   String
+  product_description           String?
+  product_image_url             String?
+  product_unit_name             String?
+  max_redeem                    Int
+  is_select_all_location        Boolean
+  location_ids                  String[]
+  product_location_ids          String[]
+  created_at                    DateTime @default(now())
+  updated_at                    DateTime  @updatedAt
+}
+
+model Promo {
+  
 }

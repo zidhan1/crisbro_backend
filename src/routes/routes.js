@@ -7,11 +7,15 @@ const referralRoutes = require("./referral.routes");
 const locationRoutes = require("./location.routes");
 const subBrandRoutes = require("./subBrand.routes");
 const webhookQontak = require("./qontak.routes");
+const productRoutes = require("./product.routes");
+const promoRoutes = require("./promo.routes");
 
 const router = express.Router();
 
 router.use(authRoutes);
 router.use("/customers", customerRoutes);
+router.use("/products", productRoutes);
+router.use("/promos", promoRoutes);
 router.use("/users", userRoutes);
 router.use("/sale-transactions", saleTransactionRoutes);
 router.use("/referral", referralRoutes);

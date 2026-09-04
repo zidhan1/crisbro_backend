@@ -3,6 +3,7 @@ const dotenv = require("dotenv");
 const axios = require("axios");
 const {
   createCustomerSchema,
+  createPromoSchema,
 } = require("../validation/runchise/runchise-validation");
 const {
   updateCustomerSchema,
@@ -11,7 +12,7 @@ const {
 dotenv.config();
 
 const runchiseClient = axios.create({
-  baseURL: "https://api.runchise.com/api/public",
+  baseURL: "https://runchise-api.crispybakar.biz/api/public",
   timeout: 15000, // 15 detik
   headers: {
     Accept: "application/json",
@@ -197,6 +198,150 @@ async function listSaleTransactionByCustomerId(runchise_customer_id) {
   }
 }
 
+async function syncProductsFromRunchise(runchise_product_ids) {
+  try {
+    if (
+      !Array.isArray(runchise_product_ids) ||
+      runchise_product_ids.length === 0
+    ) {
+      throw new Error("Runchise Product Ids is required");
+    }
+
+    let products = [];
+    for (const products_id of runchise_product_ids) {
+      const response = await runchiseClient.get(`/products/${products_id}`);
+      const product = response.data.product;
+
+      if (!product) {
+        throw new Error(`Product with id ${products_id} not found`);
+      }
+
+      // Sync product to local database
+      const syncedProduct = await prisma.product.upsert({
+        where: { runchise_product_id: products_id },
+        update: {
+          name: product.name,
+          price: product.price,
+          stock: product.stock,
+        },
+        create: {
+          runchise_product_id: products_id,
+          name: product.name,
+          price: product.price,
+          stock: product.stock,
+        },
+      });
+
+      products.push(syncedProduct);
+    }
+
+    return products;
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error));
+  }
+}
+
+async function generateLoyaltyProducts() {
+  try {
+    const response = await runchiseClient.get(`/loyalties`);
+    const loyalties = response.data.loyalties;
+
+    if (!Array.isArray(loyalties)) {
+      throw new Error("Tidak dapat menemukan semua loyalties");
+    }
+
+    // Selected loyalties is active
+    const activeLoyalties = loyalties.filter((loyalty) => loyalty.is_active);
+
+    const products = [];
+    for (const loyalty_product of activeLoyalties.at(0)?.loyalty_products ??
+      []) {
+      const product_locations = await Promise.all(
+        loyalty_product.product_locations.map(async (location) => {
+          const productLocation = await prisma.location.findUnique({
+            where: { runchise_id: location.id },
+          });
+          return productLocation?.location_id;
+        }),
+      );
+
+      const location_ids = await Promise.all(
+        loyalty_product.locations.map(async (location) => {
+          const ownLocation = await prisma.location.findUnique({
+            where: { runchise_id: location.id },
+          });
+          return ownLocation?.location_id;
+        }),
+      );
+
+      const product_location_ids = product_locations.filter(Boolean);
+      const location_ids_filtered = location_ids.filter(Boolean);
+
+      const product = await prisma.loyaltyProduct.upsert({
+        where: { runchise_loyalty_product_id: loyalty_product.id },
+        update: {
+          runchise_loyalty_product_id: loyalty_product.id,
+          runchise_product_id: loyalty_product.product_id,
+          point_needed: loyalty_product.point_needed,
+          product_name: loyalty_product.product_name,
+          product_sku: loyalty_product.product_sku,
+          product_description: loyalty_product.product_description,
+          product_image_url: loyalty_product.product_image_url,
+          product_unit_name: loyalty_product.product_unit_name,
+          max_redeem: loyalty_product.max_redeem,
+          is_select_all_location: loyalty_product.is_select_all_location,
+          location_ids: location_ids_filtered,
+          product_location_ids: product_location_ids,
+          product_name: loyalty_product.product_name,
+        },
+        create: {
+          runchise_loyalty_product_id: loyalty_product.id,
+          runchise_product_id: loyalty_product.product_id,
+          point_needed: loyalty_product.point_needed,
+          product_name: loyalty_product.product_name,
+          product_sku: loyalty_product.product_sku,
+          product_description: loyalty_product.product_description,
+          product_image_url: loyalty_product.product_image_url,
+          product_unit_name: loyalty_product.product_unit_name,
+          max_redeem: loyalty_product.max_redeem,
+          is_select_all_location: loyalty_product.is_select_all_location,
+          location_ids: location_ids_filtered,
+          product_location_ids: product_location_ids,
+        },
+      });
+
+      products.push(product);
+    }
+
+    return products;
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error));
+  }
+}
+
+async function createPromo(payload) {
+  try {
+    const validate = createPromoSchema.safeParse(payload);
+
+    if (!validate.success) {
+      throw new Error(JSON.stringify(validate.error.flatten().fieldErrors));
+    }
+
+    const data = validate.data;
+    const result = await runchiseClient.post(`/promos`, data);
+
+    return result.data?.promo ?? null;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data?.errors
+        ? JSON.stringify(error.response.data.errors)
+        : error.message;
+      throw new Error(message);
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   findCustomerByPhone,
   createCustomer,
@@ -204,4 +349,7 @@ module.exports = {
   listAllLocations,
   listAllSubBrands,
   listSaleTransactionByCustomerId,
+  syncProductsFromRunchise,
+  generateLoyaltyProducts,
+  createPromo,
 };
