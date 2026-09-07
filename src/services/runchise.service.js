@@ -4,10 +4,12 @@ const axios = require("axios");
 const {
   createCustomerSchema,
   createPromoSchema,
+  updatePromoSchema,
 } = require("../validation/runchise/runchise-validation");
 const {
   updateCustomerSchema,
 } = require("../validation/customer/customer-validation");
+const { generateRandomUniqueCode } = require("../utils/generateReferralCode");
 
 dotenv.config();
 
@@ -292,7 +294,6 @@ async function generateLoyaltyProducts() {
           is_select_all_location: loyalty_product.is_select_all_location,
           location_ids: location_ids_filtered,
           product_location_ids: product_location_ids,
-          product_name: loyalty_product.product_name,
         },
         create: {
           runchise_loyalty_product_id: loyalty_product.id,
@@ -324,7 +325,7 @@ async function createPromo(payload) {
     const validate = createPromoSchema.safeParse(payload);
 
     if (!validate.success) {
-      throw new Error(JSON.stringify(validate.error.flatten().fieldErrors));
+      throw validate.error;
     }
 
     const data = validate.data;
@@ -336,7 +337,152 @@ async function createPromo(payload) {
       const message = error.response?.data?.errors
         ? JSON.stringify(error.response.data.errors)
         : error.message;
-      throw new Error(message);
+      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+    }
+    throw error;
+  }
+}
+
+async function updatePromo(runchise_promo_id, payload) {
+  try {
+    const validate = updatePromoSchema.safeParse(payload);
+
+    if (!validate.success) {
+      throw validate.error;
+    }
+
+    const result = await runchiseClient.patch(
+      `/promos/${runchise_promo_id}`,
+      validate.data,
+    );
+
+    return result.data?.promo ?? null;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data?.errors
+        ? JSON.stringify(error.response.data.errors)
+        : error.message;
+      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+    }
+    throw error;
+  }
+}
+
+async function deactivatePromo(runchise_promo_id) {
+  try {
+    const result = await runchiseClient.patch(
+      `/promos/${runchise_promo_id}/deactivate`,
+    );
+
+    return result.status === 204 ? true : null;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data?.errors
+        ? JSON.stringify(error.response.data.errors)
+        : error.message;
+      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+    }
+    throw error;
+  }
+}
+
+async function activatePromo(runchise_promo_id) {
+  try {
+    const result = await runchiseClient.patch(
+      `/promos/${runchise_promo_id}/activate`,
+    );
+    return result.status === 204 ? true : null;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data?.errors
+        ? JSON.stringify(error.response.data.errors)
+        : error.message;
+      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+    }
+    throw error;
+  }
+}
+
+async function generatePromoCode({ runchise_promo_id, total_code }) {
+  try {
+    const { z } = require("zod");
+    const input = z.object({
+      runchise_promo_id: z.number().int().positive(),
+      total_code: z.number().int().min(1).max(1000),
+    }).parse({ runchise_promo_id, total_code });
+    total_code = input.total_code;
+    const defaultLength = 7;
+    const defaultMaxUsage = 1;
+
+    const codes = [];
+    const usedCodes = new Set();
+    let attempts = 0;
+
+    while (codes.length < total_code) {
+      if (++attempts > total_code * 20) {
+        throw new Error("Gagal menghasilkan promo code unik dalam batas percobaan");
+      }
+      const code = generateRandomUniqueCode(defaultLength);
+      if (usedCodes.has(code)) continue;
+      usedCodes.add(code);
+      codes.push({
+        code: code,
+        maximum_usage: defaultMaxUsage,
+      });
+    }
+
+    const payload = {
+      source: "array",
+      promo_codes: codes,
+    };
+
+    const response = await runchiseClient.post(
+      `/promos/${runchise_promo_id}/promo_codes`,
+      payload,
+    );
+
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data?.errors
+        ? JSON.stringify(error.response.data.errors)
+        : error.message;
+      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+    }
+    throw error;
+  }
+}
+
+async function getPromo(runchise_promo_id) {
+  try {
+    const response = await runchiseClient.get(`/promos/${runchise_promo_id}`);
+    return response.data?.promo ?? null;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data?.errors
+        ? JSON.stringify(error.response.data.errors)
+        : error.message;
+      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+    }
+    throw error;
+  }
+}
+
+async function getListPromoCodes(runchise_promo_id) {
+  try {
+    const response = await runchiseClient.get(
+      `/promos/${runchise_promo_id}/promo_codes`,
+    );
+
+    const data = response.data.promo_codes;
+
+    return data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data?.errors
+        ? JSON.stringify(error.response.data.errors)
+        : error.message;
+      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
     }
     throw error;
   }
@@ -352,4 +498,10 @@ module.exports = {
   syncProductsFromRunchise,
   generateLoyaltyProducts,
   createPromo,
+  updatePromo,
+  deactivatePromo,
+  activatePromo,
+  generatePromoCode,
+  getListPromoCodes,
+  getPromo,
 };

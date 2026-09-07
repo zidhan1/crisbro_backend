@@ -1,4 +1,5 @@
 const { z } = require("zod");
+const { remoteDate } = require("../promo/promo-response");
 
 const createCustomerSchema = z.object({
   name: z.string().optional(),
@@ -20,7 +21,14 @@ const createCustomerSchema = z.object({
 
 // Runchise menerima nilai numerik sebagai string maupun number
 // (contoh: discount_amount "100" / 10000, promotion_code_maximum_usage "10" / 1)
-const numericValue = z.union([z.string(), z.number()]);
+const numericValue = z.union([
+  z.string().regex(/^-?\d+(\.\d+)?$/, "Nilai harus berupa angka"),
+  z.number().finite(),
+]);
+
+const promoDateInput = z.string()
+  .regex(/^\d{2}\/\d{2}\/\d{4}$/, "Format tanggal harus DD/MM/YYYY")
+  .refine((value) => remoteDate.safeParse(value).success, "Tanggal kalender tidak valid");
 
 const anyObject = z.object({}).passthrough();
 
@@ -107,13 +115,8 @@ const createPromoSchema = z
     customer_allowed_dine_in: z.boolean().default(false),
     customer_allowed_online_ordering: z.boolean().default(false),
     applicable_for_loyalty: z.boolean().default(false),
-    start_date: z
-      .string()
-      .regex(/^\d{2}\/\d{2}\/\d{4}$/, "Format tanggal harus DD/MM/YYYY"),
-    end_date: z
-      .string()
-      .regex(/^\d{2}\/\d{2}\/\d{4}$/, "Format tanggal harus DD/MM/YYYY")
-      .nullable(),
+    start_date: promoDateInput,
+    end_date: promoDateInput.nullable(),
     subdize_promo_subject_mdr: z.boolean().default(false),
     is_select_all_location: z.boolean().default(true),
     location_type: z.string().default("outlet"),
@@ -129,4 +132,10 @@ const createPromoSchema = z
   })
   .passthrough();
 
-module.exports = { createCustomerSchema, createPromoSchema };
+// Update hanya memvalidasi field yang dikirim, tanpa menerapkan default create.
+const updatePromoSchema = createPromoSchema.partial().extend({
+  promo_rule_attributes: promoRuleAttributesSchema.partial().optional(),
+  promo_reward_attributes: promoRewardAttributesSchema.partial().optional(),
+});
+
+module.exports = { createCustomerSchema, createPromoSchema, updatePromoSchema };

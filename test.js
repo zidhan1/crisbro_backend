@@ -1,5 +1,8 @@
-const { generateLoyaltyProducts } = require("./src/services/runchise.service");
+const {
+  generateLoyaltyProducts,
+  generatePromoCode,
+} = require("./src/services/runchise.service");
 
-const result = generateLoyaltyProducts();
+const result = generatePromoCode({ runchise_promo_id: 58064, total_code: 10 });
 
 console.log(result);
