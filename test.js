@@ -1,8 +1,15 @@
+const prisma = require("./src/lib/prisma");
 const {
-  generateLoyaltyProducts,
-  generatePromoCode,
+  getListSaleTransactionSummary,
+  findCustomerByPhone,
 } = require("./src/services/runchise.service");
 
-const result = generatePromoCode({ runchise_promo_id: 58064, total_code: 10 });
+async function testCheckpoint() {
+  const transactions = await findCustomerByPhone({ phone: "81259783014" });
 
-console.log(result);
+  console.log(transactions);
+
+  return transactions;
+}
+
+testCheckpoint();

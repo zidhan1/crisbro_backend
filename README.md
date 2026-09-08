@@ -3,6 +3,35 @@
   Backend API untuk aplikasi loyalty Crisbar/Crisbro. Aplikasi ini menangani autentikasi customer/admin, data customer, poin, redeem menu, katalog produk,
   lokasi outlet, promo, sinkronisasi data Runchise, dan activity log admin.
 
+  ## Customer Sync Worker (BullMQ)
+
+  Konfigurasi koneksi Redis di `.env` (default `127.0.0.1:6379`):
+
+  ```dotenv
+  REDIS_HOST=127.0.0.1
+  REDIS_PORT=6379
+  REDIS_PASSWORD=isi_password_redis
+  # REDIS_USERNAME=default
+  ```
+
+  Isi password sesuai server Redis; hilangkan jika server tidak memakai autentikasi.
+  `REDIS_USERNAME` opsional untuk Redis ACL. Alternatifnya, gunakan
+  `REDIS_URL=redis://default:password@127.0.0.1:6379` (menggantikan konfigurasi
+  terpisah di atas); gunakan `rediss://` untuk TLS dan URL-encode karakter khusus
+  dalam username/password.
+
+  Jalankan worker sebagai proses terpisah:
+
+  ```bash
+  npm run worker:customer-sync
+  ```
+
+  Worker memuat `.env` dan mendaftarkan scheduler `customer-sync-every-minute`
+  pada queue `customer-sync` dengan interval 60.000 ms. ID scheduler tetap
+  sehingga restart tidak membuat jadwal duplikat. Proses worker harus terus
+  berjalan; `npm run dev` hanya menjalankan API. Jika job sebelumnya masih
+  berjalan, eksekusi berikutnya menunggu worker tersedia (concurrency 1).
+
   ## Tech Stack
 
   - Node.js

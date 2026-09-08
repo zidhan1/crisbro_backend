@@ -337,7 +337,10 @@ async function createPromo(payload) {
       const message = error.response?.data?.errors
         ? JSON.stringify(error.response.data.errors)
         : error.message;
-      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+      throw Object.assign(new Error(message, { cause: error }), {
+        code: "RUNCHISE_REQUEST_FAILED",
+        statusCode: 502,
+      });
     }
     throw error;
   }
@@ -362,7 +365,10 @@ async function updatePromo(runchise_promo_id, payload) {
       const message = error.response?.data?.errors
         ? JSON.stringify(error.response.data.errors)
         : error.message;
-      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+      throw Object.assign(new Error(message, { cause: error }), {
+        code: "RUNCHISE_REQUEST_FAILED",
+        statusCode: 502,
+      });
     }
     throw error;
   }
@@ -380,7 +386,10 @@ async function deactivatePromo(runchise_promo_id) {
       const message = error.response?.data?.errors
         ? JSON.stringify(error.response.data.errors)
         : error.message;
-      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+      throw Object.assign(new Error(message, { cause: error }), {
+        code: "RUNCHISE_REQUEST_FAILED",
+        statusCode: 502,
+      });
     }
     throw error;
   }
@@ -397,7 +406,10 @@ async function activatePromo(runchise_promo_id) {
       const message = error.response?.data?.errors
         ? JSON.stringify(error.response.data.errors)
         : error.message;
-      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+      throw Object.assign(new Error(message, { cause: error }), {
+        code: "RUNCHISE_REQUEST_FAILED",
+        statusCode: 502,
+      });
     }
     throw error;
   }
@@ -406,10 +418,12 @@ async function activatePromo(runchise_promo_id) {
 async function generatePromoCode({ runchise_promo_id, total_code }) {
   try {
     const { z } = require("zod");
-    const input = z.object({
-      runchise_promo_id: z.number().int().positive(),
-      total_code: z.number().int().min(1).max(1000),
-    }).parse({ runchise_promo_id, total_code });
+    const input = z
+      .object({
+        runchise_promo_id: z.number().int().positive(),
+        total_code: z.number().int().min(1).max(1000),
+      })
+      .parse({ runchise_promo_id, total_code });
     total_code = input.total_code;
     const defaultLength = 7;
     const defaultMaxUsage = 1;
@@ -420,7 +434,9 @@ async function generatePromoCode({ runchise_promo_id, total_code }) {
 
     while (codes.length < total_code) {
       if (++attempts > total_code * 20) {
-        throw new Error("Gagal menghasilkan promo code unik dalam batas percobaan");
+        throw new Error(
+          "Gagal menghasilkan promo code unik dalam batas percobaan",
+        );
       }
       const code = generateRandomUniqueCode(defaultLength);
       if (usedCodes.has(code)) continue;
@@ -447,7 +463,10 @@ async function generatePromoCode({ runchise_promo_id, total_code }) {
       const message = error.response?.data?.errors
         ? JSON.stringify(error.response.data.errors)
         : error.message;
-      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+      throw Object.assign(new Error(message, { cause: error }), {
+        code: "RUNCHISE_REQUEST_FAILED",
+        statusCode: 502,
+      });
     }
     throw error;
   }
@@ -462,7 +481,10 @@ async function getPromo(runchise_promo_id) {
       const message = error.response?.data?.errors
         ? JSON.stringify(error.response.data.errors)
         : error.message;
-      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+      throw Object.assign(new Error(message, { cause: error }), {
+        code: "RUNCHISE_REQUEST_FAILED",
+        statusCode: 502,
+      });
     }
     throw error;
   }
@@ -482,7 +504,52 @@ async function getListPromoCodes(runchise_promo_id) {
       const message = error.response?.data?.errors
         ? JSON.stringify(error.response.data.errors)
         : error.message;
-      throw Object.assign(new Error(message, { cause: error }), { code: "RUNCHISE_REQUEST_FAILED", statusCode: 502 });
+      throw Object.assign(new Error(message, { cause: error }), {
+        code: "RUNCHISE_REQUEST_FAILED",
+        statusCode: 502,
+      });
+    }
+    throw error;
+  }
+}
+
+async function getListSaleTransactionSummary(last_id = null) {
+  try {
+    const location_ids = await findAllLocationIds();
+
+    let sale_transactions = [];
+    for (const location_id of location_ids) {
+      try {
+        const params = new URLSearchParams({
+          location_id: String(location_id),
+          ...(last_id ? { last_id } : {}),
+        });
+        const response = await runchiseClient.get(
+          `/sale_transactions/summaries?${params}`,
+        );
+
+        const data = response.data.data;
+
+        sale_transactions.push(...data);
+      } catch (error) {
+        console.log(
+          `Gagal fetch sale transactions summary location ${location_id}:`,
+          err.message,
+        );
+        continue;
+      }
+    }
+
+    return sale_transactions;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const message = error.response?.data?.errors
+        ? JSON.stringify(error.response.data.errors)
+        : error.message;
+      throw Object.assign(new Error(message, { cause: error }), {
+        code: "RUNCHISE_REQUEST_FAILED",
+        statusCode: 502,
+      });
     }
     throw error;
   }
@@ -504,4 +571,5 @@ module.exports = {
   generatePromoCode,
   getListPromoCodes,
   getPromo,
+  getListSaleTransactionSummary,
 };

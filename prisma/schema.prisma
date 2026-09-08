@@ -139,6 +139,7 @@ model Customer {
   last_updated_by_id        String?
   created_at                DateTime  @default(now())
   updated_at                DateTime  @updatedAt
+  
 
   // Relations
   user            User      @relation("UserToCustomer", fields: [user_id], references: [user_id])
@@ -365,4 +366,18 @@ model PromoCode {
   updated_at            DateTime  @updatedAt
 
   promo       Promo   @relation(fields: [promo_id], references: [promo_id])
+}
+
+model SyncCheckpoints {
+  sync_id       String    @id @default(uuid())
+  job_category  JobCategory
+  last_sync_id  Int?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  @@index(job_category)
+}
+
+enum JobCategory {
+  sale_transactions
 }
