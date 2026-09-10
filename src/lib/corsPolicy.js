@@ -1,5 +1,6 @@
 const DEFAULT_PRODUCTION_ORIGINS = Object.freeze([
   "https://crisbro-frontend.vercel.app",
+  "https://crisbro-backend-eight.vercel.app",
 ]);
 
 function normalizeConfiguredOrigin(value) {
