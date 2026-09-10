@@ -10,19 +10,23 @@ const {
   getPromo,
   getListPromoCodes,
 } = require("../../services/runchise.service");
+const { customerProcessHandler } = require("./customerProcess");
 
 const worker = new Worker(
   "customer-sync",
   async (job) => {
-    // 1. Ambil checkpoint terakhir
-    const checkpoint = await prisma.syncCheckpoints.findFirst({
+    // 1. Ambil semua checkpoint per lokasi untuk kategori ini
+    const checkpoints = await prisma.syncCheckpoints.findMany({
       where: { job_category: "sale_transactions" },
     });
 
-    const last_sync_id = checkpoint ? checkpoint.last_sync_id : null;
+    const lastIdsByLocation = Object.fromEntries(
+      checkpoints.map((c) => [c.runchise_location_id, c.last_sync_id]),
+    );
 
-    // 2. Ambil transaksi baru dari runchise
-    const transactions = await getListSaleTransactionSummary(last_sync_id);
+    // 2. Ambil transaksi baru dari runchise (per lokasi, berhenti di checkpoint masing-masing)
+    const { sale_transactions: transactions, lastIdsByLocation: newLastIds } =
+      await getListSaleTransactionSummary(lastIdsByLocation);
 
     if (transactions.length === 0) return { processed: 0 };
 
@@ -53,12 +57,9 @@ const worker = new Worker(
 
             await prisma.promo.update({
               where: { promo_id: promo.promo_id },
-              data: {
-                status: data.status,
-              },
+              data: { status: data.status },
             });
 
-            // Update Promo Codes
             const promoCodes = await getListPromoCodes(promo.runchise_id);
 
             for (const promoCode of promoCodes) {
@@ -88,8 +89,25 @@ const worker = new Worker(
       ),
     );
 
-    // 5. Save Checkpoint
-    await saveCheckpointHandler(transactions[transactions.length - 1].id);
+    // 5. Save Checkpoint — per lokasi, pakai upsert
+    await Promise.all(
+      Object.entries(newLastIds).map(([location_id, last_sync_id]) =>
+        prisma.syncCheckpoints.upsert({
+          where: {
+            job_category_runchise_location_id: {
+              job_category: "sale_transactions",
+              runchise_location_id: Number(location_id),
+            },
+          },
+          update: { last_sync_id },
+          create: {
+            job_category: "sale_transactions",
+            runchise_location_id: Number(location_id),
+            last_sync_id,
+          },
+        }),
+      ),
+    );
 
     return { processed: transactions.length };
   },

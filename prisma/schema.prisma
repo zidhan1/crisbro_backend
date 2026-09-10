@@ -369,13 +369,15 @@ model PromoCode {
 }
 
 model SyncCheckpoints {
-  sync_id       String    @id @default(uuid())
+  sync_id       String      @id @default(uuid())
   job_category  JobCategory
+  runchise_location_id   Int
   last_sync_id  Int?
-  created_at    DateTime  @default(now())
-  updated_at    DateTime  @updatedAt
+  created_at    DateTime    @default(now())
+  updated_at    DateTime    @updatedAt
 
-  @@index(job_category)
+  @@unique([job_category, runchise_location_id])
+  @@index([job_category])
 }
 
 enum JobCategory {

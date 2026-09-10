@@ -513,46 +513,75 @@ async function getListPromoCodes(runchise_promo_id) {
   }
 }
 
-async function getListSaleTransactionSummary(last_id = null) {
-  try {
-    const location_ids = await findAllLocationIds();
+async function getListSaleTransactionSummary(lastIdsByLocation = {}) {
+  const location_ids = await findAllLocationIds();
+  const date = new Date();
+  const now = date.toISOString().split("T")[0];
 
-    let sale_transactions = [];
-    for (const location_id of location_ids) {
-      try {
+  const yesterday = new Date(date);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const start_date = yesterday.toISOString().split("T")[0];
+
+  const sale_transactions = [];
+  const updatedLastIds = { ...lastIdsByLocation };
+
+  for (const location_id of location_ids) {
+    const checkpoint = lastIdsByLocation[location_id] ?? null;
+    let cursor = null; // last_id untuk paginate mundur (older)
+    let newestIdThisRun = null; // id terbaru yang ditemukan, jadi checkpoint baru
+    let hasMore = true;
+
+    try {
+      while (hasMore) {
         const params = new URLSearchParams({
           location_id: String(location_id),
-          ...(last_id ? { last_id } : {}),
+          start_date: String(start_date),
+          end_date: String(now),
+          ...(cursor ? { last_id: cursor } : {}),
         });
+
         const response = await runchiseClient.get(
           `/sale_transactions/summaries?${params}`,
         );
+        const data = response.data.data ?? [];
 
-        const data = response.data.data;
+        if (data.length === 0) {
+          hasMore = false;
+          break;
+        }
 
-        sale_transactions.push(...data);
-      } catch (error) {
-        console.log(
-          `Gagal fetch sale transactions summary location ${location_id}:`,
-          err.message,
-        );
-        continue;
+        if (newestIdThisRun === null) {
+          newestIdThisRun = data[0].id; // record pertama = paling baru
+        }
+
+        for (const trx of data) {
+          if (checkpoint !== null && trx.id <= checkpoint) {
+            hasMore = false; // sudah ketemu data lama, stop
+            break;
+          }
+          sale_transactions.push(trx);
+        }
+
+        if (hasMore) {
+          const lastRecord = data[data.length - 1];
+          cursor = lastRecord.id; // lanjut mundur dari record paling lama di halaman ini
+          // opsional: kalau data.length < page_size dari API, berarti sudah halaman terakhir
+        }
       }
-    }
 
-    return sale_transactions;
-  } catch (error) {
-    if (axios.isAxiosError(error)) {
-      const message = error.response?.data?.errors
-        ? JSON.stringify(error.response.data.errors)
-        : error.message;
-      throw Object.assign(new Error(message, { cause: error }), {
-        code: "RUNCHISE_REQUEST_FAILED",
-        statusCode: 502,
-      });
+      if (newestIdThisRun !== null) {
+        updatedLastIds[location_id] = newestIdThisRun;
+      }
+    } catch (error) {
+      console.log(
+        `Gagal fetch sale transactions summary location ${location_id}:`,
+        error.message,
+      );
+      continue;
     }
-    throw error;
   }
+
+  return { sale_transactions, lastIdsByLocation: updatedLastIds };
 }
 
 module.exports = {

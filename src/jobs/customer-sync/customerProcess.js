@@ -1,3 +1,6 @@
+const prisma = require("../../lib/prisma");
+const { findCustomerByPhone } = require("../../services/runchise.service");
+
 async function customerProcessHandler(transactions) {
   const phones = [
     ...new Set(
@@ -47,3 +50,5 @@ async function customerProcessHandler(transactions) {
 
   return updated;
 }
+
+module.exports = { customerProcessHandler };

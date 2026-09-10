@@ -12,10 +12,12 @@
       "Bash(node --check src/services/promo.service.js)",
       "Bash(node --check src/controllers/promo.controller.js)",
       "Bash(node --check src/routes/promo.routes.js)",
-      "Bash(node --check src/routes/routes.js)"
+      "Bash(node --check src/routes/routes.js)",
+      "Bash(cd \"/Users/user/My Drive/Dev Projects/PT Reka Cipta Selera/crisbro/backend\" && mkdir -p prisma/migrations/20260910000000_add_runchise_location_id_sync_checkpoint)"
     ],
     "additionalDirectories": [
-      "/Users/user/My Drive/Dev Projects/PT Reka Cipta Selera/crisbro/backend/src/services"
+      "/Users/user/My Drive/Dev Projects/PT Reka Cipta Selera/crisbro/backend/src/services",
+      "/Users/user/My Drive/Dev Projects/PT Reka Cipta Selera/crisbro/backend/prisma/migrations"
     ]
   }
 }
