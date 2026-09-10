@@ -43,6 +43,7 @@ function createCorsPolicy({
     ...DEFAULT_PRODUCTION_ORIGINS,
     frontendUrl,
     "http://localhost:5173",
+    "http://localhost:5002",
     ...String(corsOrigins || "").split(","),
   ];
   const allowedOrigins = new Set(

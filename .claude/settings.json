@@ -13,7 +13,11 @@
       "Bash(node --check src/controllers/promo.controller.js)",
       "Bash(node --check src/routes/promo.routes.js)",
       "Bash(node --check src/routes/routes.js)",
-      "Bash(cd \"/Users/user/My Drive/Dev Projects/PT Reka Cipta Selera/crisbro/backend\" && mkdir -p prisma/migrations/20260910000000_add_runchise_location_id_sync_checkpoint)"
+      "Bash(cd \"/Users/user/My Drive/Dev Projects/PT Reka Cipta Selera/crisbro/backend\" && mkdir -p prisma/migrations/20260910000000_add_runchise_location_id_sync_checkpoint)",
+      "Bash(node -e ' *)",
+      "Bash(PORT=5099 DOCS_ACCESS_ALLOWLIST=127.0.0.1 node -e ' *)",
+      "Bash(sed 's/=.*$/=<redacted>/')",
+      "Bash(git fetch *)"
     ],
     "additionalDirectories": [
       "/Users/user/My Drive/Dev Projects/PT Reka Cipta Selera/crisbro/backend/src/services",

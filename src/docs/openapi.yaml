@@ -1,30 +1,36 @@
 openapi: 3.0.3
 info:
-  title: Crisbar Rewards API
-  version: 1.0.0
+  title: Crisbro Rewards API
+  version: 2.0.0
   description: >
-    Dokumentasi API untuk aplikasi Crisbar Rewards. Endpoint admin mengubah
-    database lokal aplikasi. Endpoint sync mengambil data dari Runchise ke
-    database lokal, sehingga data lokal yang berasal dari Runchise dapat
-    tertimpa saat sync berikutnya berjalan.
+    Dokumentasi API untuk aplikasi Crisbro Rewards.
+
+
+    Autentikasi memakai JWT melalui cookie sesi `crisbar_session` (diprioritaskan)
+    atau header `Authorization: Bearer <token>`. Untuk request non-GET yang
+    mengautentikasi lewat cookie, wajib mengirim header `x-csrf-protection: 1`.
+
+
+    Endpoint admin mengubah database lokal aplikasi. Endpoint sync mengambil
+    data dari Runchise ke database lokal, sehingga data lokal yang berasal dari
+    Runchise dapat tertimpa saat sync berikutnya berjalan.
 servers:
-  - url: http://localhost:5001
+  - url: http://localhost:5002
     description: Local backend
   - url: /
     description: Same origin
 tags:
   - name: Health
   - name: Auth
-  - name: Customer
-  - name: Catalog
-  - name: Rewards
-  - name: Redemption
-  - name: Admin Users
-  - name: Admin Customers
-  - name: Admin Redeem
-  - name: Admin Reports
-  - name: Admin Sync
-  - name: Admin Sale Transactions
+  - name: Customers
+  - name: Products
+  - name: Promos
+  - name: Users
+  - name: Referral
+  - name: Locations
+  - name: Sub Brands
+  - name: Sale Transactions
+  - name: Webhook Qontak
 
 paths:
   /:
@@ -42,13 +48,11 @@ paths:
   /api/register:
     post:
       tags: [Auth]
-      summary: Request an account activation link
+      summary: Registrasi akun customer baru
       description: >-
-        Meminta tautan aktivasi dikirim ke email yang tercatat pada akun.
-        Endpoint ini TIDAK menyetel password dan tidak mengaktifkan akun:
-        nomor telepon bukan bukti kepemilikan. Password hanya dapat dibuat lewat
-        POST /api/activate memakai token dari tautan tersebut.
-        Balasannya selalu sama untuk nomor yang terdaftar maupun tidak.
+        Membuat user role customer, membuat/mencocokkan customer di Runchise,
+        lalu menghasilkan no. referensi untuk aktivasi via WhatsApp. Respons
+        menyertakan teks aktivasi yang harus dikirim user tanpa diubah.
       requestBody:
         required: true
         content:
@@ -56,21 +60,34 @@ paths:
             schema:
               $ref: "#/components/schemas/RegisterRequest"
       responses:
-        "202":
+        "201":
+          description: User created; berisi teks aktivasi WhatsApp
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisterResponse"
+        "400":
           description: >-
-            Permintaan diterima. Balasan identik pada semua kondisi dan tidak
-            menyatakan apakah nomor tersebut terdaftar.
+            Validasi gagal (`success:false` + `errors`) atau phone/email/username
+            sudah terdaftar.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
-        "400":
-          $ref: "#/components/responses/BadRequest"
+        "502":
+          description: Gagal membuat customer di Runchise
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /api/login:
     post:
       tags: [Auth]
       summary: Login
+      description: >-
+        Isi salah satu saja antara `phone` atau `email` (tidak keduanya).
+        Rate limit: 10 permintaan/IP/2 menit dan 20 percobaan/akun/2 menit.
       requestBody:
         required: true
         content:
@@ -79,35 +96,110 @@ paths:
               $ref: "#/components/schemas/LoginRequest"
       responses:
         "200":
-          description: Login success
+          description: >-
+            Login berhasil. Token disetel sebagai cookie sesi httpOnly
+            `crisbar_session` dan tidak dikirim di body.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/LoginResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
-          description: >-
-            Kredensial ditolak. Dipakai untuk semua sebab (nomor tidak
-            terdaftar, akun belum aktivasi, password salah) dengan pesan yang
-            identik, supaya endpoint ini tidak bisa dipakai memetakan nomor yang
-            terdaftar.
+          description: Kredensial salah atau akun belum aktif
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/send-otp:
+    post:
+      tags: [Auth]
+      summary: Generate no. referensi untuk aktivasi WhatsApp
+      description: >-
+        Membuat no. referensi baru bagi user yang login dan mengembalikan teks
+        aktivasi yang harus diteruskan user ke bot WhatsApp Crisbro tanpa
+        diubah. Rate limit: 10 permintaan/IP/2 menit.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        "200":
+          description: No. referensi baru dan teks aktivasi
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          user:
+                            $ref: "#/components/schemas/User"
+                          text:
+                            type: string
+                            example: >-
+                              AKTIVASI CRISBRO\nHarap kirim pesan ini tanpa
+                              merubah apapun.\nNo.ref:AB12CD34EF
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/verify-otp:
+    post:
+      tags: [Auth]
+      summary: Validasi OTP / kode aktivasi
+      description: Rate limit: 10 permintaan/IP/2 menit.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [otp_code]
+              properties:
+                otp_code:
+                  type: string
+      responses:
+        "200":
+          description: Validasi berhasil; mengembalikan data user
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /api/logout:
     post:
       tags: [Auth]
-      summary: Revoke the current session
-      description: >-
-        Menghapus baris Session milik token yang sedang dipakai, sehingga token
-        langsung ditolak middleware auth. Menghapus token di sisi browser saja
-        tidak cukup karena token tetap sah sampai kedaluwarsa.
+      summary: Keluar dari sesi saat ini
+      description: Menghapus cookie sesi `crisbar_session`.
       security:
         - bearerAuth: []
+        - cookieAuth: []
       responses:
         "200":
-          description: Sesi dicabut
+          description: Berhasil keluar
           content:
             application/json:
               schema:
@@ -118,753 +210,1169 @@ paths:
   /api/logout-all:
     post:
       tags: [Auth]
-      summary: Revoke every session of the current user
-      description: Mengeluarkan seluruh perangkat milik user yang sedang login.
+      summary: Keluar dari semua sesi
+      description: >-
+        Schema JWT stateless tidak menyimpan sesi per perangkat, sehingga
+        endpoint ini hanya menghapus cookie sesi saat ini.
       security:
         - bearerAuth: []
+        - cookieAuth: []
       responses:
         "200":
-          description: Seluruh sesi dicabut
+          description: Sesi saat ini dihapus
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/MessageResponse"
+                type: object
+                properties:
+                  message:
+                    type: string
+                  revoked_sessions:
+                    type: integer
+                    example: 0
         "401":
           $ref: "#/components/responses/Unauthorized"
 
   /api/profile:
     get:
       tags: [Auth]
-      summary: Get authenticated profile
+      summary: Profil user yang sedang login
+      description: Hanya untuk user yang nomor teleponnya sudah terverifikasi.
       security:
         - bearerAuth: []
+        - cookieAuth: []
       responses:
         "200":
-          description: Current user
+          description: Data user beserta relasi customer
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/User"
         "401":
           $ref: "#/components/responses/Unauthorized"
-
-  /api/customer-points:
-    get:
-      tags: [Customer]
-      summary: Get current customer points
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: Customer points
+        "403":
+          description: Nomor telepon belum terverifikasi
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CustomerPoint"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
+                $ref: "#/components/schemas/ErrorResponse"
 
-  /api/my-points:
-    get:
-      tags: [Customer]
-      summary: Get current customer points
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: Customer points
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CustomerPoint"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/catalog/products:
-    get:
-      tags: [Catalog]
-      summary: List visible Crisbar products
-      parameters:
-        - in: query
-          name: category_id
-          schema:
-            type: integer
-          required: false
-      responses:
-        "200":
-          description: Product list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/CatalogProduct"
-
-  /api/catalog/products/categories:
-    get:
-      tags: [Catalog]
-      summary: List visible product categories
-      responses:
-        "200":
-          description: Category list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/CatalogCategory"
-
-  /api/catalog/redeem-menu:
-    get:
-      tags: [Catalog]
-      summary: List active redeem menu items
-      responses:
-        "200":
-          description: Redeem menu
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/PublicRedeemMenuItem"
-
-  /api/locations:
-    get:
-      tags: [Catalog]
-      summary: List active outlet locations
-      responses:
-        "200":
-          description: Location list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Location"
-
-  /api/promos:
-    get:
-      tags: [Catalog]
-      summary: List visible promos
-      responses:
-        "200":
-          description: Promo list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Promo"
-
-  /api/rewards-catalog:
-    get:
-      tags: [Rewards]
-      summary: List rewards catalog
-      parameters:
-        - in: query
-          name: brand_id
-          schema:
-            type: integer
-        - in: query
-          name: is_active
-          schema:
-            type: boolean
-      responses:
-        "200":
-          description: Reward list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Reward"
+  /api/change-password:
     post:
-      tags: [Rewards]
-      summary: Create reward
+      tags: [Auth]
+      summary: Ganti password
+      description: >-
+        Password baru minimal 8 karakter dan harus berbeda dari password lama.
+        Setelah berhasil, cookie sesi dihapus dan user harus login ulang.
+        Rate limit: 10 permintaan/IP/2 menit.
       security:
         - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RewardWriteRequest"
-      responses:
-        "201":
-          description: Reward created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Reward"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/rewards-catalog/{id}:
-    get:
-      tags: [Rewards]
-      summary: Get reward by id
-      parameters:
-        - $ref: "#/components/parameters/IdPath"
-      responses:
-        "200":
-          description: Reward detail
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Reward"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    put:
-      tags: [Rewards]
-      summary: Update reward
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/IdPath"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RewardWriteRequest"
-      responses:
-        "200":
-          description: Reward updated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Reward"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-    delete:
-      tags: [Rewards]
-      summary: Delete reward
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/IdPath"
-      responses:
-        "200":
-          $ref: "#/components/responses/Message"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/redeem/{rewardId}:
-    post:
-      tags: [Redemption]
-      summary: Redeem a reward
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: rewardId
-          required: true
-          schema:
-            type: integer
-      responses:
-        "201":
-          description: Redeem success
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/RedeemResponse"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/redeem/my:
-    get:
-      tags: [Redemption]
-      summary: List current customer redemptions
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: Redemption list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Redemption"
-
-  /api/admin/users:
-    get:
-      tags: [Admin Users]
-      summary: List admin users
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: search
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Admin user list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/AdminUser"
-    post:
-      tags: [Admin Users]
-      summary: Create admin user
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AdminUserWriteRequest"
-      responses:
-        "201":
-          description: Admin user created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminUser"
-
-  /api/admin/users/{id}:
-    put:
-      tags: [Admin Users]
-      summary: Update admin user
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/IdPath"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AdminUserWriteRequest"
-      responses:
-        "200":
-          description: Admin user updated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminUser"
-    delete:
-      tags: [Admin Users]
-      summary: Delete admin user
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/IdPath"
-      responses:
-        "200":
-          $ref: "#/components/responses/Message"
-
-  /api/admin/customers:
-    get:
-      tags: [Admin Customers]
-      summary: List customers
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: search
-          schema:
-            type: string
-        - in: query
-          name: page
-          schema:
-            type: integer
-            default: 1
-        - in: query
-          name: limit
-          schema:
-            type: integer
-            default: 20
-        - in: query
-          name: email_status
-          description: >-
-            Menyaring berdasarkan ketersediaan email. Tautan aktivasi hanya bisa
-            dikirim lewat email, sehingga `missing` dipakai petugas outlet untuk
-            melihat customer mana yang emailnya masih perlu dikumpulkan. Nilai
-            kosong pada kolom email diperlakukan sama dengan NULL.
-          schema:
-            type: string
-            enum: [all, missing, present]
-            default: all
-      responses:
-        "200":
-          description: Paged customer list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminCustomerPage"
-    post:
-      tags: [Admin Customers]
-      summary: Create customer in local database
-      description: >
-        Membuat customer di database lokal aplikasi. Endpoint ini tidak
-        membuat customer di Runchise.
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AdminCustomerWriteRequest"
-      responses:
-        "201":
-          description: Customer created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminCustomer"
-
-  /api/admin/customers/{id}:
-    put:
-      tags: [Admin Customers]
-      summary: Update customer in local database
-      description: >
-        Mengubah customer di database lokal aplikasi. Endpoint ini tidak
-        mengirim perubahan ke Runchise. Field yang berasal dari Runchise dapat
-        tertimpa saat sync berikutnya.
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/IdPath"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AdminCustomerWriteRequest"
-      responses:
-        "200":
-          description: Customer updated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminCustomer"
-    delete:
-      tags: [Admin Customers]
-      summary: Delete customer from local database
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/IdPath"
-      responses:
-        "200":
-          $ref: "#/components/responses/Message"
-
-  /api/admin/brands:
-    get:
-      tags: [Admin Customers]
-      summary: List brands
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: Brand list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Brand"
-
-  /api/admin/locations:
-    get:
-      tags: [Admin Customers]
-      summary: List active outlet locations for admin and marketing filters
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: Location list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/AdminLocation"
-
-  /api/admin/loyalty-summary:
-    get:
-      tags: [Admin Reports]
-      summary: Get loyalty dashboard summary
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: redemption_from
-          schema:
-            type: string
-            format: date
-        - in: query
-          name: redemption_to
-          schema:
-            type: string
-            format: date
-        - in: query
-          name: outlet_id
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Summary data
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LoyaltySummary"
-
-  /api/admin/catalog/menu-items:
-    get:
-      tags: [Admin Redeem]
-      summary: List catalog menu items for redeem setup
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: search
-          schema:
-            type: string
-        - in: query
-          name: limit
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Catalog categories and items
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminCatalogMenuResponse"
-
-  /api/admin/redeem-menu/items:
-    get:
-      tags: [Admin Redeem]
-      summary: List admin redeem items
-      security:
-        - bearerAuth: []
-      responses:
-        "200":
-          description: Redeem item list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/AdminRedeemItem"
-    post:
-      tags: [Admin Redeem]
-      summary: Create redeem item in local database
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AdminRedeemItemWriteRequest"
-      responses:
-        "201":
-          description: Redeem item created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminRedeemItem"
-
-  /api/admin/redeem-menu/items/{id}:
-    put:
-      tags: [Admin Redeem]
-      summary: Update redeem item in local database
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/IdPath"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AdminRedeemItemWriteRequest"
-      responses:
-        "200":
-          description: Redeem item updated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AdminRedeemItem"
-    delete:
-      tags: [Admin Redeem]
-      summary: Delete redeem item
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/IdPath"
-      responses:
-        "200":
-          $ref: "#/components/responses/Message"
-
-  /api/admin/redemptions:
-    get:
-      tags: [Admin Redeem]
-      summary: List redemptions
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: query
-          name: status
-          schema:
-            type: string
-            enum: [pending, claimed, expired]
-      responses:
-        "200":
-          description: Redemption list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Redemption"
-
-  /api/admin/redemptions/{id}/status:
-    put:
-      tags: [Admin Redeem]
-      summary: Update redemption status
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: "#/components/parameters/IdPath"
+        - cookieAuth: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [status]
+              required: [current_password, new_password]
               properties:
-                status:
+                current_password:
                   type: string
-                  enum: [pending, claimed, expired]
+                  format: password
+                new_password:
+                  type: string
+                  format: password
+                  minLength: 8
       responses:
         "200":
-          description: Redemption updated
+          description: Password diganti; login ulang diperlukan
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Redemption"
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          description: Password lama kosong, password baru < 8 karakter, atau sama dengan password lama
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Password lama salah
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Akun belum memiliki password aktif
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
-  /api/admin/sync/customers:
-    post:
-      tags: [Admin Sync]
-      summary: Start Runchise customer import job
+  /api/customers:
+    get:
+      tags: [Customers]
+      summary: List customer (paginated)
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageQuery"
+        - $ref: "#/components/parameters/LimitQuery"
+        - $ref: "#/components/parameters/SearchQuery"
+        - in: query
+          name: sort_by
+          schema:
+            type: string
+            enum: [created_at, name, phone_number, status]
+            default: created_at
+        - in: query
+          name: sort_order
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        "200":
+          description: Daftar customer
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          data:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/Customer"
+                          meta:
+                            $ref: "#/components/schemas/PageMeta"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/customers/me:
+    get:
+      tags: [Customers]
+      summary: Profil customer yang sedang login
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Data customer milik user yang login
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Customers]
+      summary: Update profil customer yang sedang login
       description: >-
-        Membuat job impor customer Runchise. Impor tidak dijalankan langsung
-        karena mencakup 29 outlet x 100 halaman API. Pantau lewat
-        /api/admin/sync/customers/status dan jalankan bertahap lewat
-        /api/admin/sync/customers/process.
+        Field yang diizinkan sama dengan PATCH /api/customers/{customer_id}
+        kecuali `status` dan `owner_location_id` (khusus admin). Minimal satu
+        field harus dikirim.
       security:
         - bearerAuth: []
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerSelfUpdateRequest"
       responses:
         "200":
-          description: Job impor sudah berjalan sebelumnya
-        "202":
-          description: Job impor baru dibuat
+          description: Profil diperbarui
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
 
-  /api/admin/sync/products:
-    post:
-      tags: [Admin Sync]
-      summary: Sync products from Runchise to local database
+  /api/customers/{customer_id}:
+    get:
+      tags: [Customers]
+      summary: Detail customer by ID
       security:
         - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CustomerIdPath"
       responses:
         "200":
-          $ref: "#/components/responses/SyncResult"
-
-  /api/admin/sync/points:
-    post:
-      tags: [Admin Sync]
-      summary: Sync customer points from Runchise to local database
+          description: Data customer
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    patch:
+      tags: [Customers]
+      summary: Update customer by ID
+      description: >-
+        Perubahan diteruskan ke Runchise terlebih dahulu; field berasal dari
+        Runchise dapat tertimpa saat sync berikutnya. Minimal satu field harus
+        dikirim. Perubahan nomor telepon menonaktifkan akun dan membatalkan
+        verifikasi telepon (user harus aktivasi ulang via WhatsApp).
       security:
         - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CustomerIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomerUpdateRequest"
+      responses:
+        "200":
+          description: Customer diperbarui
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Nomor telepon sudah dipakai user lain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Body kosong/tidak valid atau customer belum terhubung ke Runchise
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/customers/user/{user_id}:
+    get:
+      tags: [Customers]
+      summary: Cari customer berdasarkan user ID
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserIdPath"
+      responses:
+        "200":
+          description: Data customer
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/Customer"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/products:
+    get:
+      tags: [Products]
+      summary: List loyalty products
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
       parameters:
         - in: query
-          name: location_id
+          name: query
+          description: Cari berdasarkan nama atau SKU produk
+          schema:
+            type: string
+            default: ""
+        - in: query
+          name: take
+          description: Jumlah item per halaman (maksimal 100)
           schema:
             type: integer
-            default: 1
+            default: 10
+        - in: query
+          name: skip
+          description: Jumlah item yang dilewati
+          schema:
+            type: integer
+            default: 0
       responses:
         "200":
-          $ref: "#/components/responses/SyncResult"
+          description: Daftar loyalty product
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          total:
+                            type: integer
+                          total_page:
+                            type: integer
+                          loyalty_products:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/LoyaltyProduct"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 
-  /api/admin/sync/brands:
+  /api/products/sync-loyalty-products:
     post:
-      tags: [Admin Sync]
-      summary: Sync brands and sub-brands from Runchise to local database
+      tags: [Products]
+      summary: Sinkronisasi loyalty products dari Runchise
       security:
         - bearerAuth: []
+        - cookieAuth: []
       responses:
         "200":
-          $ref: "#/components/responses/SyncResult"
+          description: Hasil sinkronisasi loyalty products
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/LoyaltyProduct"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/ServerError"
 
-  /api/admin/sync/locations:
-    post:
-      tags: [Admin Sync]
-      summary: Sync locations from Runchise to local database
+  /api/products/{loyalty_product_id}:
+    delete:
+      tags: [Products]
+      summary: Hapus loyalty product lokal
+      description: Hanya menghapus dari database lokal; tidak menghapus data di Runchise.
       security:
         - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: loyalty_product_id
+          required: true
+          schema:
+            type: string
+            format: uuid
       responses:
         "200":
-          $ref: "#/components/responses/SyncResult"
+          description: Produk terhapus
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/LoyaltyProduct"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/ServerError"
 
-  /api/admin/sync/promos:
-    post:
-      tags: [Admin Sync]
-      summary: Sync promos from Runchise to local database
+  /api/promos:
+    get:
+      tags: [Promos]
+      summary: List promo lokal (paginated)
       security:
         - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PageQuery"
+        - in: query
+          name: limit
+          description: Maksimal 100
+          schema:
+            type: integer
+            default: 10
+        - $ref: "#/components/parameters/SearchQuery"
+        - in: query
+          name: status
+          schema:
+            type: string
+          description: Filter status promo, mis. active
+        - in: query
+          name: channel
+          schema:
+            type: string
+        - in: query
+          name: location_id
+          description: UUID lokasi; promo yang berlaku di lokasi ini
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: sort_by
+          schema:
+            type: string
+            enum: [created_at, updated_at, name, status, start_date, end_date]
+            default: created_at
+        - in: query
+          name: sort_order
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
       responses:
         "200":
-          $ref: "#/components/responses/SyncResult"
+          description: >-
+            Daftar promo. Item list tidak menyertakan `promo_codes` agar tidak
+            memuat seluruh kode pada tiap request.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          data:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/PromoDetail"
+                          meta:
+                            $ref: "#/components/schemas/PageMeta"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    post:
+      tags: [Promos]
+      summary: Buat promo di Runchise lalu sinkron ke lokal
+      description: >-
+        Membuat promo pada Runchise, lalu menyimpan hasil sinkronisasi ke
+        database lokal. Jika create Runchise berhasil tetapi sinkronisasi lokal
+        gagal, respons 502 berisi `runchise_id` — pulihkan dengan
+        POST /api/promos/sync/{runchise_id} dan JANGAN mengulang create.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PromoCreateRequest"
+      responses:
+        "201":
+          description: Promo dibuat dan tersinkron
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromoSuccessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          $ref: "#/components/responses/PromoSyncFailed"
+
+  /api/promos/{promo_id}:
+    get:
+      tags: [Promos]
+      summary: Detail promo lokal
+      description: Menyertakan seluruh promo code yang tersimpan.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PromoIdPath"
+      responses:
+        "200":
+          description: Detail promo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromoSuccessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+    patch:
+      tags: [Promos]
+      summary: Update promo di Runchise lalu sinkron ke lokal
+      description: >-
+        Update ditujukan ke Runchise, kemudian representasi penuh dibaca ulang
+        dan disinkronkan ke lokal. Minimal satu field harus dikirim.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PromoIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PromoUpdateRequest"
+      responses:
+        "200":
+          description: Promo diperbarui dan tersinkron
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromoSuccessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          $ref: "#/components/responses/PromoSyncFailed"
+
+  /api/promos/{promo_id}/activate:
+    patch:
+      tags: [Promos]
+      summary: Aktifkan promo
+      description: Mengaktifkan promo di Runchise lalu menyegarkan data lokal.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PromoIdPath"
+      responses:
+        "200":
+          description: Promo diaktifkan; mengembalikan detail tersinkron
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromoSuccessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          $ref: "#/components/responses/PromoSyncFailed"
+
+  /api/promos/{promo_id}/deactivate:
+    patch:
+      tags: [Promos]
+      summary: Nonaktifkan promo
+      description: Menonaktifkan promo di Runchise lalu menyegarkan data lokal.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PromoIdPath"
+      responses:
+        "200":
+          description: Promo dinonaktifkan; mengembalikan detail tersinkron
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromoSuccessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          $ref: "#/components/responses/PromoSyncFailed"
+
+  /api/promos/{promo_id}/promo-codes/generate:
+    post:
+      tags: [Promos]
+      summary: Generate promo code tambahan
+      description: >-
+        Promo harus sudah mengaktifkan `use_promotion_code`. `total_code` wajib
+        bilangan bulat 1-1000; field tak dikenal ditolak. `promo_codes` pada
+        respons berisi seluruh kode tersimpan, bukan hanya batch baru. Jika
+        generate berhasil tetapi sinkronisasi gagal, pulihkan lewat
+        POST /api/promos/sync/{runchise_id} dan jangan mengulang generate.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/PromoIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [total_code]
+              properties:
+                total_code:
+                  type: integer
+                  minimum: 1
+                  maximum: 1000
+                  example: 10
+      responses:
+        "201":
+          description: Kode dibuat dan tersinkron
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromoSuccessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Promo belum mengaktifkan penggunaan promotion code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          $ref: "#/components/responses/PromoSyncFailed"
+
+  /api/promos/sync/{runchise_id}:
+    post:
+      tags: [Promos]
+      summary: Pulihkan sinkronisasi promo dari Runchise
+      description: >-
+        Menyegarkan data lokal dari Runchise tanpa membuat/mengubah promo
+        remote. Dipakai untuk pemulihan setelah kegagalan sinkronisasi;
+        operasi bersifat idempoten berdasarkan runchise_id unik.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - in: path
+          name: runchise_id
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+          description: ID promo di Runchise
+      responses:
+        "200":
+          description: Promo tersinkron
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromoSuccessResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "502":
+          $ref: "#/components/responses/PromoSyncFailed"
+
+  /api/users:
+    post:
+      tags: [Users]
+      summary: Buat user baru
+      description: Membuat user di database lokal aplikasi (tidak membuat customer di Runchise).
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserCreateRequest"
+      responses:
+        "201":
+          description: User dibuat
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/UserRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Username/email/phone/referral code/no referensi sudah dipakai
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/users/{user_id}:
+    patch:
+      tags: [Users]
+      summary: Update user
+      description: Minimal satu field harus dikirim.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserUpdateRequest"
+      responses:
+        "200":
+          description: User diperbarui
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/UserRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Email/username/phone/referral code/no referensi sudah dipakai user lain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/referral/usages:
+    get:
+      tags: [Referral]
+      summary: List pemakaian kode referral
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, completed]
+          description: Kosongkan untuk semua status
+      responses:
+        "200":
+          description: Daftar pemakaian kode referral
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/ReferralUsage"
+                          meta:
+                            type: object
+                            properties:
+                              total:
+                                type: integer
+                              status:
+                                type: string
+                                example: all
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/referral/generate:
+    post:
+      tags: [Referral]
+      summary: Buat kode referral untuk customer yang login
+      description: >-
+        Body boleh dikosongkan untuk memakai nilai default program (poin reward,
+        poin given, dan masa berlaku). Satu user hanya boleh memiliki satu
+        program referral.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReferralProgramRequest"
+      responses:
+        "200":
+          description: Kode referral dibuat
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ReferralCodeData"
+        "400":
+          description: Program referral untuk user ini sudah pernah dibuat
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/referral/renew:
+    patch:
+      tags: [Referral]
+      summary: Perpanjang kode referral yang sudah kedaluwarsa
+      description: Hanya berlaku bila kode referral sebelumnya sudah kedaluwarsa.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReferralProgramRequest"
+      responses:
+        "200":
+          description: Kode referral diperpanjang
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/ReferralCodeData"
+        "400":
+          description: Kode referral belum kedaluwarsa
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/referral/validate/{user_id}:
+    patch:
+      tags: [Referral]
+      summary: Validasi referral pending milik seorang user
+      description: >-
+        User target dipilih eksplisit oleh admin/marketing; pelaku request
+        bukan pemilik referral yang divalidasi.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserIdPath"
+      responses:
+        "200":
+          description: Referral divalidasi
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        nullable: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Tidak ada referral pending untuk user tersebut
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/locations/generate:
+    post:
+      tags: [Locations]
+      summary: Sinkronisasi lokasi outlet dari Runchise
+      description: >-
+        Menarik seluruh lokasi dari Runchise dan menyimpannya ke database
+        lokal. Sub-brand Runchise harus sudah tersinkron lebih dulu; lokasi
+        dengan sub-brand yang belum tersinkron akan ditolak.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Hasil sinkronisasi lokasi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /api/sub_brands:
+    get:
+      tags: [Sub Brands]
+      summary: List sub-brand
+      responses:
+        "200":
+          description: Daftar sub-brand
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/SubBrand"
+
+  /api/sub_brands/generate:
+    post:
+      tags: [Sub Brands]
+      summary: Sinkronisasi sub-brand dari Runchise
+      description: Menambahkan sub-brand Runchise yang belum ada di database lokal.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Hasil sinkronisasi sub-brand
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/ServerError"
 
   /api/sale-transactions/generate:
     post:
-      tags: [Admin Sale Transactions]
-      summary: Generate sale transactions of one customer from Runchise
+      tags: [Sale Transactions]
+      summary: Tarik sale transactions satu customer dari Runchise
       description: >-
         Menarik seluruh sale transaction milik satu customer dari API Runchise
         (semua halaman) lalu menyimpannya ke tabel SaleTransaction lokal.
         Idempoten: penyimpanan dilakukan dengan upsert by runchise_id sehingga
         pemanggilan berulang tidak menduplikasi transaksi. Transaksi tanpa id
         Runchise atau yang outletnya belum tersinkron dilewati dan dilaporkan
-        pada ringkasan balasan.
+        pada ringkasan balasan. Rate limit: 5 permintaan/customer/2 menit.
       security:
         - bearerAuth: []
+        - cookieAuth: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/GenerateSaleTransactionsRequest"
+              type: object
+              required: [customer_id]
+              properties:
+                customer_id:
+                  type: string
+                  format: uuid
+                  description: Primary key (customer_id) customer pada database lokal
+                  example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
       responses:
         "200":
           description: Ringkasan hasil generate
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SaleTransactionGenerateSummary"
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/SaleTransactionGenerateSummary"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: Customer belum tersinkron dengan Runchise (runchise_id kosong)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
         "429":
-          description: >-
-            Terlalu banyak permintaan generate untuk customer yang sama
-            (maksimal 5 per 2 menit).
+          description: Terlalu banyak permintaan generate untuk customer yang sama
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/webhook-qontak/733f8d9cc06104f3:
+    post:
+      tags: [Webhook Qontak]
+      summary: Webhook interaksi pesan Qontak
+      description: >-
+        Menerima callback interaksi WhatsApp dari Qontak. Pesan aktivasi dengan
+        teks `AKTIVASI CRISBRO` + no. referensi akan memverifikasi nomor
+        telepon user; balasan sukses/gagal dikirim bot ke room yang sama.
+        Selalu membalas 200 untuk payload yang sudah diproses agar Qontak
+        tidak mengulang pengiriman.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [room_id, sender_id, text]
+              properties:
+                room_id:
+                  type: string
+                sender_id:
+                  type: string
+                text:
+                  type: string
+                  description: Isi pesan; teks aktivasi dibaca per baris
+                  example: >-
+                    AKTIVASI CRISBRO\nHarap kirim pesan ini tanpa merubah
+                    apapun.\nNo.ref:AB12CD34EF
+                room:
+                  type: object
+                  required: [account_uniq_id]
+                  properties:
+                    account_uniq_id:
+                      type: string
+                      description: Nomor telepon WhatsApp customer
+      responses:
+        "200":
+          description: Webhook diterima/diproses
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: Payload tidak ada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
 components:
   securitySchemes:
@@ -872,28 +1380,59 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: crisbar_session
 
   parameters:
-    IdPath:
-      in: path
-      name: id
-      required: true
+    PageQuery:
+      in: query
+      name: page
       schema:
         type: integer
+        minimum: 1
+        default: 1
+    LimitQuery:
+      in: query
+      name: limit
+      description: Maksimal 100
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+    SearchQuery:
+      in: query
+      name: search
+      description: Cari berdasarkan nama atau nomor telepon
+      schema:
+        type: string
+        default: ""
+    CustomerIdPath:
+      in: path
+      name: customer_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserIdPath:
+      in: path
+      name: user_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+    PromoIdPath:
+      in: path
+      name: promo_id
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: UUID promo lokal
 
   responses:
-    Message:
-      description: Message response
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/MessageResponse"
-    SyncResult:
-      description: Sync result
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/SyncResult"
     BadRequest:
       description: Bad request
       content:
@@ -901,7 +1440,13 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
     Unauthorized:
-      description: Missing, invalid, or unauthorized token
+      description: Token tidak ada, tidak valid, atau kedaluwarsa
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Role tidak berhak mengakses endpoint ini
       content:
         application/json:
           schema:
@@ -912,6 +1457,52 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ValidationError:
+      description: Validasi input gagal (422)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    TooManyRequests:
+      description: Rate limit terlampaui
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServerError:
+      description: Kesalahan server
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    PromoSyncFailed:
+      description: >-
+        Mutasi Runchise berhasil tetapi sinkronisasi lokal gagal. `message`
+        berisi objek `{code, message, runchise_id}`; pulihkan lewat
+        POST /api/promos/sync/{runchise_id} dan jangan ulangi create/generate.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    example: PROMO_SYNC_FAILED
+                  message:
+                    type: string
+                  runchise_id:
+                    type: integer
+              error_id:
+                type: string
 
   schemas:
     MessageResponse:
@@ -922,435 +1513,42 @@ components:
 
     ErrorResponse:
       type: object
+      description: >-
+        Bentuk error standar. Bergantung sumber error, `message` dapat berupa
+        string, objek field errors validasi, atau `errors` berisi peta
+        field -> daftar pesan.
       properties:
         message:
-          type: string
-        error:
-          type: string
-        whatsappUrl:
-          type: string
           nullable: true
-
-    SyncResult:
-      type: object
-      properties:
-        message:
+        errors:
+          type: object
+          nullable: true
+          description: Peta field -> daftar pesan error validasi
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        success:
+          type: boolean
+          nullable: true
+        error_id:
           type: string
-        synced:
-          type: integer
-        total:
-          type: integer
+          description: ID pelacakan error di log server
 
-    GenerateSaleTransactionsRequest:
-      type: object
-      required: [customer_id]
-      properties:
-        customer_id:
-          type: string
-          format: uuid
-          description: Primary key (customer_id) customer pada database lokal
-          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
-
-    SaleTransactionGenerateSummary:
+    SuccessEnvelope:
       type: object
       properties:
         success:
           type: boolean
-        message:
-          type: string
+          example: true
         data:
-          type: object
-          properties:
-            customer_id:
-              type: string
-              format: uuid
-            runchise_customer_id:
-              type: integer
-            total_fetched:
-              type: integer
-              description: Jumlah transaksi yang diterima dari Runchise
-            upserted:
-              type: integer
-              description: Jumlah transaksi yang dibuat/diperbarui di database lokal
-            skipped_missing_runchise_id:
-              type: integer
-            skipped_location_not_found:
-              type: integer
-
-    RegisterRequest:
-      type: object
-      required: [name, phone_number]
-      properties:
-        name:
-          type: string
-          example: Budi Santoso
-        phone_number:
-          type: string
-          description: Nomor diawali 8, contoh 81234567890
-          example: "81234567890"
-        email:
-          type: string
           nullable: true
-          example: budi@example.com
-        password:
-          type: string
-          format: password
-          example: password123
-
-    LoginRequest:
-      type: object
-      required: [phone_number, password]
-      properties:
-        phone_number:
-          type: string
-          example: "81234567890"
-        password:
-          type: string
-          format: password
-          example: password123
-
-    LoginResponse:
-      type: object
-      properties:
-        token:
-          type: string
-        expiresIn:
-          type: string
-          example: 7d
-        user:
-          $ref: "#/components/schemas/User"
-
-    User:
-      type: object
-      properties:
-        id:
-          type: integer
-        email:
-          type: string
-          nullable: true
-        phone_number:
-          type: string
-          nullable: true
-        role:
-          type: string
-          example: customer
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-        customer:
-          $ref: "#/components/schemas/Customer"
-
-    Customer:
-      type: object
-      properties:
-        id:
-          type: integer
-        runchise_id:
-          type: integer
-          nullable: true
-        name:
-          type: string
-        phone_number:
-          type: string
-          nullable: true
-        status:
-          type: string
-          nullable: true
-        customer_point:
-          $ref: "#/components/schemas/CustomerPoint"
-
-    CustomerPoint:
-      type: object
-      properties:
-        total_point:
-          type: integer
-        available_point:
-          type: integer
-        next_reward_threshold:
-          type: integer
-
-    CatalogProduct:
-      type: object
-      properties:
-        id:
-          type: integer
-        name:
-          type: string
-        description:
-          type: string
-          nullable: true
-        sell_price:
-          type: number
-        image_url:
-          type: string
-          nullable: true
-        category:
-          type: string
-        category_id:
-          type: integer
-        sku:
-          type: string
-          nullable: true
-
-    CatalogCategory:
-      type: object
-      properties:
-        id:
-          type: integer
-        name:
-          type: string
-        total_products:
-          type: integer
-
-    PublicRedeemMenuItem:
-      type: object
-      properties:
-        id:
-          type: integer
-        sku:
-          type: string
-        name:
-          type: string
-        description:
-          type: string
-          nullable: true
-        points_required:
-          type: integer
-        image_url:
-          type: string
-          nullable: true
-        category:
-          type: string
-        category_id:
-          type: integer
-        badge:
-          type: string
-          nullable: true
-        sort_order:
-          type: integer
-
-    Location:
-      type: object
-      properties:
-        id:
-          type: integer
-        name:
-          type: string
-        address:
-          type: string
-          nullable: true
-        city:
-          type: string
-          nullable: true
-        province:
-          type: string
-          nullable: true
-        latitude:
-          type: number
-          nullable: true
-        longitude:
-          type: number
-          nullable: true
-        maps_url:
-          type: string
-
-    Promo:
-      type: object
-      properties:
-        id:
-          type: integer
-          nullable: true
-        name:
-          type: string
-        status:
-          type: string
-        start_date:
-          type: string
-          nullable: true
-        end_date:
-          type: string
-          nullable: true
-        channel:
-          type: string
-          nullable: true
-        is_online_only:
-          type: boolean
-        is_all_outlets:
-          type: boolean
-        locations:
-          type: array
-          items:
-            type: object
-        discount_amount:
-          type: number
-          nullable: true
-        discount_is_percentage:
-          type: boolean
-        template:
-          type: string
-          nullable: true
-
-    Reward:
-      type: object
-      properties:
-        id:
-          type: integer
-        brand_id:
-          type: integer
-        name:
-          type: string
-        description:
-          type: string
-          nullable: true
-        points_required:
-          type: integer
-        image_url:
-          type: string
-          nullable: true
-        is_active:
-          type: boolean
-
-    RewardWriteRequest:
-      type: object
-      required: [brand_id, name, points_required]
-      properties:
-        brand_id:
-          type: integer
-          example: 1
-        name:
-          type: string
-        description:
-          type: string
-          nullable: true
-        points_required:
-          type: integer
-        image_url:
-          type: string
-          nullable: true
-        is_active:
-          type: boolean
-
-    RedeemResponse:
-      type: object
-      properties:
         message:
           type: string
-        redemption_code:
-          type: string
-        points_spent:
-          type: integer
-        available_point:
-          type: integer
 
-    Redemption:
+    PageMeta:
       type: object
       properties:
-        id:
-          type: integer
-        customer_id:
-          type: integer
-        reward_id:
-          type: integer
-        points_spent:
-          type: integer
-        status:
-          type: string
-        redemption_code:
-          type: string
-          nullable: true
-        redeemed_at:
-          type: string
-          format: date-time
-          nullable: true
-
-    AdminUser:
-      type: object
-      properties:
-        id:
-          type: integer
-        email:
-          type: string
-          nullable: true
-        phone_number:
-          type: string
-          nullable: true
-        role:
-          type: string
-          enum: [admin, staff, marketing]
-        created_at:
-          type: string
-          format: date-time
-        updated_at:
-          type: string
-          format: date-time
-
-    AdminUserWriteRequest:
-      type: object
-      properties:
-        email:
-          type: string
-          nullable: true
-        phone_number:
-          type: string
-          nullable: true
-        password:
-          type: string
-          format: password
-        role:
-          type: string
-          enum: [admin, staff, marketing]
-
-    Brand:
-      type: object
-      properties:
-        id:
-          type: integer
-        name:
-          type: string
-
-    AdminLocation:
-      type: object
-      properties:
-        id:
-          type: integer
-        name:
-          type: string
-        city:
-          type: string
-          nullable: true
-
-    AdminCustomer:
-      allOf:
-        - $ref: "#/components/schemas/Customer"
-        - type: object
-          properties:
-            user_id:
-              type: integer
-            email:
-              type: string
-              nullable: true
-            brand_id:
-              type: integer
-            owner_location_id:
-              type: integer
-              nullable: true
-            balance:
-              type: number
-            brand:
-              $ref: "#/components/schemas/Brand"
-            owner_location:
-              $ref: "#/components/schemas/AdminLocation"
-
-    AdminCustomerPage:
-      type: object
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/AdminCustomer"
         page:
           type: integer
         limit:
@@ -1360,15 +1558,154 @@ components:
         total_pages:
           type: integer
 
-    AdminCustomerWriteRequest:
+    RegisterRequest:
       type: object
+      required: [name, phone, username, email, password, location_id]
       properties:
         name:
+          type: string
+          example: Budi Santoso
+        phone:
+          type: string
+          description: 11-15 digit, tidak diawali 0
+          example: "81234567890"
+        username:
+          type: string
+          minLength: 6
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: Minimal 8 karakter, mengandung huruf besar dan angka
+        referral_code:
+          type: string
+          description: Kode referral opsional dari member lain
+        location_id:
+          type: number
+          description: ID lokasi Runchise sebagai owner customer
+
+    RegisterResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Berhasil membuat user dan mengirim otp
+        data:
+          type: object
+          properties:
+            user:
+              $ref: "#/components/schemas/User"
+            referral:
+              nullable: true
+              description: Ringkasan referral bila mendaftar memakai kode referral
+            text:
+              type: string
+              description: Teks aktivasi WhatsApp yang harus dikirim user tanpa diubah
+
+    LoginRequest:
+      type: object
+      required: [password]
+      properties:
+        phone:
+          type: string
+          description: Isi salah satu saja antara phone atau email
+          example: "81234567890"
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    LoginResponse:
+      type: object
+      properties:
+        expiresIn:
+          type: string
+          example: 7d
+        user:
+          $ref: "#/components/schemas/User"
+
+    User:
+      type: object
+      description: >-
+        Data user tanpa password hash. Field email/phone dihilangkan bila
+        kosong.
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        username:
           type: string
         email:
           type: string
           nullable: true
+        phone:
+          type: string
+          nullable: true
+        role:
+          type: string
+          enum: [admin, marketing, customer]
+        email_verified:
+          type: boolean
+        phone_verified:
+          type: boolean
+        referral_code:
+          type: string
+          nullable: true
+        no_referensi:
+          type: string
+          nullable: true
+          description: Kode referensi untuk aktivasi WhatsApp
+        status:
+          type: string
+          enum: [active, inactive]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        customer:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/Customer"
+
+    UserRecord:
+      type: object
+      description: Record user tanpa hash password dan token verifikasi email.
+
+    Customer:
+      type: object
+      properties:
+        customer_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        runchise_id:
+          type: integer
+          nullable: true
+        runchise_location_id:
+          type: integer
+          nullable: true
+        runchise_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+        name:
+          type: string
         phone_number:
+          type: string
+          nullable: true
+        normalized_phone_number:
           type: string
           nullable: true
         phone_number_country_code:
@@ -1395,135 +1732,741 @@ components:
           nullable: true
         gender:
           type: string
+          nullable: true
+          enum: [male, female, unknown, ""]
         status:
           type: string
+          nullable: true
+          enum: [active, inactive, ""]
         balance:
           type: number
-        brand_id:
-          type: integer
-        owner_location_id:
-          type: integer
+        member_since:
+          type: string
+          format: date
           nullable: true
         total_point:
           type: integer
         available_point:
           type: integer
-        next_reward_threshold:
-          type: integer
+        owner_location_id:
+          type: string
+          nullable: true
+        created_by_id:
+          type: string
+          nullable: true
+        last_updated_by_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
 
-    LoyaltySummary:
+    CustomerUpdateRequest:
+      type: object
+      description: Minimal satu field; field tak dikenal ditolak.
+      properties:
+        name:
+          type: string
+        phone_number:
+          type: string
+        address:
+          type: string
+        province:
+          type: string
+        city:
+          type: string
+        country:
+          type: string
+        postal_code:
+          type: string
+        gender:
+          type: string
+          enum: [unknown, male, female]
+        status:
+          type: string
+          enum: [active, inactive]
+        owner_location_id:
+          type: string
+          description: UUID lokasi owner
+
+    CustomerSelfUpdateRequest:
+      type: object
+      description: >-
+        Minimal satu field; `status` dan `owner_location_id` tidak diizinkan
+        untuk customer.
+      properties:
+        name:
+          type: string
+        phone_number:
+          type: string
+        address:
+          type: string
+        province:
+          type: string
+        city:
+          type: string
+        country:
+          type: string
+        postal_code:
+          type: string
+        gender:
+          type: string
+          enum: [unknown, male, female]
+
+    LoyaltyProduct:
       type: object
       properties:
-        total_members:
+        loyalty_product_id:
+          type: string
+          format: uuid
+        runchise_loyalty_product_id:
           type: integer
-        active_members:
+        runchise_product_id:
           type: integer
-        total_points_given:
+        point_needed:
           type: integer
-        total_points_available:
+        product_name:
+          type: string
+        product_sku:
+          type: string
+        product_description:
+          type: string
+          nullable: true
+        product_image_url:
+          type: string
+          nullable: true
+        product_unit_name:
+          type: string
+          nullable: true
+        max_redeem:
           type: integer
-        points_earned:
-          type: integer
-        points_redeemed:
-          type: integer
-        redemption_count:
-          type: integer
-        top_rewards:
+        is_select_all_location:
+          type: boolean
+        location_ids:
           type: array
           items:
-            type: object
-        activation_by_outlet:
+            type: string
+        product_location_ids:
           type: array
           items:
-            type: object
-        top_redeem_outlets:
-          type: array
-          items:
-            type: object
-        redemption_trend:
-          type: array
-          items:
-            type: object
-        redemption_history:
-          type: array
-          items:
-            type: object
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
 
-    AdminCatalogMenuResponse:
+    PromoSuccessResponse:
       type: object
       properties:
-        categories:
-          type: array
-          items:
-            type: object
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/CatalogMenuItem"
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+        data:
+          $ref: "#/components/schemas/PromoDetail"
 
-    CatalogMenuItem:
+    PromoDetail:
       type: object
       properties:
-        id:
+        promo:
+          $ref: "#/components/schemas/Promo"
+        promo_rule:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PromoRule"
+        promo_reward:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PromoReward"
+        promo_codes:
+          type: array
+          description: Hanya tersedia pada detail, tidak pada item list
+          items:
+            $ref: "#/components/schemas/PromoCode"
+
+    Promo:
+      type: object
+      properties:
+        promo_id:
+          type: string
+          format: uuid
+        runchise_id:
           type: integer
+        name:
+          type: string
+          nullable: true
+        goal:
+          type: string
+          nullable: true
+          enum: [increase_average_sale, increase_number_sale, ""]
+        start_date:
+          type: string
+          format: date-time
+          nullable: true
+        end_date:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+        owner_location_id:
+          type: string
+          description: UUID lokasi owner lokal
+        location_type:
+          type: string
+          nullable: true
+        channel:
+          type: string
+          nullable: true
+        location_ids:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PromoRule:
+      type: object
+      properties:
+        promo_rule_id:
+          type: string
+          format: uuid
+        promo_id:
+          type: string
+          format: uuid
+        runchise_promo_rule_id:
+          type: integer
+        order_types:
+          type: string
+          description: JSON string
+        maximum_qty_applied_to_products:
+          type: string
+          description: JSON string
+        use_promotion_code:
+          type: boolean
+          nullable: true
+        promotion_code_usage_type:
+          type: string
+          nullable: true
+        promotion_code_source:
+          type: string
+          nullable: true
+        promotion_code_number_of_generated_code:
+          type: integer
+          nullable: true
+        promotion_code_maximum_usage:
+          type: integer
+          nullable: true
+        combine_promo_rule:
+          type: string
+          nullable: true
+        member_only:
+          type: boolean
+          nullable: true
+        maximum_redemption_location_setting:
+          type: string
+          nullable: true
+
+    PromoReward:
+      type: object
+      properties:
+        promo_reward_id:
+          type: string
+          format: uuid
+        promo_id:
+          type: string
+          format: uuid
+        runchise_promo_reward_id:
+          type: integer
+          nullable: true
+        template:
+          type: string
+          nullable: true
+        free_of_charge:
+          type: boolean
+          nullable: true
+        reward_product_condition:
+          type: string
+          nullable: true
+        discount_amount:
+          type: string
+          nullable: true
+        discount_is_percentage:
+          type: boolean
+          nullable: true
+        discount_maximum:
+          type: string
+          nullable: true
+        discount_in_house_cost:
+          type: string
+          nullable: true
+        discount_external_cost:
+          type: string
+          nullable: true
+        apply_to_option_set:
+          type: boolean
+          nullable: true
+        get_products:
+          type: array
+          items:
+            type: string
+        get_product_allow_multiple:
+          type: boolean
+          nullable: true
+        special_price_product_price:
+          type: string
+          nullable: true
+
+    PromoCode:
+      type: object
+      properties:
+        promo_code_id:
+          type: string
+          format: uuid
+        promo_id:
+          type: string
+          format: uuid
         runchise_id:
           type: integer
           nullable: true
-        name:
-          type: string
-        description:
+        code:
           type: string
           nullable: true
-        price:
+        usage_type:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        maximum_usage:
+          type: integer
+          nullable: true
+        number_of_usage:
+          type: integer
+          nullable: true
+        last_usage:
+          type: string
+          format: date-time
+          nullable: true
+        deactivate_at:
+          type: string
+          format: date-time
+          nullable: true
+        deactivate_reason:
+          type: string
+          nullable: true
+
+    PromoCreateRequest:
+      type: object
+      required: [channel, name, goal, start_date, owner_location_id, promo_rule_attributes, promo_reward_attributes]
+      properties:
+        channel:
+          type: string
+        name:
+          type: string
+          minLength: 1
+        goal:
+          type: string
+          enum: [increase_average_sale, increase_number_sale]
+        customer_allowed_dine_in:
+          type: boolean
+          default: false
+        customer_allowed_online_ordering:
+          type: boolean
+          default: false
+        applicable_for_loyalty:
+          type: boolean
+          default: false
+        start_date:
+          type: string
+          description: Format DD/MM/YYYY
+          example: "01/09/2026"
+        end_date:
+          type: string
+          nullable: true
+          description: Format DD/MM/YYYY
+        subdize_promo_subject_mdr:
+          type: boolean
+          default: false
+        is_select_all_location:
+          type: boolean
+          default: true
+        location_type:
+          type: string
+          default: outlet
+        location_ids:
+          type: array
+          items:
+            type: number
+          default: []
+        exclude_location_ids:
+          type: array
+          items:
+            type: number
+          default: []
+        is_select_all_location_group:
+          type: boolean
+          default: false
+        location_group_ids:
+          type: array
+          items:
+            type: number
+          default: []
+        exclude_location_group_ids:
+          type: array
+          items:
+            type: number
+          default: []
+        owner_location_id:
           type: number
+          description: ID lokasi Runchise
+        promo_schedules:
+          type: array
+          items:
+            type: object
+          nullable: true
+        promo_rule_attributes:
+          $ref: "#/components/schemas/PromoRuleAttributes"
+        promo_reward_attributes:
+          $ref: "#/components/schemas/PromoRewardAttributes"
+
+    PromoUpdateRequest:
+      type: object
+      description: Minimal satu field; hanya field yang dikirim divalidasi.
+      properties:
+        channel:
+          type: string
+        name:
+          type: string
+        goal:
+          type: string
+          enum: [increase_average_sale, increase_number_sale]
+        start_date:
+          type: string
+          description: Format DD/MM/YYYY
+        end_date:
+          type: string
+          nullable: true
+          description: Format DD/MM/YYYY
+        is_select_all_location:
+          type: boolean
+        location_ids:
+          type: array
+          items:
+            type: number
+        owner_location_id:
+          type: number
+        promo_rule_attributes:
+          $ref: "#/components/schemas/PromoRuleAttributes"
+        promo_reward_attributes:
+          $ref: "#/components/schemas/PromoRewardAttributes"
+
+    PromoRuleAttributes:
+      type: object
+      required: [use_promotion_code]
+      properties:
+        order_type_ids:
+          type: array
+          items:
+            type: number
+          default: []
+        member_only:
+          type: boolean
+          default: false
+        payment_type_ids:
+          type: array
+          items:
+            type: number
+          default: []
+        product_ids:
+          type: array
+          items:
+            type: number
+          default: []
+        product_condition:
+          type: string
+          nullable: true
+        product_category_ids:
+          type: array
+          items:
+            type: number
+          default: []
+        product_category_condition:
+          type: string
+          nullable: true
+        total_min:
+          nullable: true
+          description: Angka atau string numerik
+        maximum_redemption:
+          nullable: true
+        maximum_redemption_user:
+          nullable: true
+        maximum_redemption_location_setting:
+          type: string
+        maximum_qty_applied_to_products:
+          type: array
+          items:
+            type: object
+            required: [id, name, maximum_purchase]
+            properties:
+              id:
+                type: number
+              name:
+                type: string
+              maximum_purchase:
+                description: Angka atau string numerik
+        use_promotion_code:
+          type: boolean
+        promotion_code_usage_type:
+          type: string
+        promotion_code_source:
+          type: string
+        promotion_code_number_of_generated_code:
+          description: Angka atau string numerik
+        promotion_code_maximum_usage:
+          description: Angka atau string numerik
+
+    PromoRewardAttributes:
+      type: object
+      required: [template]
+      properties:
+        template:
+          type: string
+        get_product_allow_multiple:
+          type: boolean
+        discount_is_percentage:
+          type: boolean
+        discount_amount:
+          description: Angka atau string numerik
+        discount_maximum:
+          nullable: true
+          description: Angka atau string numerik
+        discount_external_cost:
+          description: Angka atau string numerik
+        discount_in_house_cost:
+          description: Angka atau string numerik
+        get_product_ids:
+          type: array
+          items:
+            type: number
+          default: []
+        get_product_category_ids:
+          type: array
+          items:
+            type: number
+          default: []
+        reward_products:
+          type: array
+          items:
+            type: object
+            required: [product_id, quantity]
+            properties:
+              product_id:
+                type: number
+              category_id:
+                type: number
+                nullable: true
+              quantity:
+                description: Angka atau string numerik
+        free_of_charge:
+          type: boolean
+        apply_to_option_set:
+          type: boolean
+
+    UserCreateRequest:
+      type: object
+      required: [email, username, password, role, status]
+      properties:
+        email:
+          type: string
+          format: email
+        username:
+          type: string
+          minLength: 6
+        password:
+          type: string
+          format: password
+          minLength: 8
+          description: Minimal 8 karakter, mengandung huruf besar dan angka
+        phone:
+          type: string
+          description: 11-15 digit, tidak diawali 0
+          example: "81234567890"
+        role:
+          type: string
+          enum: [customer, marketing, admin]
+        referral_code:
+          type: string
+        no_referensi:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive]
+
+    UserUpdateRequest:
+      type: object
+      description: Minimal satu field.
+      properties:
+        email:
+          type: string
+          format: email
+        username:
+          type: string
+          minLength: 6
+        password:
+          type: string
+          format: password
+          minLength: 8
+        phone:
+          type: string
+        role:
+          type: string
+          enum: [customer, marketing, admin]
+        referral_code:
+          type: string
+        no_referensi:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive]
+
+    ReferralProgramRequest:
+      type: object
+      description: >-
+        Boleh dikosongkan untuk memakai nilai default. Nilai angka tidak
+        divalidasi ulang oleh service.
+      properties:
+        point_reward:
+          type: number
+          description: Poin untuk pemilik kode referral
+        point_given:
+          type: number
+          description: Poin untuk pemakai kode referral
+        expires_at:
+          type: string
+          description: Tanggal kedaluwarsa (diparsing sebagai Date)
+
+    ReferralCodeData:
+      type: object
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        referral_code:
+          type: string
+        referral_expires_at:
+          type: string
+          format: date-time
+
+    ReferralUsage:
+      type: object
+      properties:
+        referral_id:
+          type: string
+          format: uuid
+        referral_code:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [pending, completed]
+        referrer:
+          type: object
+          properties:
+            user_id:
+              type: string
+              format: uuid
+            username:
+              type: string
+            point_reward:
+              type: integer
+        referred:
+          type: object
+          properties:
+            user_id:
+              type: string
+              format: uuid
+            username:
+              type: string
+            phone:
+              type: string
+              nullable: true
+            phone_verified:
+              type: boolean
+            account_status:
+              type: string
+              enum: [active, inactive]
+            point_given:
+              type: integer
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        can_validate:
+          type: boolean
+          description: true bila pending, telepon terverifikasi, dan akun aktif
+
+    SubBrand:
+      type: object
+      properties:
+        sub_brand_id:
+          type: string
+          format: uuid
+        runchise_id:
+          type: integer
+        name:
+          type: string
         image_url:
           type: string
           nullable: true
-        is_active:
-          type: boolean
-
-    AdminRedeemItem:
-      type: object
-      properties:
-        id:
-          type: integer
-        menu_item_id:
-          type: integer
-        category_id:
-          type: integer
-        points_required:
-          type: integer
-        pb1_rate:
-          type: number
-        pb1_amount:
-          type: number
-        price_with_pb1:
-          type: number
-        is_active:
-          type: boolean
-        badge:
+        location_type:
           type: string
           nullable: true
-        sort_order:
-          type: integer
-        menu_item:
-          $ref: "#/components/schemas/CatalogMenuItem"
-
-    AdminRedeemItemWriteRequest:
-      type: object
-      required: [menu_item_id, points_required]
-      properties:
-        menu_item_id:
-          type: integer
-        category_id:
-          type: integer
-          nullable: true
-        points_required:
-          type: integer
-        is_active:
+        is_select_all_location:
           type: boolean
-        badge:
+        enable_online_order:
+          type: boolean
+        created_at:
           type: string
-          nullable: true
-        sort_order:
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SaleTransactionGenerateSummary:
+      type: object
+      properties:
+        customer_id:
+          type: string
+          format: uuid
+        runchise_customer_id:
+          type: integer
+        total_fetched:
+          type: integer
+          description: Jumlah transaksi yang diterima dari Runchise
+        upserted:
+          type: integer
+          description: Jumlah transaksi yang dibuat/diperbarui di database lokal
+        skipped_missing_runchise_id:
+          type: integer
+        skipped_location_not_found:
           type: integer
