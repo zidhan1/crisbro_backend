@@ -3,7 +3,11 @@ const express = require("express");
 const router = express.Router();
 
 // Mengimpor middleware autentikasi dan controller auth
-const { auth, requireValidPhone } = require("../middleware/authMiddleware");
+const {
+  auth,
+  requireValidPhone,
+  requireRole,
+} = require("../middleware/authMiddleware");
 const { authIpLimiter, loginAccountLimiter } = require("../lib/rateLimit");
 const {
   register,
@@ -34,6 +38,9 @@ router.post("/logout-all", auth, logoutAllSessions);
 
 // ===================== PROFILE =====================
 router.get("/profile", auth, requireValidPhone, profile);
+
+// ============ ME (khusus marketing & admin, tanpa validasi phone) ============
+router.get("/me", auth, requireRole("marketing", "admin"), profile);
 
 // ===================== CHANGE PASSWORD =====================
 router.post("/change-password", auth, authIpLimiter, changePassword);

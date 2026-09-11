@@ -156,7 +156,7 @@ paths:
     post:
       tags: [Auth]
       summary: Validasi OTP / kode aktivasi
-      description: Rate limit: 10 permintaan/IP/2 menit.
+      description: "Rate limit: 10 permintaan/IP/2 menit."
       security:
         - bearerAuth: []
         - cookieAuth: []
@@ -256,6 +256,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /api/me:
+    get:
+      tags: [Auth]
+      summary: Profil user yang sedang login (marketing & admin)
+      description: >-
+        Khusus role marketing dan admin. Tidak memerlukan verifikasi nomor
+        telepon. Responsnya sama dengan /api/profile.
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Data user yang sedang login
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /api/change-password:
     post:
